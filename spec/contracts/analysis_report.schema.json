@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/analysis-report.schema.json",
+  "title": "分析报告",
+  "type": "object",
+  "required": [
+    "security_id",
+    "as_of",
+    "data_health",
+    "strategy_id",
+    "strategy_version",
+    "horizon",
+    "market_regime",
+    "direction_probabilities",
+    "raw_signal",
+    "final_signal",
+    "valid_until",
+    "positive_drivers",
+    "negative_drivers",
+    "model_version",
+    "rule_version",
+    "data_snapshot_id"
+  ],
+  "properties": {
+    "security_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "证券唯一标识。"
+    },
+    "as_of": {
+      "type": "string",
+      "format": "date-time",
+      "description": "分析使用数据的时点时间。"
+    },
+    "valid_until": {
+      "type": "string",
+      "format": "date-time",
+      "description": "分析结果有效截止时间。"
+    },
+    "data_health": {
+      "$ref": "data-health.schema.json",
+      "description": "数据健康状态。"
+    },
+    "strategy_id": {
+      "type": "string",
+      "description": "策略标识。"
+    },
+    "strategy_version": {
+      "type": "string",
+      "description": "策略版本。"
+    },
+    "model_version": {
+      "type": "string",
+      "description": "模型版本。"
+    },
+    "rule_version": {
+      "type": "string",
+      "description": "交易规则版本。"
+    },
+    "data_snapshot_id": {
+      "type": "string",
+      "description": "数据快照标识。"
+    },
+    "horizon": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "预测周期，单位由调用契约约定。"
+    },
+    "market_regime": {
+      "type": "string",
+      "description": "市场状态。"
+    },
+    "direction_probabilities": {
+      "type": "object",
+      "required": [
+        "up",
+        "flat",
+        "down"
+      ],
+      "properties": {
+        "up": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "flat": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "down": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "additionalProperties": false,
+      "description": "上涨、横盘和下跌概率。"
+    },
+    "expected_return_quantiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "预期收益分位数。"
+    },
+    "expected_drawdown": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "description": "预期回撤。"
+    },
+    "raw_signal": {
+      "type": "string",
+      "description": "风险处理前的原始策略信号。"
+    },
+    "final_signal": {
+      "enum": [
+        "BUY_CANDIDATE",
+        "ADD_CANDIDATE",
+        "HOLD",
+        "REDUCE",
+        "SELL",
+        "WATCH",
+        "ABSTAIN"
+      ],
+      "description": "经过数据、规则、风险和组合约束后的最终操作。"
+    },
+    "grade": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "信号等级。"
+    },
+    "target_position_limit": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "目标仓位上限，0至1。"
+    },
+    "positive_drivers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "支持当前判断的因素。"
+    },
+    "negative_drivers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "反对当前判断或风险因素。"
+    },
+    "exit_or_invalidation_conditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "退出或判断失效条件。"
+    },
+    "abstain_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "不交易原因。"
+    }
+  },
+  "additionalProperties": false,
+  "description": "面向用户的完整策略、预测、风险、操作与来源追踪结果。"
+}

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/security-rule.schema.json",
+  "title": "证券交易规则",
+  "type": "object",
+  "required": [
+    "rule_id",
+    "version",
+    "exchange",
+    "asset_type",
+    "effective_from",
+    "source",
+    "review_status"
+  ],
+  "properties": {
+    "rule_id": {
+      "type": "string",
+      "description": "规则标识。"
+    },
+    "version": {
+      "type": "string",
+      "description": "规则版本。"
+    },
+    "exchange": {
+      "type": "string",
+      "description": "交易所。"
+    },
+    "asset_type": {
+      "type": "string",
+      "description": "资产类型。"
+    },
+    "security_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "可选的具体证券标识。"
+    },
+    "effective_from": {
+      "type": "string",
+      "format": "date",
+      "description": "生效开始日期。"
+    },
+    "effective_to": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date",
+      "description": "生效结束日期。"
+    },
+    "lot_size": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "最小交易手数/数量单位。"
+    },
+    "tick_size": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "exclusiveMinimum": 0,
+      "description": "最小价格变动单位。"
+    },
+    "intraday_round_trip": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "是否允许当日回转交易。"
+    },
+    "source": {
+      "type": "string",
+      "description": "规则来源。"
+    },
+    "review_status": {
+      "enum": [
+        "DRAFT",
+        "REVIEWED",
+        "APPROVED",
+        "RETIRED"
+      ],
+      "description": "审核状态。"
+    }
+  },
+  "additionalProperties": true,
+  "description": "按交易所、资产、证券和生效日期管理的交易执行规则。"
+}

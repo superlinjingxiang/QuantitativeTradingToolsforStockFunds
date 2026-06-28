@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/data-health.schema.json",
+  "title": "数据健康状态",
+  "type": "object",
+  "required": [
+    "status",
+    "block_signal",
+    "as_of",
+    "issues"
+  ],
+  "properties": {
+    "status": {
+      "enum": [
+        "HEALTHY",
+        "DEGRADED",
+        "STALE",
+        "INVALID",
+        "UNAUTHORIZED"
+      ],
+      "description": "总体健康状态。"
+    },
+    "block_signal": {
+      "type": "boolean",
+      "description": "是否阻止生成新的交易信号。"
+    },
+    "as_of": {
+      "type": "string",
+      "format": "date-time",
+      "description": "健康状态对应的时点时间。"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "检测到的问题列表。"
+    }
+  },
+  "additionalProperties": false,
+  "description": "描述数据是否新鲜、完整、有效、已授权，以及是否阻止信号。"
+}

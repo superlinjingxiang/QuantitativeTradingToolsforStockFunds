@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/backtest-config.schema.json",
+  "title": "回测配置",
+  "type": "object",
+  "required": [
+    "strategy_id",
+    "strategy_version",
+    "start_date",
+    "end_date",
+    "initial_cash",
+    "data_snapshot_id",
+    "rule_version",
+    "seed"
+  ],
+  "properties": {
+    "strategy_id": {
+      "type": "string",
+      "description": "策略标识。"
+    },
+    "strategy_version": {
+      "type": "string",
+      "description": "策略版本。"
+    },
+    "start_date": {
+      "type": "string",
+      "format": "date",
+      "description": "回测开始日期。"
+    },
+    "end_date": {
+      "type": "string",
+      "format": "date",
+      "description": "回测结束日期。"
+    },
+    "initial_cash": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "初始现金。"
+    },
+    "data_snapshot_id": {
+      "type": "string",
+      "description": "数据快照标识。"
+    },
+    "rule_version": {
+      "type": "string",
+      "description": "规则版本。"
+    },
+    "seed": {
+      "type": "integer",
+      "description": "随机种子。"
+    },
+    "universe_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "证券池标识。"
+    },
+    "benchmark_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "基准标识。"
+    },
+    "parameters": {
+      "type": "object",
+      "description": "策略和执行参数。"
+    }
+  },
+  "additionalProperties": false,
+  "description": "一次可复现回测任务所需的核心配置。"
+}
