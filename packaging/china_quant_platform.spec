@@ -1,16 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+project_root = Path(SPECPATH).parent
+src_root = project_root / "src"
 block_cipher = None
 
 a = Analysis(
-    ["src/china_quant_platform/__main__.py"],
-    pathex=["."],
+    [str(src_root / "china_quant_platform" / "__main__.py")],
+    pathex=[str(src_root)],
     binaries=[],
     datas=[
-        ("assets", "assets"),
-        ("docs", "docs"),
-        ("spec", "spec"),
-        ("MANIFEST.sha256", "."),
+        (str(project_root / "assets"), "assets"),
+        (str(project_root / "docs"), "docs"),
+        (str(project_root / "spec"), "spec"),
+        (str(project_root / "MANIFEST.sha256"), "."),
     ],
     hiddenimports=[
         "PySide6.QtCore",

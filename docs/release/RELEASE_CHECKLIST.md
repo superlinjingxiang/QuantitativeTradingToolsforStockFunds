@@ -25,6 +25,8 @@ uv run pytest
 uv run python -m china_quant_platform --version
 uv run python -m china_quant_platform.release.audit
 uv run pyinstaller --version
+uv run pyinstaller packaging/china_quant_platform.spec --noconfirm --clean
+.\dist\china-quant-platform\china-quant-platform.exe --version
 ```
 
 ## 数据迁移与恢复
