@@ -14,6 +14,17 @@ from china_quant_platform.strategies.base import (
     WarmupSpec,
     evaluate_strategy,
 )
+from china_quant_platform.strategies.etf_rotation import (
+    CostTurnoverScenario,
+    EtfRotationConfig,
+    EtfRotationScore,
+    EtfRotationSelection,
+    EtfRotationStrategy,
+    EtfSignalFeatures,
+    EtfUniverseMember,
+    ResearchStatus,
+    cost_turnover_sensitivity,
+)
 
 __all__ = [
     "DriverDirection",
@@ -27,5 +38,14 @@ __all__ = [
     "StrategyEvaluation",
     "StrategyMetadata",
     "WarmupSpec",
+    "CostTurnoverScenario",
+    "EtfRotationConfig",
+    "EtfRotationScore",
+    "EtfRotationSelection",
+    "EtfRotationStrategy",
+    "EtfSignalFeatures",
+    "EtfUniverseMember",
+    "ResearchStatus",
+    "cost_turnover_sensitivity",
     "evaluate_strategy",
 ]
