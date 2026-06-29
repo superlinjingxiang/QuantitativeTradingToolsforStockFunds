@@ -105,11 +105,12 @@
 - 验收：T-02至T-06、T-15、T-18通过。
 - 完成证据：2026-06-29 完成 `RuleBasedCostModel`、固定bps滑点、固定价差、参与率流动性、固定延迟、`CorporateActionProcessor`，并接入 `DeterministicExecutionSimulator`；费用/税费、滑点/价差、参与率部分成交、延迟、涨停无对手方流动性拒绝、分红和拆股测试通过。
 
-### [ ] TASK-015——组合与风险引擎
+### [x] TASK-015——组合与风险引擎
 - 依赖：TASK-013、TASK-014
 - 需求：FR-008、AC-08
 - 交付：现金、持仓、可卖数量、仓位计算、集中度、相关性、流动性和回撤门禁。
 - 验收：T-17、T-18通过。
+- 完成证据：2026-06-29 完成 `PortfolioState`、`Position`、`PortfolioEngine`、组合对账、`RiskLimitConfig`、`RiskEngine` 和风险预算仓位计算；买入/卖出成交入账、可卖数量阻断、现金+市值对账、集中度/总敞口/现金缓冲/流动性/回撤/相关性门禁和手数取整测试通过。
 
 ### [ ] TASK-016——指标报告与确定性回归夹具
 - 依赖：TASK-013、TASK-015
