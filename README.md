@@ -48,7 +48,7 @@
 
 规格基线：V1.0，日期为2026年6月28日。
 
-TASK-001 至 TASK-007 已完成：当前仓库包含可复现 Python 工程骨架、`src/` 包结构、测试目录、配置/日志启动骨架、CI 骨架、`.gitignore`、`uv.lock`、标准领域模型、类型化错误、数据供应商协议、确定性假供应商、证券主数据、本地搜索索引、历史K线Parquet缓存、增量补缺网关、实时订阅状态、数据质量门禁和按生效日期解析的中国市场规则引擎。后续仍需按 `TASKS.md` 顺序实现 GUI 和量化业务能力。
+TASK-001 至 TASK-008 已完成：当前仓库包含可复现 Python 工程骨架、`src/` 包结构、测试目录、配置/日志启动骨架、CI 骨架、`.gitignore`、`uv.lock`、标准领域模型、类型化错误、数据供应商协议、确定性假供应商、证券主数据、本地搜索索引、历史K线Parquet缓存、增量补缺网关、实时订阅状态、数据质量门禁、按生效日期解析的中国市场规则引擎和PySide6应用外壳。后续仍需按 `TASKS.md` 顺序实现GUI搜索/图表和量化业务能力。
 
 ## 开发环境
 
@@ -81,6 +81,12 @@ uv run ruff check .
 uv run mypy src tests
 uv run pytest
 uv run python -m china_quant_platform --version
+```
+
+启动桌面外壳：
+
+```powershell
+uv run python -m china_quant_platform --gui
 ```
 
 本机如需避开用户目录缓存权限问题，可设置项目内缓存：

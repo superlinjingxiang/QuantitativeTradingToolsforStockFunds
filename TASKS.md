@@ -57,10 +57,11 @@
 
 ## 阶段2——GUI行情工作台
 
-### [ ] TASK-008——PySide6应用外壳与状态模型
+### [x] TASK-008——PySide6应用外壳与状态模型
 - 依赖：TASK-001、TASK-002
 - 交付：主窗口、MVVM/MVP状态、导航页签、后台任务抽象、数据健康横幅。
 - 验收：Qt主线程保持响应；能够演示取消和类型化错误状态。
+- 完成证据：2026-06-29 完成 `MainWindow`、`ApplicationViewModel`、`CancellableQtTask`、`AppUiState`、GUI CLI入口和offscreen GUI测试；状态健康映射、健康横幅、非阻塞取消、类型化错误可见性和PySide6导入测试通过。
 
 ### [ ] TASK-009——搜索与原子化证券切换
 - 依赖：TASK-004、TASK-005、TASK-008

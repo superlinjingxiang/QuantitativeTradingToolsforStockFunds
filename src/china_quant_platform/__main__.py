@@ -19,6 +19,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the package version and exit.",
     )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Start the PySide6 desktop shell.",
+    )
     return parser
 
 
@@ -28,6 +33,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.version:
         print(__version__)
         return 0
+
+    if args.gui:
+        from china_quant_platform.ui import run_gui
+
+        return run_gui()
 
     context = bootstrap_runtime(configure_logs=False)
     print(f"china_quant_platform {__version__}")
