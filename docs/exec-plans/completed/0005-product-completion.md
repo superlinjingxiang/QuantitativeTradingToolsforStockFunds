@@ -28,7 +28,7 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 - [x] 模拟交易经纪与账户；TASK-022。
 - [x] 场外基金分析模块；TASK-023。
 - [x] 知识中心与上下文金融帮助；TASK-024。
-- [ ] 打包、恢复、安全与发布审计；TASK-025。
+- [x] 打包、恢复、安全与发布审计；TASK-025。
 
 ## 意外情况与发现
 
@@ -40,6 +40,8 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 
 2026-06-30：TASK-024完成。知识中心使用结构化 `HelpTopic`，默认主题覆盖K线、T+、ETF、净值、回撤、期望值和概率校准；内容校验拒绝收益承诺词，并要求显式区分国际理论与中国市场规则。
 
+2026-06-30：TASK-025完成。发布审计使用结构化 `ReleaseAuditReport` 覆盖AC、NFR和完成定义，PyInstaller spec提供Windows one-folder打包入口，CLI扫描仓库嵌入式凭据。
+
 ## 决策日志
 
 2026-06-29：市场概览和自选列表归属ViewModel状态快照，左侧Widget只渲染并触发显式选择事务。
@@ -49,6 +51,8 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 2026-06-29：场外基金使用独立 `funds` 模块处理确认、费用和风险比较，不复用交易所成交价格语义。
 
 2026-06-30：知识中心内容不写入Widget，统一由 `knowledge` 模块提供结构化条目和相关度搜索，GUI只渲染ViewModel状态。
+
+2026-06-30：发布阶段不把大型安装目录纳入常规测试产物；常规门禁验证PyInstaller工具、spec、发布审计和无凭据扫描，真实发布工作站按同一spec生成 `dist/china-quant-platform/`。
 
 ## 架构与接口
 
@@ -99,7 +103,11 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 - `src/china_quant_platform/knowledge/center.py`：结构化帮助主题、安全校验、相关度搜索和上下文帮助。
 - `src/china_quant_platform/ui/state.py`、`src/china_quant_platform/ui/viewmodel.py`、`src/china_quant_platform/ui/main_window.py`：知识中心状态、搜索、选题和GUI页签渲染。
 - `tests/unit/test_knowledge_center.py`、`tests/gui/test_knowledge_center_gui.py`：主题覆盖、收益承诺词拒绝、国际理论/中国市场规则区分、上下文帮助和GUI筛选渲染测试。
+- `src/china_quant_platform/release/audit.py`：发布命令、迁移、凭据策略、恢复/观测、AC/NFR/完成定义覆盖和凭据扫描。
+- `packaging/china_quant_platform.spec`：Windows PyInstaller one-folder打包入口。
+- `docs/release/RELEASE_CHECKLIST.md`、`.env.example`：发布清单和无真实凭据的环境变量模板。
+- `tests/unit/test_release_audit.py`、`tests/integration/test_release_scan.py`：发布覆盖、CLI、凭据检测和仓库级无嵌入式凭据扫描测试。
 
 ## 结果与复盘
 
-TASK-025完成后填写。
+TASK-021至TASK-025已完成。市场概览、自选、模拟账户、场外基金、知识中心和发布审计均有代码、测试、追踪矩阵、决策记录和MANIFEST证据。最终发布前仍需在Windows发布工作站按 `docs/release/RELEASE_CHECKLIST.md` 生成并归档实际 `dist/china-quant-platform/` 产物。

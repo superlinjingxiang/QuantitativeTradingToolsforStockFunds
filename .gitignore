@@ -17,6 +17,12 @@ htmlcov/
 .env
 .env.*
 !.env.example
+*.key
+*.pem
+*.pfx
+*.p12
+credentials/
+secrets/
 
 data/*
 !data/.gitkeep

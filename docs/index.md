@@ -16,6 +16,7 @@
 | 验收 | `quality/ACCEPTANCE_CRITERIA.md` | 判断任务或版本是否通过 |
 | 测试 | `quality/TEST_MATRIX.md` | 编写和选择测试 |
 | 完成定义 | `quality/DEFINITION_OF_DONE.md` | 关闭任务和代码评审 |
+| 发布清单 | `release/RELEASE_CHECKLIST.md` | 执行Windows打包、恢复、安全、冒烟测试和发布审计 |
 | 追踪矩阵 | `TRACEABILITY.md` | 映射用户故事→需求→任务→测试 |
 | 决策 | `DECISIONS.md` | 记录架构/产品决策和新增依赖 |
 | 术语表 | `GLOSSARY.md` | 统一金融与工程术语 |

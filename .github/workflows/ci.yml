@@ -36,3 +36,9 @@ jobs:
 
       - name: Test
         run: uv run pytest
+
+      - name: Release audit smoke
+        run: uv run python -m china_quant_platform.release.audit
+
+      - name: Packaging tool smoke
+        run: uv run pyinstaller --version
