@@ -9,11 +9,13 @@ from pydantic import Field
 from china_quant_platform.data import SecuritySearchResult
 from china_quant_platform.domain import (
     AdjustmentMode,
+    AnalysisReport,
     Bar,
     BarInterval,
     DataHealth,
     DataHealthStatus,
     DomainErrorKind,
+    FinalSignal,
     Quote,
 )
 from china_quant_platform.domain.base import DomainModel
@@ -149,6 +151,94 @@ class SearchCandidateState(DomainModel):
         )
 
 
+class StrategyPanelState(DomainModel):
+    strategy_name: str = "--"
+    strategy_id: str = "--"
+    strategy_version: str = "--"
+    horizon_label: str = "--"
+    market_regime: str = "--"
+    raw_signal: str = "--"
+    applicable_conditions: tuple[str, ...] = ()
+    invalidation_conditions: tuple[str, ...] = ()
+    model_version: str = "--"
+    rule_version: str = "--"
+    data_snapshot_id: str = "--"
+
+
+class ForecastPanelState(DomainModel):
+    direction_label: str = "--"
+    probability_summary: str = "--"
+    expected_return_range: str = "--"
+    expected_drawdown: str = "--"
+    confidence_note: str = "--"
+    model_version: str = "--"
+    is_abstain: bool = False
+
+
+class OperationPanelState(DomainModel):
+    final_signal: str = "--"
+    grade: str = "--"
+    valid_until: str = "--"
+    target_position_limit: str = "--"
+    positive_drivers: tuple[str, ...] = ()
+    negative_drivers: tuple[str, ...] = ()
+    exit_or_invalidation_conditions: tuple[str, ...] = ()
+    abstain_reason: str | None = None
+
+
+class AnalysisPanelState(DomainModel):
+    report: AnalysisReport | None = None
+    strategy: StrategyPanelState = Field(default_factory=StrategyPanelState)
+    forecast: ForecastPanelState = Field(default_factory=ForecastPanelState)
+    operation: OperationPanelState = Field(default_factory=OperationPanelState)
+
+    @classmethod
+    def from_report(
+        cls,
+        report: AnalysisReport,
+        *,
+        strategy_name: str | None = None,
+        strategy_summary: str | None = None,
+        applicable_conditions: tuple[str, ...] = (),
+    ) -> AnalysisPanelState:
+        invalidation_conditions = tuple(report.exit_or_invalidation_conditions)
+        strategy = StrategyPanelState(
+            strategy_name=strategy_name or report.strategy_id,
+            strategy_id=report.strategy_id,
+            strategy_version=report.strategy_version,
+            horizon_label=f"{report.horizon} bars",
+            market_regime=report.market_regime,
+            raw_signal=report.raw_signal,
+            applicable_conditions=applicable_conditions or _fallback_applicable_conditions(report),
+            invalidation_conditions=invalidation_conditions,
+            model_version=report.model_version,
+            rule_version=report.rule_version,
+            data_snapshot_id=report.data_snapshot_id,
+        )
+        forecast = ForecastPanelState(
+            direction_label=_direction_label(report),
+            probability_summary=_probability_summary(report),
+            expected_return_range=_return_range(report),
+            expected_drawdown=_drawdown_text(report.expected_drawdown),
+            confidence_note=_confidence_note(strategy_summary),
+            model_version=report.model_version,
+            is_abstain=report.final_signal is FinalSignal.ABSTAIN,
+        )
+        operation = OperationPanelState(
+            final_signal=report.final_signal.value,
+            grade=report.grade or "--",
+            valid_until=report.valid_until.isoformat(),
+            target_position_limit=_position_limit_text(report.target_position_limit),
+            positive_drivers=tuple(report.positive_drivers),
+            negative_drivers=_negative_driver_text(report),
+            exit_or_invalidation_conditions=invalidation_conditions,
+            abstain_reason=(
+                report.abstain_reason.value if report.abstain_reason is not None else None
+            ),
+        )
+        return cls(report=report, strategy=strategy, forecast=forecast, operation=operation)
+
+
 class AppUiState(DomainModel):
     selection_generation: int = 0
     selected_security_id: str | None = None
@@ -160,6 +250,7 @@ class AppUiState(DomainModel):
     active_task_name: str | None = None
     data_health: DataHealth | None = None
     chart: ChartState = Field(default_factory=ChartState)
+    analysis: AnalysisPanelState = Field(default_factory=AnalysisPanelState)
     latest_error: UiErrorState | None = None
 
     @property
@@ -198,13 +289,93 @@ def run_state_for_error(kind: DomainErrorKind) -> UiRunState:
             return UiRunState.ERROR
 
 
+def _direction_label(report: AnalysisReport) -> str:
+    probabilities = report.direction_probabilities
+    if report.final_signal is FinalSignal.ABSTAIN:
+        return "不明确/不交易"
+    if probabilities.up >= 0.65:
+        return "强势上涨"
+    if probabilities.up >= 0.50:
+        return "震荡上涨"
+    if probabilities.down >= 0.65:
+        return "强势下跌"
+    if probabilities.down >= 0.50:
+        return "震荡下跌"
+    if probabilities.flat >= 0.45:
+        return "横盘"
+    return "不明确/不交易"
+
+
+def _probability_summary(report: AnalysisReport) -> str:
+    probabilities = report.direction_probabilities
+    return (
+        f"上涨{_format_percent(probabilities.up)} / "
+        f"横盘{_format_percent(probabilities.flat)} / "
+        f"下跌{_format_percent(probabilities.down)}"
+    )
+
+
+def _return_range(report: AnalysisReport) -> str:
+    p05 = report.expected_return_quantiles.get("p05")
+    p50 = report.expected_return_quantiles.get("p50")
+    p95 = report.expected_return_quantiles.get("p95")
+    if p05 is None or p95 is None:
+        return "--"
+    if p50 is None:
+        return f"{_format_percent(p05)} to {_format_percent(p95)}"
+    return f"{_format_percent(p05)} to {_format_percent(p95)}; p50 {_format_percent(p50)}"
+
+
+def _drawdown_text(drawdown: float | None) -> str:
+    if drawdown is None:
+        return "--"
+    return _format_percent(drawdown)
+
+
+def _confidence_note(strategy_summary: str | None) -> str:
+    warning = "预测区间，不代表确定未来价格。"
+    if not strategy_summary:
+        return warning
+    return f"{strategy_summary} {warning}"
+
+
+def _negative_driver_text(report: AnalysisReport) -> tuple[str, ...]:
+    values = list(report.negative_drivers)
+    if report.data_health.block_signal:
+        issues = "；".join(report.data_health.issues) or "data gate blocks new signals"
+        health_text = f"Data health {report.data_health.status.value}: {issues}"
+        if health_text not in values:
+            values.append(health_text)
+    return tuple(values)
+
+
+def _position_limit_text(limit: float | None) -> str:
+    if limit is None:
+        return "--"
+    return _format_percent(limit)
+
+
+def _format_percent(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def _fallback_applicable_conditions(report: AnalysisReport) -> tuple[str, ...]:
+    if report.final_signal is FinalSignal.ABSTAIN:
+        return ("No new trade while the report is abstaining.",)
+    return ("Data, rule, and risk gates are required before execution.",)
+
+
 __all__ = [
+    "AnalysisPanelState",
     "AppUiState",
     "ChartOverlay",
     "ChartPointState",
     "ChartRangePreset",
     "ChartState",
+    "ForecastPanelState",
+    "OperationPanelState",
     "SearchCandidateState",
+    "StrategyPanelState",
     "UiErrorState",
     "UiRunState",
     "UiTaskStatus",

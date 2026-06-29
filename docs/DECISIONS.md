@@ -227,3 +227,13 @@
 - 影响：TASK-020可以把同一预测结果接入分析报告和GUI面板；后续模型替换必须继续提供校准指标和不交易原因。
 - 受影响的需求：TASK-019、FR-007、AC-05、AC-10、AC-12。
 - 所需测试/迁移：READY概率/分位数测试、样本不足/分布外/漂移/低置信度不交易测试、Brier/LogLoss/ECE校准指标测试。
+
+### ADR-023——AnalysisReport作为GUI解释面板边界
+- 日期：2026-06-29
+- 状态：已接受
+- 背景：TASK-020要求完整 `AnalysisReport`、当前策略、概率/区间、操作状态、驱动因素、失效条件和审计追踪，且陈旧数据和分布外状态必须明确显示为不交易。
+- 决策：新增 `analysis` 层把 `StrategyEvaluation`、`ForecastResult`、`DataHealth`、规则/风险门禁合成为标准 `AnalysisReport`；GUI ViewModel只接收报告和少量展示元数据，再生成策略、预测、操作三块只读面板状态。
+- 已考虑的替代方案：让Widget直接拼接策略、预测和风险对象，或让策略直接生成最终GUI文本。Widget直连会绕过领域不变量；策略生成最终文本会混淆原始信号和最终操作。
+- 影响：后续市场概览、模拟账户和基金分析可复用同一报告/面板边界；旧generation报告会被丢弃，避免切换证券后显示过期解释。
+- 受影响的需求：TASK-020、FR-006、FR-007、FR-008、FR-009、FR-020、AC-04、AC-05、AC-06、AC-10。
+- 所需测试/迁移：AnalysisReport合成测试、陈旧数据ABSTAIN测试、分布外ABSTAIN测试、GUI策略/预测/操作面板测试和旧generation报告丢弃测试。

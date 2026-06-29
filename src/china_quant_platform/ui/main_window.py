@@ -125,6 +125,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.price_chart = PriceChartWidget()
         self.chart_summary_label = QtWidgets.QLabel()
         self.chart_summary_label.setObjectName("chartSummary")
+        self.strategy_panel_label = self._panel_label("strategyPanelText")
+        self.forecast_panel_label = self._panel_label("forecastPanelText")
+        self.operation_panel_label = self._panel_label("operationPanelText")
 
         self.setCentralWidget(self._build_central_widget())
         self.statusBar().addPermanentWidget(self.status_label)
@@ -170,6 +173,9 @@ class MainWindow(QtWidgets.QMainWindow):
             f"周期：{state.chart.interval.value}｜复权：{state.chart.adjustment.value}｜"
             f"范围：{state.chart.range_preset.value}｜点数：{state.chart.point_count}"
         )
+        self.strategy_panel_label.setText(_strategy_panel_text(state))
+        self.forecast_panel_label.setText(_forecast_panel_text(state))
+        self.operation_panel_label.setText(_operation_panel_text(state))
 
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if watched is self.search_input and event.type() == QtCore.QEvent.Type.KeyPress:
@@ -232,6 +238,14 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         )
         return checkbox
+
+    def _panel_label(self, object_name: str) -> QtWidgets.QLabel:
+        label = QtWidgets.QLabel()
+        label.setObjectName(object_name)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
+        return label
 
     def _sync_chart_controls(self, state: AppUiState) -> None:
         self._set_combo_data(self.interval_combo, state.chart.interval.value)
@@ -336,9 +350,15 @@ class MainWindow(QtWidgets.QMainWindow):
     def _right_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(panel)
-        for title in ("当前策略", "预期走势", "操作与风险"):
+        for title, label in (
+            ("当前策略", self.strategy_panel_label),
+            ("预期走势", self.forecast_panel_label),
+            ("操作与风险", self.operation_panel_label),
+        ):
             group = QtWidgets.QGroupBox(title)
             group.setMinimumHeight(140)
+            group_layout = QtWidgets.QVBoxLayout(group)
+            group_layout.addWidget(label)
             layout.addWidget(group)
         return panel
 
@@ -363,6 +383,58 @@ def run_gui(argv: Sequence[str] | None = None) -> int:
     window = MainWindow()
     window.show()
     return app.exec()
+
+
+def _strategy_panel_text(state: AppUiState) -> str:
+    strategy = state.analysis.strategy
+    lines = [
+        f"策略：{strategy.strategy_name}",
+        f"ID/版本：{strategy.strategy_id} / {strategy.strategy_version}",
+        f"周期：{strategy.horizon_label}",
+        f"市场状态：{strategy.market_regime}",
+        f"原始信号：{strategy.raw_signal}",
+        f"模型/规则/快照：{strategy.model_version} / "
+        f"{strategy.rule_version} / {strategy.data_snapshot_id}",
+        _list_text("适用条件", strategy.applicable_conditions),
+        _list_text("失效条件", strategy.invalidation_conditions),
+    ]
+    return "\n".join(lines)
+
+
+def _forecast_panel_text(state: AppUiState) -> str:
+    forecast = state.analysis.forecast
+    return "\n".join(
+        [
+            f"方向：{forecast.direction_label}",
+            f"概率：{forecast.probability_summary}",
+            f"收益区间：{forecast.expected_return_range}",
+            f"预期回撤：{forecast.expected_drawdown}",
+            f"校准/说明：{forecast.confidence_note}",
+            f"模型：{forecast.model_version}",
+        ]
+    )
+
+
+def _operation_panel_text(state: AppUiState) -> str:
+    operation = state.analysis.operation
+    abstain_text = operation.abstain_reason or "--"
+    lines = [
+        f"最终操作：{operation.final_signal}",
+        f"等级：{operation.grade}",
+        f"有效期：{operation.valid_until}",
+        f"仓位上限：{operation.target_position_limit}",
+        f"不交易原因：{abstain_text}",
+        _list_text("支持因素", operation.positive_drivers),
+        _list_text("反对/风险", operation.negative_drivers),
+        _list_text("退出/失效", operation.exit_or_invalidation_conditions),
+    ]
+    return "\n".join(lines)
+
+
+def _list_text(title: str, values: tuple[str, ...]) -> str:
+    if not values:
+        return f"{title}：--"
+    return f"{title}：" + "；".join(values)
 
 
 __all__ = ["MainWindow", "create_application", "run_gui"]

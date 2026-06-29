@@ -10,7 +10,9 @@ from PySide6 import QtCore
 
 from china_quant_platform.data import SecurityMasterService
 from china_quant_platform.domain import (
+    AbstainReason,
     AdjustmentMode,
+    AnalysisReport,
     AssetType,
     Bar,
     BarInterval,
@@ -23,6 +25,7 @@ from china_quant_platform.domain import (
     SecurityStatus,
 )
 from china_quant_platform.ui.state import (
+    AnalysisPanelState,
     AppUiState,
     ChartOverlay,
     ChartPointState,
@@ -187,6 +190,7 @@ class ApplicationViewModel(QtCore.QObject):
                             "realtime_update_count": 0,
                         }
                     ),
+                    "analysis": AnalysisPanelState(),
                     "run_state": UiRunState.LOADING_CACHE_HISTORY,
                     "task_status": UiTaskStatus.IDLE,
                     "active_task_name": None,
@@ -293,6 +297,39 @@ class ApplicationViewModel(QtCore.QObject):
                 update={
                     "data_health": data_health,
                     "run_state": run_state_for_health(data_health),
+                    "latest_error": None,
+                }
+            )
+        )
+
+    def apply_analysis_report(
+        self,
+        report: AnalysisReport,
+        *,
+        generation: int | None = None,
+        strategy_name: str | None = None,
+        strategy_summary: str | None = None,
+        applicable_conditions: tuple[str, ...] = (),
+    ) -> None:
+        if self._is_stale_generation(generation):
+            return
+        if (
+            self._state.selected_security_id is not None
+            and report.security_id != self._state.selected_security_id
+        ):
+            return
+
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "data_health": report.data_health,
+                    "analysis": AnalysisPanelState.from_report(
+                        report,
+                        strategy_name=strategy_name,
+                        strategy_summary=strategy_summary,
+                        applicable_conditions=applicable_conditions,
+                    ),
+                    "run_state": _run_state_for_analysis_report(report),
                     "latest_error": None,
                 }
             )
@@ -464,6 +501,16 @@ def build_demo_security_master() -> SecurityMasterService:
         ),
     )
     return SecurityMasterService.from_securities(securities)
+
+
+def _run_state_for_analysis_report(report: AnalysisReport) -> UiRunState:
+    if report.data_health.block_signal:
+        return run_state_for_health(report.data_health)
+    if report.abstain_reason is AbstainReason.INSUFFICIENT_HISTORY:
+        return UiRunState.INSUFFICIENT_HISTORY
+    if report.abstain_reason is AbstainReason.MODEL_UNCERTAINTY:
+        return UiRunState.MODEL_OUT_OF_DISTRIBUTION
+    return UiRunState.REALTIME_RUNNING
 
 
 __all__ = ["ApplicationViewModel", "CancellableQtTask", "build_demo_security_master"]
