@@ -29,7 +29,7 @@ FR-001、FR-003、FR-004、FR-020；AC-01、AC-06、AC-09、AC-10、AC-11；NFR-
 - [x] 2026-06-28 12:45Z — 数据供应商协议、能力声明、确定性假供应商、取消与限流行为；TASK-003已完成。
 - [x] 2026-06-29 02:55Z — 证券主数据、时点状态、本地模糊搜索、最近搜索和P95性能夹具；TASK-004已完成。
 - [x] 2026-06-29 03:35Z — 历史/实时数据网关、Parquet分区缓存、增量补缺和实时订阅状态；TASK-005已完成。
-- [ ] 数据质量门禁通过故障测试。
+- [x] 2026-06-29 04:10Z — 数据质量门禁、结构化阻断报告和跨源Quote对账；TASK-006已完成。
 - [ ] 按日期生效的规则通过边界测试。
 
 ## 意外情况与发现
@@ -55,6 +55,8 @@ FR-001、FR-003、FR-004、FR-020；AC-01、AC-06、AC-09、AC-10、AC-11；NFR-
 - 2026-06-29 — TASK-004实现证券主数据和本地搜索；不实现GUI搜索框、原子化证券切换、远端补充或持久化存储。
 - 2026-06-29 — 接受ADR-008：历史K线缓存使用 `pyarrow` 写入Parquet分区，并由数据网关统一协调增量补缺和实时状态。
 - 2026-06-29 — TASK-005实现历史/实时数据网关与缓存；不实现独立数据质量服务、交易日历、GUI图表或真实供应商接入。
+- 2026-06-29 — 接受ADR-009：数据质量门禁输出结构化阻断报告，并用类型化错误和 `DataHealth` 对上层暴露。
+- 2026-06-29 — TASK-006实现数据质量服务、阻断等级和基础跨源对账；不实现完整交易日历、公司行为复权核对或多供应商真实接入。
 
 ## 架构与接口
 
@@ -78,7 +80,7 @@ FR-001、FR-003、FR-004、FR-020；AC-01、AC-06、AC-09、AC-10、AC-11；NFR-
 
 实现TASK-005和TASK-006，包括取消和故障注入。
 
-状态：TASK-005已完成。TASK-006仍需实现独立数据质量门禁与对账。
+状态：TASK-005和TASK-006已完成。
 
 ### 里程碑4——规则引擎
 
@@ -96,6 +98,7 @@ FR-001、FR-003、FR-004、FR-020；AC-01、AC-06、AC-09、AC-10、AC-11；NFR-
 - 假供应商当前覆盖证券搜索、实时Quote、日线K线、实时订阅、公司行为和正式基金净值；分钟K线能力默认未开启，调用时以类型化缺能力错误失败。
 - TASK-004已创建 `SecurityMasterRecord`、`SecuritySearchResult`、`RecentSecuritySelection` 和 `SecurityMasterService`，支持时点状态解析、代码/名称/别名搜索、子序列模糊匹配、非活跃过滤和最近访问LRU。
 - TASK-005已创建 `HistoricalBarCache`、`BarCacheAppendResult`、`MarketDataGateway`、`RealtimeSubscriptionState` 和 `RealtimeConnectionStatus`，支持K线Parquet分区、重复记录防护、坏分区类型化错误、缺口补齐、陈旧Quote健康状态、订阅取消和断线重连。
+- TASK-006已创建 `DataQualityService`、`DataQualityPolicy`、`DataQualityIssue`、`DataQualityReport` 和阻断等级枚举，支持新鲜度、完整性、一致性、授权检查、跨源Quote对账和类型化阻断错误。
 
 ## 验证与验收
 
@@ -146,6 +149,14 @@ TASK-005验证证据（2026-06-29）：
 - `uv run pytest tests/unit/test_bar_cache.py tests/integration/test_market_data_gateway.py` 通过，9个TASK-005相关测试通过。
 - 覆盖Parquet分区读写、重复时间戳、损坏OHLC、幂等追加、缺口计算、增量补缺、陈旧Quote阻断、订阅取消和断线重连。
 
+TASK-006验证证据（2026-06-29）：
+
+- `uv run ruff format --check .` 通过。
+- `uv run ruff check .` 通过。
+- `uv run mypy src tests` 通过。
+- `uv run pytest` 通过，74个测试通过。
+- 覆盖T-08/T-16：重复K线、非法OHLC、缺失K线、陈旧Quote、缺失字段、未授权供应商、跨源Quote不一致、健康数据放行和被阻断数据拒绝可交易报告。
+
 ## 可复现性、幂等性与恢复
 
 夹具生成必须确定。数据库/缓存初始化和迁移必须可安全重复执行。测试不得依赖网络或秘密凭据。
@@ -169,6 +180,8 @@ TASK-005验证证据（2026-06-29）：
 - 新增决策：`docs/DECISIONS.md` 中的 ADR-007。
 - TASK-005产物：历史K线Parquet缓存、市场数据网关、实时订阅状态和增量补缺测试。
 - 新增决策：`docs/DECISIONS.md` 中的 ADR-008。
+- TASK-006产物：数据质量门禁、结构化质量报告、阻断错误映射、跨源Quote对账和信号阻断测试。
+- 新增决策：`docs/DECISIONS.md` 中的 ADR-009。
 - `.uv-bootstrap/` 是本机安装 `uv` 的临时引导环境，已忽略，不属于项目交付物。
 
 ## 结果与复盘

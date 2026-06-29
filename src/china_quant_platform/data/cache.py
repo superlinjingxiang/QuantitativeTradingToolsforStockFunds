@@ -137,7 +137,7 @@ class HistoricalBarCache:
 
     def missing_ranges(self, request: BarsRequest) -> list[BarsRequest]:
         cached_bars = self.read_bars(request)
-        expected_windows = _expected_windows(request)
+        expected_windows = expected_bar_windows(request)
         if not expected_windows:
             return [] if cached_bars else [request]
 
@@ -200,7 +200,7 @@ def _ensure_unique_bar_keys(bars: Sequence[Bar]) -> None:
         seen.add(key)
 
 
-def _expected_windows(request: BarsRequest) -> list[tuple[datetime, datetime]]:
+def expected_bar_windows(request: BarsRequest) -> list[tuple[datetime, datetime]]:
     if request.interval is BarInterval.DAILY:
         return _expected_daily_windows(request)
 
@@ -274,4 +274,4 @@ def _request_for_window_group(
     )
 
 
-__all__ = ["BarCacheAppendResult", "HistoricalBarCache"]
+__all__ = ["BarCacheAppendResult", "HistoricalBarCache", "expected_bar_windows"]
