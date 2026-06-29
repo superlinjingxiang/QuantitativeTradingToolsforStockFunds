@@ -1,5 +1,17 @@
 """Strategy interfaces and versioned implementations."""
 
+from china_quant_platform.strategies.a_share_trend import (
+    AShareFactorSnapshot,
+    AShareTrendConfig,
+    AShareTrendScore,
+    AShareTrendSelection,
+    AShareTrendStrategy,
+    AShareUniverseMember,
+    BreakdownRow,
+    ExitDecision,
+    cross_sectional_percentile_ranks,
+    summarize_group_returns,
+)
 from china_quant_platform.strategies.base import (
     DriverDirection,
     Explanation,
@@ -30,6 +42,14 @@ __all__ = [
     "DriverDirection",
     "Explanation",
     "ExplanationDriver",
+    "AShareFactorSnapshot",
+    "AShareTrendConfig",
+    "AShareTrendScore",
+    "AShareTrendSelection",
+    "AShareTrendStrategy",
+    "AShareUniverseMember",
+    "BreakdownRow",
+    "ExitDecision",
     "RawSignal",
     "RawSignalIntent",
     "Strategy",
@@ -38,6 +58,7 @@ __all__ = [
     "StrategyEvaluation",
     "StrategyMetadata",
     "WarmupSpec",
+    "cross_sectional_percentile_ranks",
     "CostTurnoverScenario",
     "EtfRotationConfig",
     "EtfRotationScore",
@@ -48,4 +69,5 @@ __all__ = [
     "ResearchStatus",
     "cost_turnover_sensitivity",
     "evaluate_strategy",
+    "summarize_group_returns",
 ]

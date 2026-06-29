@@ -25,7 +25,7 @@ FR-006至FR-009、FR-012、FR-014、FR-018、FR-020、AC-04、AC-05、AC-10、AC
 ## 进度
 
 - [x] ETF中期轮动基准策略；TASK-017。
-- [ ] A股多因子趋势基准策略；TASK-018。
+- [x] A股多因子趋势基准策略；TASK-018。
 - [ ] 经过校准的预测引擎与不交易机制；TASK-019。
 - [ ] 分析报告、当前策略与预期走势面板；TASK-020。
 
@@ -33,9 +33,13 @@ FR-006至FR-009、FR-012、FR-014、FR-018、FR-020、AC-04、AC-05、AC-10、AC
 
 2026-06-29：TASK-017完成。ETF轮动以研究基准形式实现，不标记生产可用；策略输出仍是 `RawSignal`，最终仓位和交易需要后续规则/风险层。
 
+2026-06-29：TASK-018完成。A股多因子趋势基准使用时点股票池和时点因子快照，独立退出逻辑覆盖止损、持仓回撤和趋势破坏。
+
 ## 决策日志
 
 2026-06-29：ETF池使用时点成员与特征输入，评分包含动量、绝对动量、趋势、波动率和平均相关性；不在策略内硬编码生产ETF名单。
+
+2026-06-29：A股策略拒绝披露时间晚于 `as_of` 的因子快照，避免财务/因子可见性泄漏。
 
 ## 架构与接口
 
@@ -77,6 +81,8 @@ FR-006至FR-009、FR-012、FR-014、FR-018、FR-020、AC-04、AC-05、AC-10、AC
 
 - `src/china_quant_platform/strategies/etf_rotation.py`：ETF时点池、轮动评分、RawSignal/Explanation和成本换手敏感性。
 - `tests/unit/test_etf_rotation_strategy.py`：ETF池过滤、评分排序、研究状态、ABSTAIN路径和成本换手敏感性测试。
+- `src/china_quant_platform/strategies/a_share_trend.py`：A股时点池、因子快照、横截面排名、多因子趋势评分、退出决策和分组拆解。
+- `tests/unit/test_a_share_trend_strategy.py`：时点披露拒绝、市场/趋势过滤、独立退出、RawSignal/Explanation和分组拆解测试。
 
 ## 结果与复盘
 
