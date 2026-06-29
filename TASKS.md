@@ -91,11 +91,12 @@
 - 验收：策略不得直接产生最终订单，也不得绕过风险和规则层。
 - 完成证据：2026-06-29 完成 `Strategy` 协议、`StrategyContext`、`WarmupSpec`、`StrategyMetadata`、`RawSignal`、`Explanation` 和 `evaluate_strategy()`；`RawSignal` 强制保留数据质量/规则/风控门禁且禁止订单/最终信号字段，预热不足、身份不一致、解释不匹配和条件缺失测试通过。
 
-### [ ] TASK-013——事件驱动回测内核
+### [x] TASK-013——事件驱动回测内核
 - 依赖：TASK-005、TASK-007、TASK-012
 - 需求：FR-013、AC-07
 - 交付：事件循环、时钟/交易时段、订单/成交/拒绝/部分成交事件、取消和审计。
 - 验收：T-01、T-04、T-05、T-09通过。
+- 完成证据：2026-06-29 完成 `BacktestEventLoop`、`BacktestClock`、`BacktestEngine`、`OrderIntent`、`ExecutionReport`、确定性执行模拟器、取消令牌和结果checksum；事件优先级、策略在市场事件后评估、订单晚于信号、规则拒绝、部分成交、取消和重复运行checksum一致测试通过。
 
 ### [ ] TASK-014——执行、成本、流动性与公司行为
 - 依赖：TASK-007、TASK-013
