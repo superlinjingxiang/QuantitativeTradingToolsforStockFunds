@@ -47,3 +47,43 @@
 - 影响：CI和本地开发统一使用 `uv sync --all-extras --dev`；`uv.lock` 成为可复现安装证据；基础测试覆盖PySide6 `QtCore` 导入。
 - 受影响的需求：TASK-001、NFR-08。
 - 所需测试/迁移：`ruff format --check`、`ruff check`、`mypy src tests`、`pytest`、`python -m china_quant_platform --version`。
+
+### ADR-005——使用Pydantic实现领域契约模型
+- 日期：2026-06-28
+- 状态：已接受
+- 背景：TASK-002要求标准领域模型、Schema双向转换、时区时间戳校验、概率归一化和可交易报告不变量。
+- 决策：使用Pydantic v2实现不可变领域模型，并将 `pydantic` 作为显式生产依赖；所有面向契约的模型提供 `to_contract_dict()` 和 `from_contract_dict()`。
+- 已考虑的替代方案：标准库 `dataclasses` 加手写校验、直接使用原始字典。手写校验会重复Schema规则，原始字典不满足有类型领域模型要求。
+- 影响：领域层获得统一运行时校验；`DataHealth`、`AnalysisReport`、`BacktestConfig` 和 `SecurityRule` 可与 JSON Schema 往返；后续供应商和GUI必须使用这些模型而不是原始字典。
+- 受影响的需求：TASK-002、FR-020、AC-06、AC-10、AC-11。
+- 所需测试/迁移：Schema往返测试、非法概率测试、naive时间戳测试、可交易报告来源信息测试、正式/估算基金净值隔离测试。
+
+### ADR-006——使用确定性假供应商验证数据协议
+- 日期：2026-06-28
+- 状态：已接受
+- 背景：TASK-003要求供应商协议不绑定具体SDK，并能在没有真实行情凭据时验证历史、实时、取消和限流行为。
+- 决策：在 `data` 层定义 `MarketDataProvider` 协议、请求模型和能力声明；实现 `DeterministicFakeMarketDataProvider` 作为无外部I/O的契约测试供应商。
+- 已考虑的替代方案：直接接入真实供应商、使用原始字典夹具。真实供应商会引入凭据和网络不确定性；原始字典不满足有类型契约。
+- 影响：后续适配真实供应商必须实现同一协议；领域层继续不依赖 `data` 层或任何供应商SDK；缺能力通过类型化 `DataUnavailable` 暴露。
+- 受影响的需求：TASK-003、NFR-06、NFR-08。
+- 所需测试/迁移：供应商协议测试、确定性fixture测试、实时订阅测试、取消测试、限流测试和领域层依赖边界测试。
+
+### ADR-007——首版证券主数据采用内存索引
+- 日期：2026-06-29
+- 状态：已接受
+- 背景：TASK-004需要本地候选搜索、别名匹配、时点状态和最近搜索；SQLite持久化与GUI切换事务在后续任务中实现。
+- 决策：实现 `SecurityMasterService` 作为内存证券主数据服务，使用按日期的 `SecurityMasterRecord` 快照解析时点状态，并用归一化精确/前缀/包含/子序列评分实现本地模糊搜索。
+- 已考虑的替代方案：直接落SQLite FTS、引入第三方模糊搜索库。SQLite归属后续存储任务；第三方库会增加依赖且当前需求可由小型确定性索引满足。
+- 影响：搜索路径无外部I/O，适合GUI前的单元/集成测试；后续持久化层可用同一服务接口加载记录。
+- 受影响的需求：TASK-004、FR-001、AC-01、NFR-01。
+- 所需测试/迁移：T-10搜索测试、时点状态测试、最近搜索测试、2000证券夹具P95搜索性能测试。
+
+### ADR-008——历史K线缓存使用pyarrow写入Parquet分区
+- 日期：2026-06-29
+- 状态：已接受
+- 背景：TASK-005要求历史行情按证券、周期和年份保存为Parquet，并且请求前计算缺失区间，只补齐缺口。
+- 决策：将 `pyarrow` 作为生产依赖；实现 `HistoricalBarCache` 以单分区文件保存标准 `Bar` 契约行，并由 `MarketDataGateway` 协调缓存读取、缺口请求、幂等追加和实时订阅状态。
+- 已考虑的替代方案：CSV/JSON临时缓存、DuckDB优先、Polars优先。CSV/JSON不满足Parquet交付要求；DuckDB跨分区分析留给后续存储查询；Polars对当前单文件读写需求不是必需。
+- 影响：历史K线缓存具备可复现的本地列式存储；同一证券、周期、复权和时间戳唯一；实时Quote状态可转换为阻断信号的 `DataHealth`。
+- 受影响的需求：TASK-005、FR-003、FR-004、AC-06、NFR-02、NFR-04。
+- 所需测试/迁移：Parquet分区读写、重复时间戳、损坏OHLC、缓存幂等追加、增量补缺、陈旧Quote、订阅取消和断线重连测试。
