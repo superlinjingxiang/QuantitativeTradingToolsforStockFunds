@@ -112,11 +112,12 @@
 - 验收：T-17、T-18通过。
 - 完成证据：2026-06-29 完成 `PortfolioState`、`Position`、`PortfolioEngine`、组合对账、`RiskLimitConfig`、`RiskEngine` 和风险预算仓位计算；买入/卖出成交入账、可卖数量阻断、现金+市值对账、集中度/总敞口/现金缓冲/流动性/回撤/相关性门禁和手数取整测试通过。
 
-### [ ] TASK-016——指标报告与确定性回归夹具
+### [x] TASK-016——指标报告与确定性回归夹具
 - 依赖：TASK-013、TASK-015
 - 需求：FR-014、FR-019、FR-020、AC-09、AC-10
 - 交付：绩效、校准和成本报告；交易流水；CSV/HTML导出；运行清单和校验和。
 - 验收：T-09、T-14以及固定快照回归测试通过。
+- 完成证据：2026-06-29 完成 `BacktestReportBuilder`、绩效指标、校准指标、成本汇总、交易流水、运行清单、稳定checksum、CSV交易导出和HTML报告导出；固定报告夹具checksum `cedc0dd803c8b279fd68cf5e2b4514bc5e7c053d9dcf634db439392b7bf9cdee` 回归测试通过。
 
 ## 阶段4——策略、预测与解释
 
