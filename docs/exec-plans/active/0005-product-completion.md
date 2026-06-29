@@ -25,7 +25,7 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 ## 进度
 
 - [x] 市场概览、指数与自选列表；TASK-021。
-- [ ] 模拟交易经纪与账户；TASK-022。
+- [x] 模拟交易经纪与账户；TASK-022。
 - [ ] 场外基金分析模块；TASK-023。
 - [ ] 知识中心与上下文金融帮助；TASK-024。
 - [ ] 打包、恢复、安全与发布审计；TASK-025。
@@ -34,9 +34,13 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 
 2026-06-29：TASK-021完成。市场概览使用标准 `Quote` 计算指数变动、广度、成交额和波动状态；自选信号更新不改变当前选中证券。
 
+2026-06-29：TASK-022完成。模拟账户复用回测执行模拟器、市场规则和组合记账；数据陈旧、T+1可卖数量和部分成交偏差都有结构化记录。
+
 ## 决策日志
 
 2026-06-29：市场概览和自选列表归属ViewModel状态快照，左侧Widget只渲染并触发显式选择事务。
+
+2026-06-29：模拟经纪不预留真实下单方法，只暴露纸面 `submit_order()`；恢复机制使用可序列化 `SimulationAccountState` 快照。
 
 ## 架构与接口
 
@@ -80,6 +84,8 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 - `src/china_quant_platform/market/overview.py`：指数快照、市场广度、成交额、波动状态和数据健康。
 - `src/china_quant_platform/ui/state.py`、`src/china_quant_platform/ui/viewmodel.py`、`src/china_quant_platform/ui/main_window.py`：市场概览、自选分组、当前信号和左侧列表渲染。
 - `tests/unit/test_market_overview.py`、`tests/gui/test_market_watchlist.py`：市场概览计算、陈旧状态、自选分组信号、当前选择稳定和GUI列表测试。
+- `src/china_quant_platform/simulation/broker.py`：模拟订单、成交、账户状态、盈亏指标、偏差记录、JSON恢复和无真实下单边界。
+- `tests/unit/test_simulation_broker.py`：成交入账、陈旧数据阻断、T+1拒绝、部分成交偏差、恢复快照和真实下单路径缺失测试。
 
 ## 结果与复盘
 
