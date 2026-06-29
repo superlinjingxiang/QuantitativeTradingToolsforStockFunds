@@ -8,7 +8,9 @@ from typing import cast
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from china_quant_platform.ui.state import AppUiState, UiRunState
+from china_quant_platform.domain import AdjustmentMode, BarInterval
+from china_quant_platform.ui.chart import PriceChartWidget
+from china_quant_platform.ui.state import AppUiState, ChartOverlay, ChartRangePreset, UiRunState
 from china_quant_platform.ui.viewmodel import ApplicationViewModel
 
 
@@ -71,6 +73,59 @@ class MainWindow(QtWidgets.QMainWindow):
         for title in ("市场", "策略", "回测", "模拟账户", "风险", "知识中心"):
             self.tabs.addTab(self._placeholder_page(title), title)
 
+        self.interval_combo = QtWidgets.QComboBox()
+        self.interval_combo.setObjectName("chartInterval")
+        for label, interval in (
+            ("分时", BarInterval.TICK),
+            ("1分", BarInterval.ONE_MINUTE),
+            ("5分", BarInterval.FIVE_MINUTES),
+            ("15分", BarInterval.FIFTEEN_MINUTES),
+            ("30分", BarInterval.THIRTY_MINUTES),
+            ("60分", BarInterval.SIXTY_MINUTES),
+            ("日线", BarInterval.DAILY),
+            ("周线", BarInterval.WEEKLY),
+            ("月线", BarInterval.MONTHLY),
+        ):
+            self.interval_combo.addItem(label, interval.value)
+        self.interval_combo.currentIndexChanged.connect(self._chart_interval_changed)
+
+        self.range_combo = QtWidgets.QComboBox()
+        self.range_combo.setObjectName("chartRange")
+        for label, range_preset in (
+            ("5日", ChartRangePreset.FIVE_DAYS),
+            ("1月", ChartRangePreset.ONE_MONTH),
+            ("3月", ChartRangePreset.THREE_MONTHS),
+            ("6月", ChartRangePreset.SIX_MONTHS),
+            ("1年", ChartRangePreset.ONE_YEAR),
+            ("3年", ChartRangePreset.THREE_YEARS),
+            ("5年", ChartRangePreset.FIVE_YEARS),
+            ("自定义", ChartRangePreset.CUSTOM),
+        ):
+            self.range_combo.addItem(label, range_preset.value)
+        self.range_combo.currentIndexChanged.connect(self._chart_range_changed)
+
+        self.adjustment_combo = QtWidgets.QComboBox()
+        self.adjustment_combo.setObjectName("chartAdjustment")
+        for label, adjustment in (
+            ("不复权", AdjustmentMode.NONE),
+            ("前复权", AdjustmentMode.FORWARD),
+            ("后复权", AdjustmentMode.BACKWARD),
+        ):
+            self.adjustment_combo.addItem(label, adjustment.value)
+        self.adjustment_combo.currentIndexChanged.connect(self._chart_adjustment_changed)
+
+        self.volume_overlay = self._overlay_checkbox("成交量", "overlayVolume", ChartOverlay.VOLUME)
+        self.ma_overlay = self._overlay_checkbox("MA", "overlayMA", ChartOverlay.MOVING_AVERAGE)
+        self.signal_overlay = self._overlay_checkbox("信号", "overlaySignals", ChartOverlay.SIGNALS)
+        self.forecast_overlay = self._overlay_checkbox(
+            "预测区间",
+            "overlayForecast",
+            ChartOverlay.FORECAST,
+        )
+        self.price_chart = PriceChartWidget()
+        self.chart_summary_label = QtWidgets.QLabel()
+        self.chart_summary_label.setObjectName("chartSummary")
+
         self.setCentralWidget(self._build_central_widget())
         self.statusBar().addPermanentWidget(self.status_label)
         self.view_model.state_changed.connect(self.render_state)
@@ -109,6 +164,12 @@ class MainWindow(QtWidgets.QMainWindow):
             f"状态：{state.run_state.value}｜任务：{state.task_status.value}｜标的：{selected}"
         )
         self.cancel_button.setEnabled(state.run_state is UiRunState.BACKTEST_RUNNING)
+        self._sync_chart_controls(state)
+        self.price_chart.set_chart_state(state.chart)
+        self.chart_summary_label.setText(
+            f"周期：{state.chart.interval.value}｜复权：{state.chart.adjustment.value}｜"
+            f"范围：{state.chart.range_preset.value}｜点数：{state.chart.point_count}"
+        )
 
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if watched is self.search_input and event.type() == QtCore.QEvent.Type.KeyPress:
@@ -137,6 +198,63 @@ class MainWindow(QtWidgets.QMainWindow):
         security_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
         if isinstance(security_id, str):
             self.view_model.select_security(security_id)
+
+    @QtCore.Slot(int)
+    def _chart_interval_changed(self, _index: int) -> None:
+        value = self.interval_combo.currentData()
+        if isinstance(value, str):
+            self.view_model.set_chart_interval(BarInterval(value))
+
+    @QtCore.Slot(int)
+    def _chart_range_changed(self, _index: int) -> None:
+        value = self.range_combo.currentData()
+        if isinstance(value, str):
+            self.view_model.set_chart_range(ChartRangePreset(value))
+
+    @QtCore.Slot(int)
+    def _chart_adjustment_changed(self, _index: int) -> None:
+        value = self.adjustment_combo.currentData()
+        if isinstance(value, str):
+            self.view_model.set_chart_adjustment(AdjustmentMode(value))
+
+    def _overlay_checkbox(
+        self,
+        text: str,
+        object_name: str,
+        overlay: ChartOverlay,
+    ) -> QtWidgets.QCheckBox:
+        checkbox = QtWidgets.QCheckBox(text)
+        checkbox.setObjectName(object_name)
+        checkbox.toggled.connect(
+            lambda checked, selected_overlay=overlay: self.view_model.set_chart_overlay_enabled(
+                selected_overlay,
+                checked,
+            )
+        )
+        return checkbox
+
+    def _sync_chart_controls(self, state: AppUiState) -> None:
+        self._set_combo_data(self.interval_combo, state.chart.interval.value)
+        self._set_combo_data(self.range_combo, state.chart.range_preset.value)
+        self._set_combo_data(self.adjustment_combo, state.chart.adjustment.value)
+        overlay_map = (
+            (self.volume_overlay, ChartOverlay.VOLUME),
+            (self.ma_overlay, ChartOverlay.MOVING_AVERAGE),
+            (self.signal_overlay, ChartOverlay.SIGNALS),
+            (self.forecast_overlay, ChartOverlay.FORECAST),
+        )
+        for checkbox, overlay in overlay_map:
+            checkbox.blockSignals(True)
+            checkbox.setChecked(overlay in state.chart.overlays)
+            checkbox.blockSignals(False)
+
+    def _set_combo_data(self, combo: QtWidgets.QComboBox, value: str) -> None:
+        index = combo.findData(value)
+        if index < 0 or combo.currentIndex() == index:
+            return
+        combo.blockSignals(True)
+        combo.setCurrentIndex(index)
+        combo.blockSignals(False)
 
     def _build_central_widget(self) -> QtWidgets.QWidget:
         root = QtWidgets.QWidget()
@@ -201,14 +319,18 @@ class MainWindow(QtWidgets.QMainWindow):
     def _center_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(panel)
-        chart_area = QtWidgets.QFrame()
-        chart_area.setObjectName("chartWorkspace")
-        chart_area.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        chart_layout = QtWidgets.QVBoxLayout(chart_area)
-        chart_title = QtWidgets.QLabel("价格 / K线 / 成交量")
-        chart_title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        chart_layout.addWidget(chart_title)
-        layout.addWidget(chart_area, stretch=1)
+        toolbar = QtWidgets.QHBoxLayout()
+        toolbar.addWidget(self.interval_combo)
+        toolbar.addWidget(self.range_combo)
+        toolbar.addWidget(self.adjustment_combo)
+        toolbar.addWidget(self.volume_overlay)
+        toolbar.addWidget(self.ma_overlay)
+        toolbar.addWidget(self.signal_overlay)
+        toolbar.addWidget(self.forecast_overlay)
+        toolbar.addStretch(1)
+        layout.addLayout(toolbar)
+        layout.addWidget(self.price_chart, stretch=1)
+        layout.addWidget(self.chart_summary_label)
         return panel
 
     def _right_panel(self) -> QtWidgets.QWidget:

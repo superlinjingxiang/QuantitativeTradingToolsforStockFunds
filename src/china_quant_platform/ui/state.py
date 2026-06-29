@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from pydantic import Field
+
 from china_quant_platform.data import SecuritySearchResult
-from china_quant_platform.domain import DataHealth, DataHealthStatus, DomainErrorKind
+from china_quant_platform.domain import (
+    AdjustmentMode,
+    Bar,
+    BarInterval,
+    DataHealth,
+    DataHealthStatus,
+    DomainErrorKind,
+    Quote,
+)
 from china_quant_platform.domain.base import DomainModel
 
 
@@ -35,6 +45,75 @@ class UiTaskStatus(StrEnum):
     CANCELLED = "CANCELLED"
     FAILED = "FAILED"
     COMPLETED = "COMPLETED"
+
+
+class ChartRangePreset(StrEnum):
+    FIVE_DAYS = "5d"
+    ONE_MONTH = "1m"
+    THREE_MONTHS = "3m"
+    SIX_MONTHS = "6m"
+    ONE_YEAR = "1y"
+    THREE_YEARS = "3y"
+    FIVE_YEARS = "5y"
+    CUSTOM = "custom"
+
+
+class ChartOverlay(StrEnum):
+    MOVING_AVERAGE = "MA"
+    EXPONENTIAL_AVERAGE = "EMA"
+    VOLUME = "VOLUME"
+    SIGNALS = "SIGNALS"
+    FORECAST = "FORECAST"
+
+
+class ChartPointState(DomainModel):
+    time_label: str
+    open_price: float
+    high_price: float
+    low_price: float
+    close_price: float
+    volume: float
+    amount: float
+    is_realtime: bool = False
+
+    @classmethod
+    def from_bar(cls, bar: Bar) -> ChartPointState:
+        return cls(
+            time_label=bar.end_time.isoformat(),
+            open_price=bar.open_price,
+            high_price=bar.high_price,
+            low_price=bar.low_price,
+            close_price=bar.close_price,
+            volume=bar.volume,
+            amount=bar.amount,
+        )
+
+    @classmethod
+    def from_quote(cls, quote: Quote) -> ChartPointState:
+        return cls(
+            time_label=quote.source_time.isoformat(),
+            open_price=quote.open_price,
+            high_price=quote.high_price,
+            low_price=quote.low_price,
+            close_price=quote.latest_price,
+            volume=quote.volume,
+            amount=quote.amount,
+            is_realtime=True,
+        )
+
+
+class ChartState(DomainModel):
+    interval: BarInterval = BarInterval.DAILY
+    adjustment: AdjustmentMode = AdjustmentMode.NONE
+    range_preset: ChartRangePreset = ChartRangePreset.ONE_MONTH
+    overlays: frozenset[ChartOverlay] = frozenset({ChartOverlay.VOLUME})
+    points: tuple[ChartPointState, ...] = ()
+    update_count: int = 0
+    realtime_update_count: int = 0
+
+    @property
+    def point_count(self) -> int:
+        return len(self.points)
 
 
 class UiErrorState(DomainModel):
@@ -80,6 +159,7 @@ class AppUiState(DomainModel):
     task_status: UiTaskStatus = UiTaskStatus.IDLE
     active_task_name: str | None = None
     data_health: DataHealth | None = None
+    chart: ChartState = Field(default_factory=ChartState)
     latest_error: UiErrorState | None = None
 
     @property
@@ -120,6 +200,10 @@ def run_state_for_error(kind: DomainErrorKind) -> UiRunState:
 
 __all__ = [
     "AppUiState",
+    "ChartOverlay",
+    "ChartPointState",
+    "ChartRangePreset",
+    "ChartState",
     "SearchCandidateState",
     "UiErrorState",
     "UiRunState",

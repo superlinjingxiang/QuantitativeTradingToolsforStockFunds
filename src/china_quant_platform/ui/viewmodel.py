@@ -9,11 +9,24 @@ from typing import Any
 from PySide6 import QtCore
 
 from china_quant_platform.data import SecurityMasterService
-from china_quant_platform.domain import DataHealth, DomainError
-from china_quant_platform.domain.enums import AssetType, Currency, Exchange, SecurityStatus
-from china_quant_platform.domain.models import SecurityRef
+from china_quant_platform.domain import (
+    AdjustmentMode,
+    AssetType,
+    Bar,
+    BarInterval,
+    Currency,
+    DataHealth,
+    DomainError,
+    Exchange,
+    Quote,
+    SecurityRef,
+    SecurityStatus,
+)
 from china_quant_platform.ui.state import (
     AppUiState,
+    ChartOverlay,
+    ChartPointState,
+    ChartRangePreset,
     SearchCandidateState,
     UiErrorState,
     UiRunState,
@@ -167,10 +180,109 @@ class ApplicationViewModel(QtCore.QObject):
                     "search_query": "",
                     "search_results": (),
                     "highlighted_search_index": None,
+                    "chart": self._state.chart.model_copy(
+                        update={
+                            "points": (),
+                            "update_count": self._state.chart.update_count + 1,
+                            "realtime_update_count": 0,
+                        }
+                    ),
                     "run_state": UiRunState.LOADING_CACHE_HISTORY,
                     "task_status": UiTaskStatus.IDLE,
                     "active_task_name": None,
                     "latest_error": None,
+                }
+            )
+        )
+
+    def set_chart_interval(self, interval: BarInterval) -> None:
+        self._set_state(
+            self._state.model_copy(
+                update={"chart": self._state.chart.model_copy(update={"interval": interval})}
+            )
+        )
+
+    def set_chart_adjustment(self, adjustment: AdjustmentMode) -> None:
+        self._set_state(
+            self._state.model_copy(
+                update={"chart": self._state.chart.model_copy(update={"adjustment": adjustment})}
+            )
+        )
+
+    def set_chart_range(self, range_preset: ChartRangePreset) -> None:
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "chart": self._state.chart.model_copy(update={"range_preset": range_preset})
+                }
+            )
+        )
+
+    def set_chart_overlay_enabled(self, overlay: ChartOverlay, enabled: bool) -> None:
+        overlays = set(self._state.chart.overlays)
+        if enabled:
+            overlays.add(overlay)
+        else:
+            overlays.discard(overlay)
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "chart": self._state.chart.model_copy(update={"overlays": frozenset(overlays)})
+                }
+            )
+        )
+
+    def load_chart_bars(self, bars: tuple[Bar, ...], *, generation: int | None = None) -> None:
+        if self._is_stale_generation(generation):
+            return
+
+        points = tuple(
+            ChartPointState.from_bar(bar)
+            for bar in sorted(bars, key=lambda item: item.end_time)
+            if self._state.selected_security_id is None
+            or bar.security_id == self._state.selected_security_id
+        )
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "chart": self._state.chart.model_copy(
+                        update={
+                            "points": points,
+                            "update_count": self._state.chart.update_count + 1,
+                        }
+                    ),
+                    "run_state": UiRunState.REALTIME_RUNNING if points else self._state.run_state,
+                }
+            )
+        )
+
+    def apply_realtime_quote(self, quote: Quote, *, generation: int | None = None) -> None:
+        if self._is_stale_generation(generation):
+            return
+        if (
+            self._state.selected_security_id is not None
+            and quote.security_id != self._state.selected_security_id
+        ):
+            return
+
+        point = ChartPointState.from_quote(quote)
+        points = list(self._state.chart.points)
+        if points and points[-1].time_label == point.time_label:
+            points[-1] = point
+        else:
+            points.append(point)
+
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "chart": self._state.chart.model_copy(
+                        update={
+                            "points": tuple(points),
+                            "update_count": self._state.chart.update_count + 1,
+                            "realtime_update_count": (self._state.chart.realtime_update_count + 1),
+                        }
+                    ),
+                    "run_state": UiRunState.REALTIME_RUNNING,
                 }
             )
         )
@@ -307,6 +419,9 @@ class ApplicationViewModel(QtCore.QObject):
     def _set_state(self, state: AppUiState) -> None:
         self._state = state
         self.state_changed.emit(state)
+
+    def _is_stale_generation(self, generation: int | None) -> bool:
+        return generation is not None and generation != self._state.selection_generation
 
 
 def build_demo_security_master() -> SecurityMasterService:
