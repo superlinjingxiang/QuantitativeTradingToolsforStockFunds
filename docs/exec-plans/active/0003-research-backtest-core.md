@@ -25,7 +25,7 @@ FR-012至FR-014、FR-019、FR-020、AC-07至AC-10、NFR-05、NFR-08、T-01至T-0
 ## 进度
 
 - [x] 确定性指标与因子注册表；TASK-011。
-- [ ] 策略接口与解释模型；TASK-012。
+- [x] 策略接口与解释模型；TASK-012。
 - [ ] 事件驱动回测内核；TASK-013。
 - [ ] 执行、成本、流动性与公司行为；TASK-014。
 - [ ] 组合与风险引擎；TASK-015。
@@ -35,9 +35,13 @@ FR-012至FR-014、FR-019、FR-020、AC-07至AC-10、NFR-05、NFR-08、T-01至T-0
 
 2026-06-29：TASK-011完成。指标层先采用标准库纯Python实现，避免在研究核心阶段引入新的数值运行时依赖；指标输出统一与输入长度对齐，用 `None` 表示预热不足或缺失值。
 
+2026-06-29：TASK-012完成。策略层只暴露原始信号、解释和元数据，最终信号、仓位、订单、成本和成交语义仍属于后续风险/回测/执行层。
+
 ## 决策日志
 
 2026-06-29：首版因子注册表只登记点时可见的价格类因子，财务和行业中性化因子等待数据契约与披露日夹具成熟后再接入。
+
+2026-06-29：`RawSignal` 使用独立意图枚举并强制数据质量、规则和风控门禁不可关闭，作为 TASK-013 回测事件流的策略边界。
 
 ## 架构与接口
 
@@ -80,6 +84,8 @@ FR-012至FR-014、FR-019、FR-020、AC-07至AC-10、NFR-05、NFR-08、T-01至T-0
 - `src/china_quant_platform/indicators/core.py`：确定性指标、缓存键和输入指纹。
 - `src/china_quant_platform/factors/registry.py`：因子元数据、注册表和默认价格类因子。
 - `tests/unit/test_indicators.py`、`tests/unit/test_factor_registry.py`：预热期、缺失值、未来值隔离和缓存键确定性测试。
+- `src/china_quant_platform/strategies/base.py`：策略协议、上下文、预热、原始信号、解释和评估守门函数。
+- `tests/unit/test_strategy_interfaces.py`：RawSignal越权字段拒绝、门禁不可关闭、预热阻断和解释一致性测试。
 
 ## 结果与复盘
 

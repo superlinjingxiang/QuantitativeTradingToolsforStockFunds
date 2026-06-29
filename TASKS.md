@@ -85,10 +85,11 @@
 - 验收：预热期和缺失值测试通过；不得访问未来数据；缓存键可确定复现。
 - 完成证据：2026-06-29 完成纯函数 `indicators` 指标库、`IndicatorSpec`/`IndicatorCacheKey`、收益/波动/回撤/相对强弱计算、`FactorMetadata`、`FactorRegistry` 和默认版本化因子；预热期、缺失值、未来值隔离、因子元数据校验、重复注册和缓存键排序无关性测试通过。
 
-### [ ] TASK-012——策略接口与解释模型
+### [x] TASK-012——策略接口与解释模型
 - 依赖：TASK-011
 - 交付：策略协议、原始信号、适用条件、失效条件、解释和版本元数据。
 - 验收：策略不得直接产生最终订单，也不得绕过风险和规则层。
+- 完成证据：2026-06-29 完成 `Strategy` 协议、`StrategyContext`、`WarmupSpec`、`StrategyMetadata`、`RawSignal`、`Explanation` 和 `evaluate_strategy()`；`RawSignal` 强制保留数据质量/规则/风控门禁且禁止订单/最终信号字段，预热不足、身份不一致、解释不匹配和条件缺失测试通过。
 
 ### [ ] TASK-013——事件驱动回测内核
 - 依赖：TASK-005、TASK-007、TASK-012
