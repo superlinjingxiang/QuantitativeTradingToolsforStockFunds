@@ -19,6 +19,7 @@ from china_quant_platform.domain import (
     Quote,
 )
 from china_quant_platform.domain.base import DomainModel
+from china_quant_platform.market import IndexSnapshot, MarketOverview
 
 
 class UiRunState(StrEnum):
@@ -239,6 +240,80 @@ class AnalysisPanelState(DomainModel):
         return cls(report=report, strategy=strategy, forecast=forecast, operation=operation)
 
 
+class MarketIndexPanelState(DomainModel):
+    security_id: str
+    name: str
+    latest_value: str
+    change_pct: str
+    turnover: str
+    source_time: str
+
+    @classmethod
+    def from_snapshot(cls, snapshot: IndexSnapshot) -> MarketIndexPanelState:
+        return cls(
+            security_id=snapshot.security_id,
+            name=snapshot.name,
+            latest_value=f"{snapshot.latest_value:.2f}",
+            change_pct=_format_percent(snapshot.change_pct),
+            turnover=_money_text(snapshot.turnover),
+            source_time=snapshot.source_time.isoformat(),
+        )
+
+
+class MarketOverviewPanelState(DomainModel):
+    as_of: str = "--"
+    indices: tuple[MarketIndexPanelState, ...] = ()
+    breadth_summary: str = "--"
+    turnover_summary: str = "--"
+    volatility_state: str = "--"
+    trend_state: str = "--"
+    data_health_text: str = "--"
+    is_stale: bool = False
+
+    @classmethod
+    def from_overview(cls, overview: MarketOverview) -> MarketOverviewPanelState:
+        breadth = overview.breadth
+        return cls(
+            as_of=overview.as_of.isoformat(),
+            indices=tuple(MarketIndexPanelState.from_snapshot(index) for index in overview.indices),
+            breadth_summary=(
+                f"上涨{breadth.advancers} / 下跌{breadth.decliners} / 平盘{breadth.unchanged}"
+            ),
+            turnover_summary=_money_text(breadth.total_turnover),
+            volatility_state=breadth.volatility_state.value,
+            trend_state=breadth.trend_state.value,
+            data_health_text=_data_health_text(overview.data_health),
+            is_stale=overview.data_health.status is DataHealthStatus.STALE,
+        )
+
+
+class WatchlistItemState(DomainModel):
+    security_id: str
+    symbol: str
+    name: str
+    group: str
+    sort_order: int = 0
+    pinned: bool = False
+    final_signal: str = "--"
+    latest_price: str = "--"
+    change_pct: str = "--"
+    data_health_text: str = "--"
+    is_stale: bool = False
+
+
+class WatchlistGroupState(DomainModel):
+    name: str
+    items: tuple[WatchlistItemState, ...] = ()
+
+
+class WatchlistPanelState(DomainModel):
+    groups: tuple[WatchlistGroupState, ...] = ()
+
+    @property
+    def items(self) -> tuple[WatchlistItemState, ...]:
+        return tuple(item for group in self.groups for item in group.items)
+
+
 class AppUiState(DomainModel):
     selection_generation: int = 0
     selected_security_id: str | None = None
@@ -249,6 +324,8 @@ class AppUiState(DomainModel):
     task_status: UiTaskStatus = UiTaskStatus.IDLE
     active_task_name: str | None = None
     data_health: DataHealth | None = None
+    market_overview: MarketOverviewPanelState = Field(default_factory=MarketOverviewPanelState)
+    watchlist: WatchlistPanelState = Field(default_factory=WatchlistPanelState)
     chart: ChartState = Field(default_factory=ChartState)
     analysis: AnalysisPanelState = Field(default_factory=AnalysisPanelState)
     latest_error: UiErrorState | None = None
@@ -359,6 +436,21 @@ def _format_percent(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+def _money_text(value: float) -> str:
+    if value >= 100_000_000:
+        return f"{value / 100_000_000:.2f}亿"
+    if value >= 10_000:
+        return f"{value / 10_000:.2f}万"
+    return f"{value:.2f}"
+
+
+def _data_health_text(data_health: DataHealth) -> str:
+    issue_text = "；".join(data_health.issues)
+    if issue_text:
+        return f"{data_health.status.value}: {issue_text}"
+    return data_health.status.value
+
+
 def _fallback_applicable_conditions(report: AnalysisReport) -> tuple[str, ...]:
     if report.final_signal is FinalSignal.ABSTAIN:
         return ("No new trade while the report is abstaining.",)
@@ -373,12 +465,17 @@ __all__ = [
     "ChartRangePreset",
     "ChartState",
     "ForecastPanelState",
+    "MarketIndexPanelState",
+    "MarketOverviewPanelState",
     "OperationPanelState",
     "SearchCandidateState",
     "StrategyPanelState",
     "UiErrorState",
     "UiRunState",
     "UiTaskStatus",
+    "WatchlistGroupState",
+    "WatchlistItemState",
+    "WatchlistPanelState",
     "run_state_for_error",
     "run_state_for_health",
 ]

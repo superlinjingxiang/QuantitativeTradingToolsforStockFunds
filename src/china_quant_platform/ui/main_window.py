@@ -73,6 +73,23 @@ class MainWindow(QtWidgets.QMainWindow):
         for title in ("市场", "策略", "回测", "模拟账户", "风险", "知识中心"):
             self.tabs.addTab(self._placeholder_page(title), title)
 
+        self.watchlist = QtWidgets.QListWidget()
+        self.watchlist.setObjectName("watchlistItems")
+        self.watchlist.itemActivated.connect(self._activate_security_item)
+        self.watchlist.itemClicked.connect(self._activate_security_item)
+
+        self.market_indices = QtWidgets.QListWidget()
+        self.market_indices.setObjectName("marketIndexItems")
+        self.market_indices.itemActivated.connect(self._activate_security_item)
+        self.market_indices.itemClicked.connect(self._activate_security_item)
+
+        self.market_overview_summary = QtWidgets.QLabel()
+        self.market_overview_summary.setObjectName("marketOverviewSummary")
+        self.market_overview_summary.setWordWrap(True)
+
+        self.recent_securities = QtWidgets.QListWidget()
+        self.recent_securities.setObjectName("recentSecurityItems")
+
         self.interval_combo = QtWidgets.QComboBox()
         self.interval_combo.setObjectName("chartInterval")
         for label, interval in (
@@ -173,6 +190,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"周期：{state.chart.interval.value}｜复权：{state.chart.adjustment.value}｜"
             f"范围：{state.chart.range_preset.value}｜点数：{state.chart.point_count}"
         )
+        self._sync_market_and_watchlist(state)
         self.strategy_panel_label.setText(_strategy_panel_text(state))
         self.forecast_panel_label.setText(_forecast_panel_text(state))
         self.operation_panel_label.setText(_operation_panel_text(state))
@@ -204,6 +222,15 @@ class MainWindow(QtWidgets.QMainWindow):
         security_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
         if isinstance(security_id, str):
             self.view_model.select_security(security_id)
+
+    @QtCore.Slot(QtWidgets.QListWidgetItem)
+    def _activate_security_item(self, item: QtWidgets.QListWidgetItem) -> None:
+        security_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if isinstance(security_id, str):
+            try:
+                self.view_model.select_security(security_id)
+            except KeyError:
+                return
 
     @QtCore.Slot(int)
     def _chart_interval_changed(self, _index: int) -> None:
@@ -270,6 +297,56 @@ class MainWindow(QtWidgets.QMainWindow):
         combo.setCurrentIndex(index)
         combo.blockSignals(False)
 
+    def _sync_market_and_watchlist(self, state: AppUiState) -> None:
+        overview = state.market_overview
+        self.market_overview_summary.setText(
+            "\n".join(
+                [
+                    f"市场状态：{overview.trend_state}",
+                    f"市场广度：{overview.breadth_summary}",
+                    f"成交额：{overview.turnover_summary}",
+                    f"波动：{overview.volatility_state}",
+                    f"数据：{overview.data_health_text}",
+                ]
+            )
+        )
+        self.market_overview_summary.setProperty("stale", overview.is_stale)
+        self._set_list_items(
+            self.market_indices,
+            tuple(
+                (
+                    index.security_id,
+                    f"{index.name}  {index.latest_value}  {index.change_pct}  {index.turnover}",
+                )
+                for index in overview.indices
+            ),
+        )
+        self._set_list_items(
+            self.watchlist,
+            tuple(
+                (
+                    item.security_id,
+                    f"[{item.group}] {item.symbol} {item.name}  "
+                    f"{item.final_signal}  {item.latest_price}  "
+                    f"{item.change_pct}  {item.data_health_text}",
+                )
+                for item in state.watchlist.items
+            ),
+        )
+
+    def _set_list_items(
+        self,
+        widget: QtWidgets.QListWidget,
+        entries: tuple[tuple[str, str], ...],
+    ) -> None:
+        widget.blockSignals(True)
+        widget.clear()
+        for security_id, text in entries:
+            item = QtWidgets.QListWidgetItem(text)
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, security_id)
+            widget.addItem(item)
+        widget.blockSignals(False)
+
     def _build_central_widget(self) -> QtWidgets.QWidget:
         root = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(root)
@@ -323,10 +400,16 @@ class MainWindow(QtWidgets.QMainWindow):
     def _left_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(panel)
-        for title in ("自选列表", "指数", "最近访问"):
+        for title, widget in (
+            ("自选列表", self.watchlist),
+            ("指数", self.market_indices),
+            ("最近访问", self.recent_securities),
+        ):
             group = QtWidgets.QGroupBox(title)
             group_layout = QtWidgets.QVBoxLayout(group)
-            group_layout.addWidget(QtWidgets.QListWidget())
+            if title == "指数":
+                group_layout.addWidget(self.market_overview_summary)
+            group_layout.addWidget(widget)
             layout.addWidget(group)
         return panel
 

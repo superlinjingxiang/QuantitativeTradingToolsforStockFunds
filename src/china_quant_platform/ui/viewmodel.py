@@ -18,12 +18,15 @@ from china_quant_platform.domain import (
     BarInterval,
     Currency,
     DataHealth,
+    DataHealthStatus,
     DomainError,
     Exchange,
+    FinalSignal,
     Quote,
     SecurityRef,
     SecurityStatus,
 )
+from china_quant_platform.market import MarketOverview
 from china_quant_platform.ui.state import (
     AnalysisPanelState,
     AppUiState,
@@ -34,6 +37,9 @@ from china_quant_platform.ui.state import (
     UiErrorState,
     UiRunState,
     UiTaskStatus,
+    WatchlistGroupState,
+    WatchlistItemState,
+    WatchlistPanelState,
     run_state_for_error,
     run_state_for_health,
 )
@@ -302,6 +308,103 @@ class ApplicationViewModel(QtCore.QObject):
             )
         )
 
+    def apply_market_overview(
+        self,
+        overview: MarketOverview,
+        *,
+        generation: int | None = None,
+    ) -> None:
+        if self._is_stale_generation(generation):
+            return
+        self._set_state(
+            self._state.model_copy(
+                update={"market_overview": self._state.market_overview.from_overview(overview)}
+            )
+        )
+
+    def add_watchlist_item(
+        self,
+        security_id: str,
+        *,
+        group: str = "默认",
+        pinned: bool = False,
+    ) -> None:
+        selected_at = self._clock()
+        security = self._security_master.select_security(
+            security_id,
+            selected_at=selected_at,
+            as_of=selected_at.date(),
+        )
+        current_items = {item.security_id: item for item in self._state.watchlist.items}
+        existing = current_items.get(security.security_id)
+        if existing is not None:
+            current_items[security.security_id] = existing.model_copy(
+                update={"group": group, "pinned": pinned or existing.pinned}
+            )
+        else:
+            current_items[security.security_id] = WatchlistItemState(
+                security_id=security.security_id,
+                symbol=security.symbol,
+                name=security.name,
+                group=group,
+                sort_order=_next_sort_order(self._state.watchlist.items, group),
+                pinned=pinned,
+            )
+        self._set_watchlist_items(tuple(current_items.values()))
+
+    def remove_watchlist_item(self, security_id: str) -> None:
+        items = tuple(
+            item for item in self._state.watchlist.items if item.security_id != security_id
+        )
+        self._set_watchlist_items(items)
+
+    def move_watchlist_item(
+        self,
+        security_id: str,
+        *,
+        group: str,
+        sort_order: int | None = None,
+    ) -> None:
+        items = tuple(
+            item.model_copy(
+                update={
+                    "group": group,
+                    "sort_order": item.sort_order if sort_order is None else sort_order,
+                }
+            )
+            if item.security_id == security_id
+            else item
+            for item in self._state.watchlist.items
+        )
+        self._set_watchlist_items(items)
+
+    def apply_watchlist_signal(
+        self,
+        security_id: str,
+        *,
+        final_signal: FinalSignal,
+        latest_price: float | None = None,
+        change_pct: float | None = None,
+        data_health: DataHealth | None = None,
+    ) -> None:
+        items = tuple(
+            _watchlist_item_with_signal(
+                item,
+                final_signal=final_signal,
+                latest_price=latest_price,
+                change_pct=change_pct,
+                data_health=data_health,
+            )
+            if item.security_id == security_id
+            else item
+            for item in self._state.watchlist.items
+        )
+        self._set_watchlist_items(items)
+
+    def select_watchlist_item(self, security_id: str) -> None:
+        if any(item.security_id == security_id for item in self._state.watchlist.items):
+            self.select_security(security_id)
+
     def apply_analysis_report(
         self,
         report: AnalysisReport,
@@ -460,6 +563,11 @@ class ApplicationViewModel(QtCore.QObject):
     def _is_stale_generation(self, generation: int | None) -> bool:
         return generation is not None and generation != self._state.selection_generation
 
+    def _set_watchlist_items(self, items: tuple[WatchlistItemState, ...]) -> None:
+        self._set_state(
+            self._state.model_copy(update={"watchlist": _watchlist_panel_from_items(items)})
+        )
+
 
 def build_demo_security_master() -> SecurityMasterService:
     securities = (
@@ -499,6 +607,30 @@ def build_demo_security_master() -> SecurityMasterService:
             status=SecurityStatus.ACTIVE,
             aliases=("Huaxia Growth",),
         ),
+        SecurityRef(
+            security_id="INDEX:000001",
+            symbol="000001",
+            name="上证指数",
+            asset_type=AssetType.INDEX,
+            exchange=Exchange.INDEX_PROVIDER,
+            currency=Currency.CNY,
+            listed_date=date(1990, 12, 19),
+            status_date=date(2026, 6, 28),
+            status=SecurityStatus.ACTIVE,
+            aliases=("SSE Composite", "上证综指"),
+        ),
+        SecurityRef(
+            security_id="INDEX:399001",
+            symbol="399001",
+            name="深证成指",
+            asset_type=AssetType.INDEX,
+            exchange=Exchange.INDEX_PROVIDER,
+            currency=Currency.CNY,
+            listed_date=date(1991, 4, 3),
+            status_date=date(2026, 6, 28),
+            status=SecurityStatus.ACTIVE,
+            aliases=("SZSE Component",),
+        ),
     )
     return SecurityMasterService.from_securities(securities)
 
@@ -511,6 +643,54 @@ def _run_state_for_analysis_report(report: AnalysisReport) -> UiRunState:
     if report.abstain_reason is AbstainReason.MODEL_UNCERTAINTY:
         return UiRunState.MODEL_OUT_OF_DISTRIBUTION
     return UiRunState.REALTIME_RUNNING
+
+
+def _watchlist_panel_from_items(items: tuple[WatchlistItemState, ...]) -> WatchlistPanelState:
+    groups: dict[str, list[WatchlistItemState]] = {}
+    for item in items:
+        groups.setdefault(item.group, []).append(item)
+    group_states = tuple(
+        WatchlistGroupState(
+            name=group_name,
+            items=tuple(
+                sorted(
+                    group_items,
+                    key=lambda item: (not item.pinned, item.sort_order, item.symbol),
+                )
+            ),
+        )
+        for group_name, group_items in sorted(groups.items())
+    )
+    return WatchlistPanelState(groups=group_states)
+
+
+def _next_sort_order(items: tuple[WatchlistItemState, ...], group: str) -> int:
+    group_orders = tuple(item.sort_order for item in items if item.group == group)
+    if not group_orders:
+        return 0
+    return max(group_orders) + 1
+
+
+def _watchlist_item_with_signal(
+    item: WatchlistItemState,
+    *,
+    final_signal: FinalSignal,
+    latest_price: float | None,
+    change_pct: float | None,
+    data_health: DataHealth | None,
+) -> WatchlistItemState:
+    updates: dict[str, object] = {"final_signal": final_signal.value}
+    if latest_price is not None:
+        updates["latest_price"] = f"{latest_price:.2f}"
+    if change_pct is not None:
+        updates["change_pct"] = f"{change_pct * 100:.1f}%"
+    if data_health is not None:
+        issue_text = "；".join(data_health.issues)
+        updates["data_health_text"] = (
+            f"{data_health.status.value}: {issue_text}" if issue_text else data_health.status.value
+        )
+        updates["is_stale"] = data_health.status is DataHealthStatus.STALE
+    return item.model_copy(update=updates)
 
 
 __all__ = ["ApplicationViewModel", "CancellableQtTask", "build_demo_security_master"]
