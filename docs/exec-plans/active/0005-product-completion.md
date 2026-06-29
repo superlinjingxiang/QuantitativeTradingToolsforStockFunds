@@ -27,7 +27,7 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 - [x] 市场概览、指数与自选列表；TASK-021。
 - [x] 模拟交易经纪与账户；TASK-022。
 - [x] 场外基金分析模块；TASK-023。
-- [ ] 知识中心与上下文金融帮助；TASK-024。
+- [x] 知识中心与上下文金融帮助；TASK-024。
 - [ ] 打包、恢复、安全与发布审计；TASK-025。
 
 ## 意外情况与发现
@@ -38,6 +38,8 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 
 2026-06-29：TASK-023完成。场外基金确认和分析只接受正式 `FundNav`，估算净值会被拒绝进入确认或风险分析路径。
 
+2026-06-30：TASK-024完成。知识中心使用结构化 `HelpTopic`，默认主题覆盖K线、T+、ETF、净值、回撤、期望值和概率校准；内容校验拒绝收益承诺词，并要求显式区分国际理论与中国市场规则。
+
 ## 决策日志
 
 2026-06-29：市场概览和自选列表归属ViewModel状态快照，左侧Widget只渲染并触发显式选择事务。
@@ -45,6 +47,8 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 2026-06-29：模拟经纪不预留真实下单方法，只暴露纸面 `submit_order()`；恢复机制使用可序列化 `SimulationAccountState` 快照。
 
 2026-06-29：场外基金使用独立 `funds` 模块处理确认、费用和风险比较，不复用交易所成交价格语义。
+
+2026-06-30：知识中心内容不写入Widget，统一由 `knowledge` 模块提供结构化条目和相关度搜索，GUI只渲染ViewModel状态。
 
 ## 架构与接口
 
@@ -92,6 +96,9 @@ FR-010、FR-011、FR-015、FR-016、FR-017、FR-019、FR-020、AC-01至AC-12、N
 - `tests/unit/test_simulation_broker.py`：成交入账、陈旧数据阻断、T+1拒绝、部分成交偏差、恢复快照和真实下单路径缺失测试。
 - `src/china_quant_platform/funds/analysis.py`：场外基金正式净值申赎确认、费用、到账日期、周/月风险和基准比较。
 - `tests/unit/test_fund_analysis.py`：正式净值确认、截止时间顺延、赎回现金、估算净值隔离和风险比较测试。
+- `src/china_quant_platform/knowledge/center.py`：结构化帮助主题、安全校验、相关度搜索和上下文帮助。
+- `src/china_quant_platform/ui/state.py`、`src/china_quant_platform/ui/viewmodel.py`、`src/china_quant_platform/ui/main_window.py`：知识中心状态、搜索、选题和GUI页签渲染。
+- `tests/unit/test_knowledge_center.py`、`tests/gui/test_knowledge_center_gui.py`：主题覆盖、收益承诺词拒绝、国际理论/中国市场规则区分、上下文帮助和GUI筛选渲染测试。
 
 ## 结果与复盘
 

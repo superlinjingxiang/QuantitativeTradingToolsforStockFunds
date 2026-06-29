@@ -19,6 +19,7 @@ from china_quant_platform.domain import (
     Quote,
 )
 from china_quant_platform.domain.base import DomainModel
+from china_quant_platform.knowledge import HelpTopic
 from china_quant_platform.market import IndexSnapshot, MarketOverview
 
 
@@ -314,6 +315,41 @@ class WatchlistPanelState(DomainModel):
         return tuple(item for group in self.groups for item in group.items)
 
 
+class KnowledgeTopicState(DomainModel):
+    topic_id: str
+    title: str
+    summary: str
+
+    @classmethod
+    def from_topic(cls, topic: HelpTopic) -> KnowledgeTopicState:
+        return cls(topic_id=topic.topic_id, title=topic.title, summary=topic.summary)
+
+
+class KnowledgeCenterState(DomainModel):
+    query: str = ""
+    topics: tuple[KnowledgeTopicState, ...] = ()
+    selected_topic_id: str | None = None
+    selected_title: str = "--"
+    selected_body: str = "--"
+
+    @classmethod
+    def from_topics(
+        cls,
+        topics: tuple[HelpTopic, ...],
+        *,
+        query: str = "",
+        selected: HelpTopic | None = None,
+    ) -> KnowledgeCenterState:
+        selected_topic = selected or (topics[0] if topics else None)
+        return cls(
+            query=query,
+            topics=tuple(KnowledgeTopicState.from_topic(topic) for topic in topics),
+            selected_topic_id=None if selected_topic is None else selected_topic.topic_id,
+            selected_title="--" if selected_topic is None else selected_topic.title,
+            selected_body="--" if selected_topic is None else _knowledge_body(selected_topic),
+        )
+
+
 class AppUiState(DomainModel):
     selection_generation: int = 0
     selected_security_id: str | None = None
@@ -326,6 +362,7 @@ class AppUiState(DomainModel):
     data_health: DataHealth | None = None
     market_overview: MarketOverviewPanelState = Field(default_factory=MarketOverviewPanelState)
     watchlist: WatchlistPanelState = Field(default_factory=WatchlistPanelState)
+    knowledge: KnowledgeCenterState = Field(default_factory=KnowledgeCenterState)
     chart: ChartState = Field(default_factory=ChartState)
     analysis: AnalysisPanelState = Field(default_factory=AnalysisPanelState)
     latest_error: UiErrorState | None = None
@@ -451,6 +488,21 @@ def _data_health_text(data_health: DataHealth) -> str:
     return data_health.status.value
 
 
+def _knowledge_body(topic: HelpTopic) -> str:
+    warnings = "；".join(topic.warnings)
+    related = "、".join(topic.related_terms)
+    return "\n".join(
+        (
+            topic.summary,
+            topic.theory_context,
+            topic.china_rule_context,
+            topic.body,
+            f"相关术语：{related}" if related else "相关术语：--",
+            f"边界：{warnings}",
+        )
+    )
+
+
 def _fallback_applicable_conditions(report: AnalysisReport) -> tuple[str, ...]:
     if report.final_signal is FinalSignal.ABSTAIN:
         return ("No new trade while the report is abstaining.",)
@@ -465,6 +517,8 @@ __all__ = [
     "ChartRangePreset",
     "ChartState",
     "ForecastPanelState",
+    "KnowledgeCenterState",
+    "KnowledgeTopicState",
     "MarketIndexPanelState",
     "MarketOverviewPanelState",
     "OperationPanelState",

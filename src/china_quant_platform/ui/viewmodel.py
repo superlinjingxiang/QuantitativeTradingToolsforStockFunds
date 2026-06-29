@@ -26,6 +26,7 @@ from china_quant_platform.domain import (
     SecurityRef,
     SecurityStatus,
 )
+from china_quant_platform.knowledge import KnowledgeCenter
 from china_quant_platform.market import MarketOverview
 from china_quant_platform.ui.state import (
     AnalysisPanelState,
@@ -33,6 +34,7 @@ from china_quant_platform.ui.state import (
     ChartOverlay,
     ChartPointState,
     ChartRangePreset,
+    KnowledgeCenterState,
     SearchCandidateState,
     UiErrorState,
     UiRunState,
@@ -107,13 +109,17 @@ class ApplicationViewModel(QtCore.QObject):
         parent: QtCore.QObject | None = None,
         *,
         security_master: SecurityMasterService | None = None,
+        knowledge_center: KnowledgeCenter | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         super().__init__(parent)
-        self._state = AppUiState()
         self._active_task: CancellableQtTask | None = None
         self._security_master = security_master or build_demo_security_master()
+        self._knowledge_center = knowledge_center or KnowledgeCenter()
         self._clock = clock or (lambda: datetime.now(tz=UTC))
+        self._state = AppUiState(
+            knowledge=KnowledgeCenterState.from_topics(self._knowledge_center.list_topics())
+        )
 
     @property
     def state(self) -> AppUiState:
@@ -169,6 +175,41 @@ class ApplicationViewModel(QtCore.QObject):
         if index is None or index >= len(self._state.search_results):
             return
         self.select_security(self._state.search_results[index].security_id)
+
+    def search_knowledge(self, query: str) -> None:
+        stripped_query = query.strip()
+        topics = self._knowledge_center.search(stripped_query)
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "knowledge": KnowledgeCenterState.from_topics(
+                        topics,
+                        query=stripped_query,
+                    )
+                }
+            )
+        )
+
+    def select_knowledge_topic(self, topic_id: str) -> None:
+        topic = self._knowledge_center.get_topic(topic_id)
+        topics = self._knowledge_center.search(self._state.knowledge.query)
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "knowledge": KnowledgeCenterState.from_topics(
+                        topics,
+                        query=self._state.knowledge.query,
+                        selected=topic,
+                    )
+                }
+            )
+        )
+
+    def contextual_help(self, term: str) -> str | None:
+        topic = self._knowledge_center.contextual_help(term)
+        if topic is None:
+            return None
+        return KnowledgeCenterState.from_topics((topic,), selected=topic).selected_body
 
     def select_security(self, security_id: str) -> None:
         if self._active_task is not None:

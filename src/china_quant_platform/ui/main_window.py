@@ -68,10 +68,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_label = QtWidgets.QLabel()
         self.status_label.setObjectName("stateLabel")
 
+        self.knowledge_search = QtWidgets.QLineEdit()
+        self.knowledge_search.setObjectName("knowledgeSearch")
+        self.knowledge_search.setPlaceholderText("术语")
+        self.knowledge_search.textChanged.connect(self.view_model.search_knowledge)
+
+        self.knowledge_topics = QtWidgets.QListWidget()
+        self.knowledge_topics.setObjectName("knowledgeTopics")
+        self.knowledge_topics.itemActivated.connect(self._activate_knowledge_topic)
+        self.knowledge_topics.itemClicked.connect(self._activate_knowledge_topic)
+
+        self.knowledge_detail = QtWidgets.QTextBrowser()
+        self.knowledge_detail.setObjectName("knowledgeDetail")
+        self.knowledge_detail.setOpenExternalLinks(False)
+
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.setObjectName("workspaceTabs")
         for title in ("市场", "策略", "回测", "模拟账户", "风险", "知识中心"):
-            self.tabs.addTab(self._placeholder_page(title), title)
+            page = self._knowledge_page() if title == "知识中心" else self._placeholder_page(title)
+            self.tabs.addTab(page, title)
 
         self.watchlist = QtWidgets.QListWidget()
         self.watchlist.setObjectName("watchlistItems")
@@ -191,6 +206,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"范围：{state.chart.range_preset.value}｜点数：{state.chart.point_count}"
         )
         self._sync_market_and_watchlist(state)
+        self._sync_knowledge(state)
         self.strategy_panel_label.setText(_strategy_panel_text(state))
         self.forecast_panel_label.setText(_forecast_panel_text(state))
         self.operation_panel_label.setText(_operation_panel_text(state))
@@ -231,6 +247,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.view_model.select_security(security_id)
             except KeyError:
                 return
+
+    @QtCore.Slot(QtWidgets.QListWidgetItem)
+    def _activate_knowledge_topic(self, item: QtWidgets.QListWidgetItem) -> None:
+        topic_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if isinstance(topic_id, str):
+            self.view_model.select_knowledge_topic(topic_id)
 
     @QtCore.Slot(int)
     def _chart_interval_changed(self, _index: int) -> None:
@@ -347,6 +369,25 @@ class MainWindow(QtWidgets.QMainWindow):
             widget.addItem(item)
         widget.blockSignals(False)
 
+    def _sync_knowledge(self, state: AppUiState) -> None:
+        knowledge = state.knowledge
+        if self.knowledge_search.text() != knowledge.query:
+            self.knowledge_search.blockSignals(True)
+            self.knowledge_search.setText(knowledge.query)
+            self.knowledge_search.blockSignals(False)
+        self.knowledge_topics.blockSignals(True)
+        self.knowledge_topics.clear()
+        for topic in knowledge.topics:
+            item = QtWidgets.QListWidgetItem(f"{topic.title}  {topic.summary}")
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, topic.topic_id)
+            self.knowledge_topics.addItem(item)
+            if topic.topic_id == knowledge.selected_topic_id:
+                self.knowledge_topics.setCurrentItem(item)
+        self.knowledge_topics.blockSignals(False)
+        self.knowledge_detail.setPlainText(
+            f"{knowledge.selected_title}\n\n{knowledge.selected_body}"
+        )
+
     def _build_central_widget(self) -> QtWidgets.QWidget:
         root = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(root)
@@ -451,6 +492,17 @@ class MainWindow(QtWidgets.QMainWindow):
         label = QtWidgets.QLabel(title)
         label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
+        return page
+
+    def _knowledge_page(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(page)
+        left = QtWidgets.QWidget()
+        left_layout = QtWidgets.QVBoxLayout(left)
+        left_layout.addWidget(self.knowledge_search)
+        left_layout.addWidget(self.knowledge_topics)
+        layout.addWidget(left, stretch=1)
+        layout.addWidget(self.knowledge_detail, stretch=2)
         return page
 
 
