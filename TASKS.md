@@ -63,11 +63,12 @@
 - 验收：Qt主线程保持响应；能够演示取消和类型化错误状态。
 - 完成证据：2026-06-29 完成 `MainWindow`、`ApplicationViewModel`、`CancellableQtTask`、`AppUiState`、GUI CLI入口和offscreen GUI测试；状态健康映射、健康横幅、非阻塞取消、类型化错误可见性和PySide6导入测试通过。
 
-### [ ] TASK-009——搜索与原子化证券切换
+### [x] TASK-009——搜索与原子化证券切换
 - 依赖：TASK-004、TASK-005、TASK-008
 - 需求：FR-001、FR-002、AC-01、AC-02
 - 交付：搜索控件、键盘操作、`selection_generation`、旧订阅取消。
 - 验收：T-07、T-10通过。
+- 完成证据：2026-06-29 完成 `ApplicationViewModel` 搜索/选择事务、`SearchCandidateState`、300ms防抖搜索结果列表、上下/回车键盘确认、选择时取消旧任务和 generation-aware 旧结果丢弃；本地证券搜索、键盘候选、旧任务取消、旧代结果不覆盖新证券和T-10搜索回归测试通过。
 
 ### [ ] TASK-010——实时/历史图表工作区
 - 依赖：TASK-005、TASK-008、TASK-009

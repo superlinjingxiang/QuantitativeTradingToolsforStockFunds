@@ -6,7 +6,7 @@ import sys
 from collections.abc import Sequence
 from typing import cast
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from china_quant_platform.ui.state import AppUiState, UiRunState
 from china_quant_platform.ui.viewmodel import ApplicationViewModel
@@ -26,6 +26,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.search_input = QtWidgets.QLineEdit()
         self.search_input.setObjectName("securitySearch")
         self.search_input.setPlaceholderText("代码 / 名称")
+        self.search_input.installEventFilter(self)
+
+        self.search_results = QtWidgets.QListWidget()
+        self.search_results.setObjectName("securitySearchResults")
+        self.search_results.setMaximumHeight(140)
+        self.search_results.itemActivated.connect(self._activate_search_item)
+        self.search_results.itemClicked.connect(self._activate_search_item)
+
+        self.search_timer = QtCore.QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(300)
+        self.search_timer.timeout.connect(self._run_search)
+        self.search_input.textChanged.connect(self._schedule_search)
 
         self.health_banner = QtWidgets.QLabel()
         self.health_banner.setObjectName("healthBanner")
@@ -65,6 +78,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(object)
     def render_state(self, state: AppUiState) -> None:
+        if self.search_input.text() != state.search_query:
+            self.search_input.blockSignals(True)
+            self.search_input.setText(state.search_query)
+            self.search_input.blockSignals(False)
+
+        self.search_results.blockSignals(True)
+        self.search_results.clear()
+        for candidate in state.search_results:
+            candidate_text = (
+                f"{candidate.symbol}  {candidate.name}  "
+                f"{candidate.asset_type}  {candidate.exchange}"
+            )
+            item = QtWidgets.QListWidgetItem(candidate_text)
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, candidate.security_id)
+            self.search_results.addItem(item)
+        if state.highlighted_search_index is not None:
+            self.search_results.setCurrentRow(state.highlighted_search_index)
+        self.search_results.setVisible(bool(state.search_results))
+        self.search_results.blockSignals(False)
+
         self.health_banner.setText(state.banner_text)
         self.health_banner.setProperty("blocked", state.is_signal_blocked)
         self.health_banner.setProperty("state", state.run_state.value)
@@ -77,14 +110,49 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.cancel_button.setEnabled(state.run_state is UiRunState.BACKTEST_RUNNING)
 
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if watched is self.search_input and event.type() == QtCore.QEvent.Type.KeyPress:
+            key = cast(QtGui.QKeyEvent, event).key()
+            if key == QtCore.Qt.Key.Key_Down:
+                self.view_model.move_search_highlight(1)
+                return True
+            if key == QtCore.Qt.Key.Key_Up:
+                self.view_model.move_search_highlight(-1)
+                return True
+            if key in {QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter}:
+                self.view_model.confirm_highlighted_search()
+                return True
+        return super().eventFilter(watched, event)
+
+    @QtCore.Slot()
+    def _schedule_search(self) -> None:
+        self.search_timer.start()
+
+    @QtCore.Slot()
+    def _run_search(self) -> None:
+        self.view_model.search_securities(self.search_input.text())
+
+    @QtCore.Slot(QtWidgets.QListWidgetItem)
+    def _activate_search_item(self, item: QtWidgets.QListWidgetItem) -> None:
+        security_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if isinstance(security_id, str):
+            self.view_model.select_security(security_id)
+
     def _build_central_widget(self) -> QtWidgets.QWidget:
         root = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(root)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
 
+        search_box = QtWidgets.QWidget()
+        search_layout = QtWidgets.QVBoxLayout(search_box)
+        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setSpacing(4)
+        search_layout.addWidget(self.search_input)
+        search_layout.addWidget(self.search_results)
+
         top_bar = QtWidgets.QHBoxLayout()
-        top_bar.addWidget(self.search_input, stretch=2)
+        top_bar.addWidget(search_box, stretch=2)
         top_bar.addWidget(self.health_banner, stretch=3)
         top_bar.addWidget(self.market_time_label, stretch=1)
         top_bar.addWidget(self.cancel_button)

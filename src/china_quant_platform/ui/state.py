@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from china_quant_platform.data import SecuritySearchResult
 from china_quant_platform.domain import DataHealth, DataHealthStatus, DomainErrorKind
 from china_quant_platform.domain.base import DomainModel
 
@@ -44,9 +45,37 @@ class UiErrorState(DomainModel):
     blocks_signal: bool
 
 
+class SearchCandidateState(DomainModel):
+    security_id: str
+    symbol: str
+    name: str
+    asset_type: str
+    exchange: str
+    status: str
+    score: float
+    matched_fields: tuple[str, ...]
+
+    @classmethod
+    def from_search_result(cls, result: SecuritySearchResult) -> SearchCandidateState:
+        security = result.security
+        return cls(
+            security_id=security.security_id,
+            symbol=security.symbol,
+            name=security.name,
+            asset_type=security.asset_type.value,
+            exchange=security.exchange.value,
+            status=security.status.value,
+            score=result.score,
+            matched_fields=result.matched_fields,
+        )
+
+
 class AppUiState(DomainModel):
     selection_generation: int = 0
     selected_security_id: str | None = None
+    search_query: str = ""
+    search_results: tuple[SearchCandidateState, ...] = ()
+    highlighted_search_index: int | None = None
     run_state: UiRunState = UiRunState.IDLE
     task_status: UiTaskStatus = UiTaskStatus.IDLE
     active_task_name: str | None = None
@@ -91,6 +120,7 @@ def run_state_for_error(kind: DomainErrorKind) -> UiRunState:
 
 __all__ = [
     "AppUiState",
+    "SearchCandidateState",
     "UiErrorState",
     "UiRunState",
     "UiTaskStatus",
