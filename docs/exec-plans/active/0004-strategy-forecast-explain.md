@@ -26,7 +26,7 @@ FR-006至FR-009、FR-012、FR-014、FR-018、FR-020、AC-04、AC-05、AC-10、AC
 
 - [x] ETF中期轮动基准策略；TASK-017。
 - [x] A股多因子趋势基准策略；TASK-018。
-- [ ] 经过校准的预测引擎与不交易机制；TASK-019。
+- [x] 经过校准的预测引擎与不交易机制；TASK-019。
 - [ ] 分析报告、当前策略与预期走势面板；TASK-020。
 
 ## 意外情况与发现
@@ -35,11 +35,15 @@ FR-006至FR-009、FR-012、FR-014、FR-018、FR-020、AC-04、AC-05、AC-10、AC
 
 2026-06-29：TASK-018完成。A股多因子趋势基准使用时点股票池和时点因子快照，独立退出逻辑覆盖止损、持仓回撤和趋势破坏。
 
+2026-06-29：TASK-019完成。预测引擎输出方向概率、收益分位数和期望回撤；样本不足、分布外、漂移和低置信度会返回ABSTAIN，不把诊断概率当作可交易建议。
+
 ## 决策日志
 
 2026-06-29：ETF池使用时点成员与特征输入，评分包含动量、绝对动量、趋势、波动率和平均相关性；不在策略内硬编码生产ETF名单。
 
 2026-06-29：A股策略拒绝披露时间晚于 `as_of` 的因子快照，避免财务/因子可见性泄漏。
+
+2026-06-29：预测层使用校准概率和区间表达，不输出单点收益承诺；不交易原因作为结构化枚举进入结果，供后续GUI和报告直接展示。
 
 ## 架构与接口
 
@@ -83,6 +87,8 @@ FR-006至FR-009、FR-012、FR-014、FR-018、FR-020、AC-04、AC-05、AC-10、AC
 - `tests/unit/test_etf_rotation_strategy.py`：ETF池过滤、评分排序、研究状态、ABSTAIN路径和成本换手敏感性测试。
 - `src/china_quant_platform/strategies/a_share_trend.py`：A股时点池、因子快照、横截面排名、多因子趋势评分、退出决策和分组拆解。
 - `tests/unit/test_a_share_trend_strategy.py`：时点披露拒绝、市场/趋势过滤、独立退出、RawSignal/Explanation和分组拆解测试。
+- `src/china_quant_platform/forecasting/engine.py`：校准概率预测、收益分位数、期望回撤、Brier/LogLoss/ECE和结构化ABSTAIN原因。
+- `tests/unit/test_forecasting_engine.py`：READY概率/分位数、样本不足/分布外/漂移/低置信度不交易、校准指标和输入长度校验测试。
 
 ## 结果与复盘
 
