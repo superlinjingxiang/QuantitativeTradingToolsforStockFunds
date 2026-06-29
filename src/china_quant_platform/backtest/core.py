@@ -13,6 +13,14 @@ from typing import Self
 
 from pydantic import AwareDatetime, Field, model_validator
 
+from china_quant_platform.backtest.execution import (
+    ExecutionCostBreakdown,
+    FixedBpsSlippageModel,
+    FixedLatencyModel,
+    FixedSpreadModel,
+    ParticipationRateLiquidityModel,
+    RuleBasedCostModel,
+)
 from china_quant_platform.domain import BacktestConfig, Bar, SecurityRef
 from china_quant_platform.domain.base import DomainModel
 from china_quant_platform.domain.errors import InsufficientHistory
@@ -131,6 +139,8 @@ class ExecutionReport(DomainModel):
     status: ExecutionStatus
     filled_quantity: int = Field(ge=0)
     fill_price: float | None = Field(default=None, gt=0)
+    notional: float = Field(default=0, ge=0)
+    costs: ExecutionCostBreakdown = Field(default_factory=ExecutionCostBreakdown)
     reasons: tuple[NonEmptyString, ...] = ()
 
     @model_validator(mode="after")
@@ -159,6 +169,10 @@ class BacktestEvent(DomainModel):
     quantity: int | None = Field(default=None, ge=0)
     filled_quantity: int | None = Field(default=None, ge=0)
     price: float | None = Field(default=None, ge=0)
+    notional: float | None = Field(default=None, ge=0)
+    total_fees: float | None = Field(default=None, ge=0)
+    slippage_cost: float | None = Field(default=None, ge=0)
+    spread_cost: float | None = Field(default=None, ge=0)
     message: str | None = None
     reasons: tuple[NonEmptyString, ...] = ()
 
@@ -220,11 +234,27 @@ class DeterministicExecutionSimulator:
         *,
         max_fill_quantity_per_order: int | None = None,
         has_opposite_liquidity: bool = True,
+        cost_model: RuleBasedCostModel | None = None,
+        slippage_model: FixedBpsSlippageModel | None = None,
+        spread_model: FixedSpreadModel | None = None,
+        liquidity_model: ParticipationRateLiquidityModel | None = None,
+        latency_model: FixedLatencyModel | None = None,
     ) -> None:
         if max_fill_quantity_per_order is not None and max_fill_quantity_per_order < 1:
             raise ValueError("max_fill_quantity_per_order must be positive when provided")
         self._max_fill_quantity_per_order = max_fill_quantity_per_order
         self._has_opposite_liquidity = has_opposite_liquidity
+        self._cost_model = cost_model or RuleBasedCostModel()
+        self._slippage_model = slippage_model or FixedBpsSlippageModel()
+        self._spread_model = spread_model or FixedSpreadModel()
+        self._liquidity_model = liquidity_model
+        self._latency_model = latency_model or FixedLatencyModel()
+
+    def apply_latency(self, order: OrderIntent) -> OrderIntent:
+        delayed = self._latency_model.apply(order.created_at)
+        if delayed == order.created_at:
+            return order
+        return order.model_copy(update={"created_at": delayed, "trade_date": delayed.date()})
 
     def simulate(
         self,
@@ -235,6 +265,7 @@ class DeterministicExecutionSimulator:
         previous_close: float,
         total_position: int,
         bought_today: int,
+        bar: Bar | None = None,
     ) -> ExecutionReport:
         rule = rule_engine.resolve(security, order.trade_date)
         validation = rule_engine.validate_order(
@@ -259,17 +290,50 @@ class DeterministicExecutionSimulator:
         fill_quantity = order.quantity
         if self._max_fill_quantity_per_order is not None:
             fill_quantity = min(fill_quantity, self._max_fill_quantity_per_order)
+        if self._liquidity_model is not None:
+            if bar is None:
+                fill_quantity = 0
+            else:
+                fill_quantity = min(
+                    fill_quantity,
+                    self._liquidity_model.max_fill_quantity(
+                        bar_volume=bar.volume,
+                        requested_quantity=order.quantity,
+                    ),
+                )
+        if fill_quantity <= 0:
+            return ExecutionReport(
+                order_id=order.order_id,
+                status=ExecutionStatus.REJECTED,
+                filled_quantity=0,
+                reasons=("Liquidity model produced zero fillable quantity.",),
+            )
 
         status = (
             ExecutionStatus.PARTIALLY_FILLED
             if fill_quantity < order.quantity
             else ExecutionStatus.FILLED
         )
+        spread_price = self._spread_model.adjust_price(side=order.side, price=order.price)
+        fill_price = self._slippage_model.adjust_price(side=order.side, price=spread_price)
+        spread_cost = abs(spread_price - order.price) * fill_quantity
+        slippage_cost = abs(fill_price - spread_price) * fill_quantity
+        notional = fill_price * fill_quantity
+        costs = self._cost_model.calculate(
+            rule_engine=rule_engine,
+            rule=rule,
+            side=order.side,
+            notional=notional,
+            slippage_cost=slippage_cost,
+            spread_cost=spread_cost,
+        )
         return ExecutionReport(
             order_id=order.order_id,
             status=status,
             filled_quantity=fill_quantity,
-            fill_price=order.price,
+            fill_price=fill_price,
+            notional=notional,
+            costs=costs,
         )
 
 
@@ -417,6 +481,7 @@ class BacktestEngine:
                     )
                 )
                 continue
+            order = self._execution_simulator.apply_latency(order)
             if order.created_at <= evaluation.signal.generated_at:
                 raise ValueError("order.created_at must be later than signal.generated_at")
 
@@ -445,6 +510,7 @@ class BacktestEngine:
                 previous_close=bar.close_price,
                 total_position=total_position,
                 bought_today=bought_today,
+                bar=bar,
             )
             if report.status in {ExecutionStatus.FILLED, ExecutionStatus.PARTIALLY_FILLED}:
                 if order.side is OrderSide.BUY:
@@ -466,6 +532,10 @@ class BacktestEngine:
                     quantity=order.quantity,
                     filled_quantity=report.filled_quantity,
                     price=report.fill_price or order.price,
+                    notional=report.notional,
+                    total_fees=report.costs.total,
+                    slippage_cost=report.costs.slippage_cost,
+                    spread_cost=report.costs.spread_cost,
                     reasons=report.reasons,
                     message=report.status.value,
                 )

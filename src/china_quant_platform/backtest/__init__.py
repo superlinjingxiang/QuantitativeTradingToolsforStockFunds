@@ -14,6 +14,17 @@ from china_quant_platform.backtest.core import (
     OrderIntent,
     TradingSession,
 )
+from china_quant_platform.backtest.execution import (
+    CorporateActionImpact,
+    CorporateActionProcessor,
+    ExecutionCostBreakdown,
+    FixedBpsSlippageModel,
+    FixedLatencyModel,
+    FixedSpreadModel,
+    ParticipationRateLiquidityModel,
+    PositionState,
+    RuleBasedCostModel,
+)
 
 __all__ = [
     "BacktestCancellationToken",
@@ -23,9 +34,18 @@ __all__ = [
     "BacktestEventLoop",
     "BacktestEventType",
     "BacktestRunResult",
+    "CorporateActionImpact",
+    "CorporateActionProcessor",
     "DeterministicExecutionSimulator",
+    "ExecutionCostBreakdown",
     "ExecutionReport",
     "ExecutionStatus",
+    "FixedBpsSlippageModel",
+    "FixedLatencyModel",
+    "FixedSpreadModel",
     "OrderIntent",
+    "ParticipationRateLiquidityModel",
+    "PositionState",
+    "RuleBasedCostModel",
     "TradingSession",
 ]

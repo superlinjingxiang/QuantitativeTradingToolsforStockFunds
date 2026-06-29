@@ -167,3 +167,13 @@
 - 影响：TASK-014可在同一执行模拟器位置接入费用、滑点、流动性和公司行为；TASK-016可复用事件checksum和审计记录做回归。
 - 受影响的需求：TASK-013、FR-013、AC-07、AC-09、NFR-05、NFR-08。
 - 所需测试/迁移：事件优先级、策略时序、订单时间防泄漏、规则拒绝、部分成交、取消和重复运行checksum一致测试。
+
+### ADR-017——执行模型以可组合小模型接入回测模拟器
+- 日期：2026-06-29
+- 状态：已接受
+- 背景：TASK-014要求佣金、税费、滑点、价差、流动性、涨跌停、延迟和公司行为；其中涨跌停/停牌/手数仍应由市场规则引擎统一负责。
+- 决策：新增 `backtest.execution`，提供 `RuleBasedCostModel`、`FixedBpsSlippageModel`、`FixedSpreadModel`、`ParticipationRateLiquidityModel`、`FixedLatencyModel` 和 `CorporateActionProcessor`；`DeterministicExecutionSimulator` 组合这些模型并继续调用 `MarketRuleEngine` 做规则校验。
+- 已考虑的替代方案：把所有执行逻辑写进 `BacktestEngine`、或现在引入真实券商/盘口模型。集中写入引擎会难以替换和测试；真实盘口模型需要数据契约和供应商接入，超出当前任务。
+- 影响：后续可在不改策略接口的情况下替换更真实的滑点、盘口和容量模型；组合对账可复用公司行为处理器。
+- 受影响的需求：TASK-014、AC-08、AC-11、T-02至T-06、T-15、T-18。
+- 所需测试/迁移：费用/税费、滑点/价差、参与率部分成交、延迟、涨停无对手方流动性拒绝、分红和拆股测试。

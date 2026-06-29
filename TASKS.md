@@ -98,11 +98,12 @@
 - 验收：T-01、T-04、T-05、T-09通过。
 - 完成证据：2026-06-29 完成 `BacktestEventLoop`、`BacktestClock`、`BacktestEngine`、`OrderIntent`、`ExecutionReport`、确定性执行模拟器、取消令牌和结果checksum；事件优先级、策略在市场事件后评估、订单晚于信号、规则拒绝、部分成交、取消和重复运行checksum一致测试通过。
 
-### [ ] TASK-014——执行、成本、流动性与公司行为
+### [x] TASK-014——执行、成本、流动性与公司行为
 - 依赖：TASK-007、TASK-013
 - 需求：AC-08、AC-11
 - 交付：佣金、税费、滑点、价差、流动性、涨跌停、延迟模型，以及公司行为处理器。
 - 验收：T-02至T-06、T-15、T-18通过。
+- 完成证据：2026-06-29 完成 `RuleBasedCostModel`、固定bps滑点、固定价差、参与率流动性、固定延迟、`CorporateActionProcessor`，并接入 `DeterministicExecutionSimulator`；费用/税费、滑点/价差、参与率部分成交、延迟、涨停无对手方流动性拒绝、分红和拆股测试通过。
 
 ### [ ] TASK-015——组合与风险引擎
 - 依赖：TASK-013、TASK-014

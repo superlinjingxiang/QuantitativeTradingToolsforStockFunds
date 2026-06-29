@@ -13,9 +13,15 @@ from china_quant_platform.backtest import (
     BacktestEvent,
     BacktestEventLoop,
     BacktestEventType,
+    CorporateActionProcessor,
     DeterministicExecutionSimulator,
     ExecutionStatus,
+    FixedBpsSlippageModel,
+    FixedLatencyModel,
+    FixedSpreadModel,
     OrderIntent,
+    ParticipationRateLiquidityModel,
+    PositionState,
 )
 from china_quant_platform.domain import (
     AdjustmentMode,
@@ -23,6 +29,8 @@ from china_quant_platform.domain import (
     BacktestConfig,
     Bar,
     BarInterval,
+    CorporateAction,
+    CorporateActionType,
     Currency,
     Exchange,
     RecordQualityStatus,
@@ -384,3 +392,124 @@ def test_backtest_engine_rejects_same_timestamp_order_policy() -> None:
             strategy=DemoStrategy(),
             order_policy=leaking_policy,
         )
+
+
+def test_execution_models_apply_latency_cost_spread_slippage_and_liquidity() -> None:
+    engine = BacktestEngine(
+        rule_engine=rule_engine(),
+        execution_simulator=DeterministicExecutionSimulator(
+            slippage_model=FixedBpsSlippageModel(bps=10),
+            spread_model=FixedSpreadModel(spread=0.02),
+            liquidity_model=ParticipationRateLiquidityModel(max_participation_rate=0.1),
+            latency_model=FixedLatencyModel(delay_seconds=60),
+        ),
+    )
+
+    result = engine.run(
+        config=config(),
+        security=security(),
+        bars=(make_bar(0),),
+        strategy=DemoStrategy(),
+        order_policy=lambda signal, context, current_bar, clock: buy_policy(
+            signal,
+            context,
+            current_bar,
+            clock,
+            quantity=300,
+        ),
+    )
+
+    order_event = result.events[-2]
+    fill_event = result.events[-1]
+    assert order_event.timestamp.time().isoformat() == "09:31:00"
+    assert fill_event.event_type is BacktestEventType.PARTIAL_FILL
+    assert fill_event.filled_quantity == 100
+    assert fill_event.price == pytest.approx(10.02001)
+    assert fill_event.spread_cost == pytest.approx(1.0)
+    assert fill_event.slippage_cost == pytest.approx(1.001)
+    assert fill_event.total_fees is not None
+    assert fill_event.total_fees > 7.0
+
+
+def test_limit_touch_without_opposite_liquidity_is_rejected() -> None:
+    engine = BacktestEngine(
+        rule_engine=rule_engine(),
+        execution_simulator=DeterministicExecutionSimulator(has_opposite_liquidity=False),
+    )
+
+    def limit_up_policy(
+        signal: RawSignal,
+        strategy_context: StrategyContext,
+        _bar: Bar,
+        clock: BacktestClock,
+    ) -> OrderIntent:
+        created_at = clock.next_session_open(signal.generated_at)
+        return OrderIntent(
+            order_id="order-limit-up",
+            security_id=strategy_context.security_id,
+            side=OrderSide.BUY,
+            quantity=100,
+            price=11.0,
+            created_at=created_at,
+            trade_date=created_at.date(),
+            source_signal_id="signal-limit-up",
+            strategy_id=signal.strategy_id,
+        )
+
+    result = engine.run(
+        config=config(),
+        security=security(),
+        bars=(make_bar(0),),
+        strategy=DemoStrategy(),
+        order_policy=limit_up_policy,
+    )
+
+    reject_event = result.events[-1]
+    assert reject_event.event_type is BacktestEventType.REJECT
+    assert "Limit-up touch without sell-side liquidity is not executable." in reject_event.reasons
+
+
+def test_corporate_action_processor_applies_dividend_and_split() -> None:
+    processor = CorporateActionProcessor()
+    position = PositionState(
+        security_id="SSE:600519",
+        quantity=100,
+        cash=1_000.0,
+        average_cost=10.0,
+    )
+    timestamp = datetime(2026, 1, 10, 20, 0, tzinfo=UTC)
+
+    dividend = CorporateAction(
+        security_id="SSE:600519",
+        action_type=CorporateActionType.DIVIDEND,
+        announcement_time=timestamp,
+        ex_date=date(2026, 1, 11),
+        cash_amount=1.5,
+        provider="fixture",
+        schema_version="v1",
+        source_time=timestamp,
+        observed_at=timestamp,
+        received_at=timestamp + timedelta(minutes=1),
+        quality_status=RecordQualityStatus.OK,
+    )
+    after_dividend, dividend_impact = processor.apply(position=position, action=dividend)
+    assert after_dividend.cash == pytest.approx(1_150.0)
+    assert dividend_impact.cash_delta == pytest.approx(150.0)
+
+    split = CorporateAction(
+        security_id="SSE:600519",
+        action_type=CorporateActionType.SPLIT,
+        announcement_time=timestamp,
+        ex_date=date(2026, 1, 12),
+        share_ratio=2.0,
+        provider="fixture",
+        schema_version="v1",
+        source_time=timestamp,
+        observed_at=timestamp,
+        received_at=timestamp + timedelta(minutes=1),
+        quality_status=RecordQualityStatus.OK,
+    )
+    after_split, split_impact = processor.apply(position=position, action=split)
+    assert after_split.quantity == 200
+    assert after_split.average_cost == pytest.approx(5.0)
+    assert split_impact.share_delta == 100
