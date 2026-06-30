@@ -160,6 +160,11 @@ class InstantOnlineProvider:
             yield await self.get_quote(security_ids[0])
 
 
+class DisconnectingSearchProvider(InstantOnlineProvider):
+    async def search_security(self, keyword: str) -> list[SecurityRef]:
+        raise ConnectionError("Remote end closed connection without response")
+
+
 def test_view_model_maps_data_health_to_blocking_state() -> None:
     view_model = ApplicationViewModel()
 
@@ -210,6 +215,37 @@ def test_main_window_updates_health_banner(qtbot: Any) -> None:
     assert banner is not None
     assert "INVALID" in banner.text()
     assert banner.property("blocked") is True
+
+
+def test_online_failure_uses_short_banner_and_popup(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=aware_datetime)
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    view_model.apply_data_health(
+        DataHealth(
+            status=DataHealthStatus.DEGRADED,
+            block_signal=True,
+            as_of=aware_datetime(),
+            issues=(
+                "联网搜索失败：Remote end closed connection without response",
+                "A股收盘后实时价可能停在收盘价，但历史K线仍应可获取。",
+            ),
+        )
+    )
+
+    banner = window.findChild(QtWidgets.QLabel, "healthBanner")
+    assert banner is not None
+    assert banner.text() == "数据健康：DEGRADED（详情弹窗）"
+    assert "Remote end closed" not in banner.text()
+    qtbot.waitUntil(
+        lambda: window.findChild(QtWidgets.QMessageBox, "dataHealthPopup") is not None,
+        timeout=1000,
+    )
+    popup = window.findChild(QtWidgets.QMessageBox, "dataHealthPopup")
+    assert popup is not None
+    assert "Remote end closed" in popup.informativeText()
+    popup.close()
 
 
 def test_settings_button_switches_and_persists_theme(qtbot: Any, tmp_path: Path) -> None:
@@ -320,6 +356,34 @@ def test_online_provider_searches_code_and_loads_chart(qtbot: Any) -> None:
     assert "HEALTHY" in window.health_banner.text()
     assert "2026-06-29" in window.market_time_label.text()
     assert provider.bar_requests[0].interval is BarInterval.DAILY
+
+
+def test_enter_on_code_loads_chart_when_online_search_disconnects(qtbot: Any) -> None:
+    provider = DisconnectingSearchProvider()
+    view_model = ApplicationViewModel(
+        clock=aware_datetime,
+        market_data_provider=provider,
+    )
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    search_input = window.findChild(QtWidgets.QLineEdit, "securitySearch")
+    assert search_input is not None
+
+    qtbot.keyClicks(search_input, "513300")
+    qtbot.keyClick(search_input, QtCore.Qt.Key.Key_Return)
+    qtbot.waitUntil(
+        lambda: (
+            view_model.state.selected_security_id == "SSE:513300"
+            and view_model.state.chart.point_count == 2
+        ),
+        timeout=1000,
+    )
+
+    assert provider.bar_requests[0].security_id == "SSE:513300"
+    assert view_model.state.data_health is not None
+    assert view_model.state.data_health.status is DataHealthStatus.HEALTHY
+    assert "联网搜索失败" not in window.health_banner.text()
 
 
 def test_chart_controls_reload_online_market_data(qtbot: Any) -> None:

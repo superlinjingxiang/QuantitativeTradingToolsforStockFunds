@@ -193,6 +193,21 @@ class ApplicationViewModel(QtCore.QObject):
             include_inactive=True,
         )
         candidates = tuple(SearchCandidateState.from_search_result(result) for result in results)
+        search_date = as_of or self._clock().date()
+        if not candidates:
+            fallback_security = _fallback_security_from_code(stripped_query, as_of=search_date)
+            if fallback_security is not None:
+                self._security_master.upsert_security(fallback_security)
+                candidates = (
+                    SearchCandidateState.from_search_result(
+                        SecuritySearchResult(
+                            query=stripped_query,
+                            security=fallback_security,
+                            score=0.72,
+                            matched_fields=("code-fallback",),
+                        )
+                    ),
+                )
         self._set_state(
             self._state.model_copy(
                 update={
@@ -797,11 +812,14 @@ class ApplicationViewModel(QtCore.QObject):
         if not isinstance(result, list):
             return
 
+        query = self._state.search_query
+        if not query:
+            return
+
         securities = tuple(item for item in result if isinstance(item, SecurityRef))
         for security in securities:
             self._security_master.upsert_security(security)
 
-        query = self._state.search_query
         candidates = tuple(
             SearchCandidateState.from_search_result(
                 SecuritySearchResult(
@@ -878,6 +896,10 @@ class ApplicationViewModel(QtCore.QObject):
 
     def _handle_background_failure(self, job: _BackgroundJob, error: BaseException) -> None:
         if job.kind == "search" and job.token != self._search_token:
+            return
+        if job.kind == "search" and (
+            self._state.search_results or self._state.selected_security_id is not None
+        ):
             return
         if job.kind == "security_data" and job.generation != self._state.selection_generation:
             return
@@ -1164,6 +1186,54 @@ def _looks_like_security_code(query: str) -> bool:
         exchange, _, code = normalized.partition(":")
         return exchange in {"SSE", "SH", "SZSE", "SZ"} and code.isdigit() and len(code) == 6
     return False
+
+
+def _fallback_security_from_code(query: str, *, as_of: date) -> SecurityRef | None:
+    normalized = query.strip().upper()
+    exchange: Exchange
+    symbol: str
+    if normalized.isdigit() and len(normalized) == 6:
+        symbol = normalized
+        exchange = Exchange.SSE if symbol[0] in {"5", "6", "9"} else Exchange.SZSE
+    elif "." in normalized:
+        market, _, code = normalized.partition(".")
+        if market not in {"0", "1"} or not (code.isdigit() and len(code) == 6):
+            return None
+        symbol = code
+        exchange = Exchange.SSE if market == "1" else Exchange.SZSE
+    elif ":" in normalized:
+        exchange_text, _, code = normalized.partition(":")
+        if not (code.isdigit() and len(code) == 6):
+            return None
+        if exchange_text in {"SSE", "SH"}:
+            exchange = Exchange.SSE
+        elif exchange_text in {"SZSE", "SZ"}:
+            exchange = Exchange.SZSE
+        else:
+            return None
+        symbol = code
+    else:
+        return None
+    return SecurityRef(
+        security_id=f"{exchange.value}:{symbol}",
+        symbol=symbol,
+        name=f"{symbol}（代码兜底）",
+        asset_type=_fallback_asset_type(symbol),
+        exchange=exchange,
+        currency=Currency.CNY,
+        listed_date=date(1990, 1, 1),
+        status_date=as_of,
+        status=SecurityStatus.ACTIVE,
+        aliases=("code-fallback",),
+    )
+
+
+def _fallback_asset_type(symbol: str) -> AssetType:
+    if symbol.startswith(("5", "15", "16", "18")):
+        return AssetType.ETF
+    if symbol.startswith(("0", "3", "6", "8", "9")):
+        return AssetType.STOCK
+    return AssetType.STOCK
 
 
 def _range_start(end_time: datetime, range_preset: ChartRangePreset) -> datetime:

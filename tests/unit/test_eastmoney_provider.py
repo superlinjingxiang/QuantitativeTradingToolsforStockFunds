@@ -10,7 +10,13 @@ from typing import Any
 from pytest import MonkeyPatch
 
 from china_quant_platform.data import BarsRequest, EastmoneyMarketDataProvider
-from china_quant_platform.domain import AdjustmentMode, AssetType, BarInterval, Exchange
+from china_quant_platform.domain import (
+    AdjustmentMode,
+    AssetType,
+    BarInterval,
+    DataUnavailable,
+    Exchange,
+)
 
 
 def test_eastmoney_search_resolves_sse_etf_code(monkeypatch: MonkeyPatch) -> None:
@@ -52,6 +58,7 @@ def test_eastmoney_daily_klines_are_mapped_to_bars(monkeypatch: MonkeyPatch) -> 
     def fake_get_json(_url: str, params: Mapping[str, object]) -> Mapping[str, Any]:
         assert params["secid"] == "1.513300"
         assert params["klt"] == 101
+        assert params["ut"] == "fa5fd1943c7b386f172d6893dbfba10b"
         return {"data": {"klines": ["2026-06-29,2.652,2.668,2.671,2.642,1572452,418140505.000"]}}
 
     monkeypatch.setattr(provider, "_get_json", fake_get_json)
@@ -72,6 +79,72 @@ def test_eastmoney_daily_klines_are_mapped_to_bars(monkeypatch: MonkeyPatch) -> 
     assert bars[0].amount == 418_140_505
 
 
+def test_eastmoney_daily_klines_fall_back_to_yahoo(monkeypatch: MonkeyPatch) -> None:
+    provider = EastmoneyMarketDataProvider()
+
+    def fake_get_json(url: str, _params: Mapping[str, object]) -> Mapping[str, Any]:
+        if "eastmoney.com" in url:
+            raise DataUnavailable("remote disconnected")
+        return {
+            "chart": {
+                "result": [
+                    {
+                        "timestamp": [1782802800],
+                        "indicators": {
+                            "quote": [
+                                {
+                                    "open": [2.703],
+                                    "high": [2.719],
+                                    "low": [2.696],
+                                    "close": [2.704],
+                                    "volume": [1_676_431],
+                                }
+                            ],
+                            "adjclose": [{"adjclose": [2.704]}],
+                        },
+                    }
+                ],
+                "error": None,
+            }
+        }
+
+    monkeypatch.setattr(provider, "_get_json", fake_get_json)
+    request = BarsRequest(
+        security_id="SSE:513300",
+        interval=BarInterval.DAILY,
+        start_time=datetime(2026, 6, 1, tzinfo=UTC),
+        end_time=datetime(2026, 7, 1, tzinfo=UTC),
+        adjustment=AdjustmentMode.NONE,
+    )
+
+    bars = asyncio.run(provider.get_bars(request))
+
+    assert len(bars) == 1
+    assert bars[0].provider == "yahoo"
+    assert bars[0].security_id == "SSE:513300"
+    assert bars[0].close_price == 2.704
+    assert bars[0].volume == 1_676_431
+
+
+def test_eastmoney_quote_falls_back_to_yahoo(monkeypatch: MonkeyPatch) -> None:
+    provider = EastmoneyMarketDataProvider()
+
+    def fake_get_json(url: str, _params: Mapping[str, object]) -> Mapping[str, Any]:
+        if "eastmoney.com" in url:
+            raise DataUnavailable("remote disconnected")
+        return _yahoo_chart_payload()
+
+    monkeypatch.setattr(provider, "_get_json", fake_get_json)
+
+    quote = asyncio.run(provider.get_quote("SSE:513300"))
+
+    assert quote.provider == "yahoo"
+    assert quote.security_id == "SSE:513300"
+    assert quote.latest_price == 2.704
+    assert quote.previous_close == 2.668
+    assert quote.amount == 1_676_431 * 2.704
+
+
 def _quote_payload() -> dict[str, object]:
     return {
         "f43": 2668,
@@ -85,4 +158,29 @@ def _quote_payload() -> dict[str, object]:
         "f59": 3,
         "f60": 2650,
         "f86": 1782720708,
+    }
+
+
+def _yahoo_chart_payload() -> dict[str, object]:
+    return {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [1782716400, 1782802800],
+                    "indicators": {
+                        "quote": [
+                            {
+                                "open": [2.652, 2.703],
+                                "high": [2.671, 2.719],
+                                "low": [2.642, 2.696],
+                                "close": [2.668, 2.704],
+                                "volume": [1_572_452, 1_676_431],
+                            }
+                        ],
+                        "adjclose": [{"adjclose": [2.668, 2.704]}],
+                    },
+                }
+            ],
+            "error": None,
+        }
     }

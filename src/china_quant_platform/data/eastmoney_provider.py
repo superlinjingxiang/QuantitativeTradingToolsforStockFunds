@@ -6,6 +6,8 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import date, datetime, time, timedelta, timezone
+from http.client import HTTPException
+from time import sleep
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -39,7 +41,9 @@ CHINA_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
 EASTMONEY_PROVIDER_ID = "eastmoney"
 QUOTE_URL = "https://push2.eastmoney.com/api/qt/stock/get"
 KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 QUOTE_FIELDS = "f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f86"
+EASTMONEY_UT = "fa5fd1943c7b386f172d6893dbfba10b"
 
 EASTMONEY_CAPABILITIES = frozenset(
     {
@@ -101,12 +105,15 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
     async def get_quote(self, security_id: str) -> Quote:
         self.capabilities.require(ProviderCapability.REALTIME_QUOTE)
         secid = _security_id_to_secid(security_id)
-        payload = self._quote_data(secid)
-        return _quote_from_payload(
-            security_id=_secid_to_security_id(secid),
-            provider_id=self.provider_id,
-            payload=payload,
-        )
+        try:
+            payload = self._quote_data(secid)
+            return _quote_from_payload(
+                security_id=_secid_to_security_id(secid),
+                provider_id=self.provider_id,
+                payload=payload,
+            )
+        except DataUnavailable:
+            return self._get_yahoo_quote(_secid_to_security_id(secid))
 
     async def get_bars(self, request: BarsRequest) -> list[Bar]:
         self.capabilities.require(ProviderCapability.HISTORICAL_BARS)
@@ -114,22 +121,28 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
             self.capabilities.require(ProviderCapability.MINUTE_BARS)
 
         secid = _security_id_to_secid(request.security_id)
-        response = self._get_json(
-            KLINE_URL,
-            {
-                "secid": secid,
-                "klt": _kline_type(request.interval),
-                "fqt": _adjustment_type(request.adjustment),
-                "beg": request.start_time.astimezone(CHINA_TZ).strftime("%Y%m%d"),
-                "end": request.end_time.astimezone(CHINA_TZ).strftime("%Y%m%d"),
-                "fields1": "f1,f2,f3,f4,f5,f6",
-                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
-            },
-        )
-        data = _response_data(response, f"No K-line data for {request.security_id}")
-        raw_klines = data.get("klines")
-        if not isinstance(raw_klines, list):
-            raise DataUnavailable(f"Eastmoney returned malformed K-line data for {secid}")
+        try:
+            response = self._get_json(
+                KLINE_URL,
+                {
+                    "secid": secid,
+                    "klt": _kline_type(request.interval),
+                    "fqt": _adjustment_type(request.adjustment),
+                    "beg": request.start_time.astimezone(CHINA_TZ).strftime("%Y%m%d"),
+                    "end": request.end_time.astimezone(CHINA_TZ).strftime("%Y%m%d"),
+                    "fields1": "f1,f2,f3,f4,f5,f6",
+                    "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+                    "ut": EASTMONEY_UT,
+                },
+            )
+            data = _response_data(response, f"No K-line data for {request.security_id}")
+            raw_klines = data.get("klines")
+            if not isinstance(raw_klines, list):
+                raise DataUnavailable(f"Eastmoney returned malformed K-line data for {secid}")
+        except DataUnavailable:
+            if request.interval is BarInterval.DAILY:
+                return self._get_yahoo_daily_bars(request)
+            raise
 
         bars = [
             _bar_from_kline(
@@ -190,14 +203,29 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
             full_url,
             headers={
                 "Accept": "application/json,text/plain,*/*",
-                "User-Agent": "Mozilla/5.0 ChinaQuantPlatform/0.1",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Connection": "close",
+                "Referer": "https://quote.eastmoney.com/",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0 Safari/537.36 ChinaQuantPlatform/0.1"
+                ),
             },
         )
-        try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:
-                raw = response.read()
-        except (HTTPError, TimeoutError, URLError) as exc:
-            raise DataUnavailable(f"Eastmoney request failed for {full_url}: {exc}") from exc
+        raw: bytes | None = None
+        for attempt in range(3):
+            try:
+                with urlopen(request, timeout=self._timeout_seconds) as response:
+                    raw = response.read()
+                break
+            except (HTTPError, TimeoutError, URLError, HTTPException, OSError) as exc:
+                if attempt < 2:
+                    sleep(0.25 * (attempt + 1))
+                    continue
+                raise DataUnavailable(f"Eastmoney request failed for {full_url}: {exc}") from exc
+        if raw is None:
+            raise DataUnavailable(f"Eastmoney request failed for {full_url}: empty response")
 
         try:
             decoded = raw.decode("utf-8")
@@ -207,6 +235,154 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
         if not isinstance(parsed, Mapping):
             raise DataUnavailable(f"Eastmoney returned non-object JSON for {full_url}")
         return parsed
+
+    def _get_yahoo_daily_bars(self, request: BarsRequest) -> list[Bar]:
+        symbol = _security_id_to_yahoo_symbol(request.security_id)
+        response = self._get_json(
+            YAHOO_CHART_URL.format(symbol=symbol),
+            {
+                "period1": int(request.start_time.timestamp()),
+                "period2": int(request.end_time.timestamp()),
+                "interval": "1d",
+                "events": "history",
+                "includeAdjustedClose": "true",
+            },
+        )
+        result = _yahoo_chart_result(response, symbol)
+        timestamps = result.get("timestamp")
+        indicators = result.get("indicators")
+        if not isinstance(timestamps, list) or not isinstance(indicators, Mapping):
+            raise DataUnavailable(f"Yahoo returned malformed chart data for {symbol}")
+        quotes = indicators.get("quote")
+        if not isinstance(quotes, list) or not quotes or not isinstance(quotes[0], Mapping):
+            raise DataUnavailable(f"Yahoo returned no daily quote data for {symbol}")
+        adjclose_items = indicators.get("adjclose")
+        adjclose = (
+            adjclose_items[0].get("adjclose")
+            if isinstance(adjclose_items, list)
+            and adjclose_items
+            and isinstance(adjclose_items[0], Mapping)
+            else None
+        )
+        quote = quotes[0]
+        bars: list[Bar] = []
+        for index, raw_timestamp in enumerate(timestamps):
+            if not isinstance(raw_timestamp, int):
+                continue
+            open_price = _sequence_float(quote.get("open"), index)
+            high_price = _sequence_float(quote.get("high"), index)
+            low_price = _sequence_float(quote.get("low"), index)
+            close_price = _sequence_float(quote.get("close"), index)
+            volume = _sequence_float(quote.get("volume"), index, default=0.0)
+            if None in {open_price, high_price, low_price, close_price}:
+                continue
+            assert open_price is not None
+            assert high_price is not None
+            assert low_price is not None
+            assert close_price is not None
+            adjusted_close = _sequence_float(adjclose, index)
+            ratio = (
+                adjusted_close / close_price
+                if adjusted_close is not None
+                and close_price > 0
+                and request.adjustment is not AdjustmentMode.NONE
+                else 1.0
+            )
+            source_time = datetime.fromtimestamp(raw_timestamp, tz=CHINA_TZ)
+            trade_date = source_time.date()
+            start_time = datetime.combine(trade_date, time(9, 30), tzinfo=CHINA_TZ)
+            end_time = datetime.combine(trade_date, time(15, 0), tzinfo=CHINA_TZ)
+            bars.append(
+                Bar(
+                    security_id=request.security_id,
+                    interval=BarInterval.DAILY,
+                    start_time=start_time,
+                    end_time=end_time,
+                    trade_date=trade_date,
+                    open_price=open_price * ratio,
+                    high_price=high_price * ratio,
+                    low_price=low_price * ratio,
+                    close_price=close_price * ratio,
+                    volume=volume or 0.0,
+                    amount=(volume or 0.0) * close_price,
+                    adjustment=request.adjustment,
+                    provider="yahoo",
+                    schema_version="yahoo.chart.v8.fallback",
+                    source_time=end_time,
+                    observed_at=end_time,
+                    received_at=datetime.now(tz=CHINA_TZ),
+                    quality_status=RecordQualityStatus.OK,
+                )
+            )
+        return [
+            bar
+            for bar in bars
+            if request.start_time <= bar.start_time and bar.end_time <= request.end_time
+        ]
+
+    def _get_yahoo_quote(self, security_id: str) -> Quote:
+        symbol = _security_id_to_yahoo_symbol(security_id)
+        end_time = datetime.now(tz=CHINA_TZ)
+        response = self._get_json(
+            YAHOO_CHART_URL.format(symbol=symbol),
+            {
+                "period1": int((end_time - timedelta(days=14)).timestamp()),
+                "period2": int(end_time.timestamp()),
+                "interval": "1d",
+                "events": "history",
+                "includeAdjustedClose": "true",
+            },
+        )
+        result = _yahoo_chart_result(response, symbol)
+        timestamps = result.get("timestamp")
+        indicators = result.get("indicators")
+        if not isinstance(timestamps, list) or not isinstance(indicators, Mapping):
+            raise DataUnavailable(f"Yahoo returned malformed quote data for {symbol}")
+        quotes = indicators.get("quote")
+        if not isinstance(quotes, list) or not quotes or not isinstance(quotes[0], Mapping):
+            raise DataUnavailable(f"Yahoo returned no quote data for {symbol}")
+        quote = quotes[0]
+        close_values = quote.get("close")
+        indexes = [
+            index
+            for index, _timestamp in enumerate(timestamps)
+            if _sequence_float(close_values, index) is not None
+        ]
+        if not indexes:
+            raise DataUnavailable(f"Yahoo returned no latest price for {symbol}")
+        latest_index = indexes[-1]
+        previous_index = indexes[-2] if len(indexes) >= 2 else latest_index
+        latest_price = _sequence_float(close_values, latest_index)
+        previous_close = _sequence_float(close_values, previous_index, default=latest_price)
+        open_price = _sequence_float(quote.get("open"), latest_index, default=latest_price)
+        high_price = _sequence_float(quote.get("high"), latest_index, default=latest_price)
+        low_price = _sequence_float(quote.get("low"), latest_index, default=latest_price)
+        volume = _sequence_float(quote.get("volume"), latest_index, default=0.0) or 0.0
+        if (
+            latest_price is None
+            or previous_close is None
+            or open_price is None
+            or high_price is None
+            or low_price is None
+        ):
+            raise DataUnavailable(f"Yahoo returned incomplete quote data for {symbol}")
+        source_time = datetime.fromtimestamp(timestamps[latest_index], tz=CHINA_TZ)
+        return Quote(
+            security_id=security_id,
+            latest_price=latest_price,
+            previous_close=previous_close,
+            open_price=open_price,
+            high_price=max(high_price, open_price, latest_price),
+            low_price=min(low_price, open_price, latest_price),
+            volume=volume,
+            amount=volume * latest_price,
+            provider="yahoo",
+            schema_version="yahoo.chart.v8.fallback",
+            source_time=source_time,
+            observed_at=source_time,
+            received_at=datetime.now(tz=CHINA_TZ),
+            quality_status=RecordQualityStatus.OK,
+        )
 
 
 def _candidate_secids(keyword: str) -> tuple[str, ...]:
@@ -254,6 +430,16 @@ def _security_id_to_secid(security_id: str) -> str:
     raise DataUnavailable(f"Cannot convert security_id {security_id!r} to Eastmoney secid")
 
 
+def _security_id_to_yahoo_symbol(security_id: str) -> str:
+    secid = _security_id_to_secid(security_id)
+    market, code = secid.split(".", maxsplit=1)
+    if market == "1":
+        return f"{code}.SS"
+    if market == "0":
+        return f"{code}.SZ"
+    raise DataUnavailable(f"Cannot convert security_id {security_id!r} to Yahoo symbol")
+
+
 def _secid_to_security_id(secid: str) -> str:
     market, code = secid.split(".", maxsplit=1)
     if market == "1":
@@ -261,6 +447,19 @@ def _secid_to_security_id(secid: str) -> str:
     if market == "0":
         return f"SZSE:{code}"
     raise DataUnavailable(f"Unsupported Eastmoney market id {market!r}")
+
+
+def _yahoo_chart_result(response: Mapping[str, Any], symbol: str) -> Mapping[str, Any]:
+    chart = response.get("chart")
+    if not isinstance(chart, Mapping):
+        raise DataUnavailable(f"Yahoo returned malformed chart wrapper for {symbol}")
+    error = chart.get("error")
+    if error is not None:
+        raise DataUnavailable(f"Yahoo returned chart error for {symbol}: {error}")
+    results = chart.get("result")
+    if not isinstance(results, list) or not results or not isinstance(results[0], Mapping):
+        raise DataUnavailable(f"Yahoo returned empty chart data for {symbol}")
+    return results[0]
 
 
 def _security_from_quote(secid: str, payload: Mapping[str, Any]) -> SecurityRef:
@@ -464,6 +663,23 @@ def _scaled_price(value: object, decimals: int, *, fallback: float | None = None
     scale: float = float(10**decimals)
     normalized_price: float = raw_price / scale
     return normalized_price
+
+
+def _sequence_float(
+    values: object,
+    index: int,
+    *,
+    default: float | None = None,
+) -> float | None:
+    if not isinstance(values, list) or index >= len(values):
+        return default
+    value = values[index]
+    if value is None:
+        return default
+    try:
+        return _float_value(value)
+    except DataUnavailable:
+        return default
 
 
 def _float_value(value: object, *, default: float | None = None) -> float:

@@ -214,3 +214,11 @@
 - 交付：最近访问列表真正从标的选择历史渲染并支持点击；自选列表提供添加当前标的和删除当前标的入口；联网行情成功后自选项补充最新价、涨跌幅和健康状态；成交量柱按涨跌红绿展示并在柱上显示数量；联网失败时说明“收盘后实时价可能停更，但历史K线仍应可取”，帮助区分闭市、网络、代理、防火墙或接口失败。
 - 验收：左侧自选和最近访问控件具备可见动作；成交量柱具备数值标注；513300联网实测能区分搜索、K线和quote是否可取；不得改变真实下单禁用边界。
 - 完成证据：2026-06-30 完成 `RecentSecurityState`、ViewModel最近访问刷新、自选按钮与左侧列表渲染、watchlist行情快照、成交量柱数值标注和联网失败提示。联网实测 `513300` 可从东方财富返回1条搜索结果、31条日K和实时quote，说明15:00后不是历史K线不可取的原因；新增GUI测试覆盖自选按钮与最近访问点击。`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 188项和 `python -m china_quant_platform.release.audit` 均通过。
+
+### [x] TASK-029——代码回车兜底与联网错误弹窗
+- 依赖：TASK-008、TASK-028
+- 需求：FR-001、FR-003、FR-004、FR-021
+- 核心定位：修复用户输入 `513300` 后联网搜索断开导致无法进入行情加载的问题；搜索接口只应辅助识别名称，不应成为6位证券代码拉取K线的单点阻断。
+- 交付：输入框回车时立即同步处理当前文本，不再等待防抖定时器；6位代码、本地市场前缀代码和交易所前缀代码生成本地兜底 `SecurityRef`；联网搜索断开但已有兜底候选或已选中标的时不再阻断数据健康；东方财富HTTP请求增加短重试并捕获服务端主动断开，K线请求补充必需 `ut` 参数；东方财富日K或quote失败时降级到Yahoo chart日线/quote；顶部红色长错误改为短状态，完整原因通过非阻塞弹窗展示。
+- 验收：在联网搜索抛出 `Remote end closed connection without response` 的情况下，输入 `513300` 并回车仍会选择 `SSE:513300`、请求K线和quote，并在行情成功后显示健康状态；长错误不得挤压输入框；东方财富历史K线或quote临时断开时，默认日线图可由备用源返回。
+- 完成证据：2026-06-30 完成 `test_enter_on_code_loads_chart_when_online_search_disconnects`、`test_online_failure_uses_short_banner_and_popup`、东方财富K线/quote到Yahoo备用源单元测试；真实联网复测 `513300` 当前搜索接口返回0，但日K返回31条、quote返回2.704，二者均由Yahoo备用源补齐。`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 192项和 `python -m china_quant_platform.release.audit` 均通过。

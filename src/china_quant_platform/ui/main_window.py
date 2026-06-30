@@ -47,6 +47,8 @@ class MainWindow(QtWidgets.QMainWindow):
             else _load_theme_mode(self.settings)
         )
         self._theme_actions: dict[UiThemeMode, QtGui.QAction] = {}
+        self._last_health_popup_key: tuple[str, tuple[str, ...]] | None = None
+        self._health_popups: list[QtWidgets.QMessageBox] = []
         self.setWindowTitle("中国股票与基金量化分析平台")
         self.resize(1440, 900)
         self.setObjectName("mainWindow")
@@ -256,11 +258,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.search_results.setVisible(bool(state.search_results))
         self.search_results.blockSignals(False)
 
-        self.health_banner.setText(state.banner_text)
+        self.health_banner.setText(_health_banner_text(state))
         self.health_banner.setProperty("blocked", state.is_signal_blocked)
         self.health_banner.setProperty("state", state.run_state.value)
         self.health_banner.style().unpolish(self.health_banner)
         self.health_banner.style().polish(self.health_banner)
+        self._maybe_show_data_health_popup(state)
         latest_point_time = state.chart.points[-1].time_label if state.chart.points else "--"
         self.market_time_label.setText(f"行情时间：{latest_point_time}")
 
@@ -299,6 +302,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.view_model.move_search_highlight(-1)
                 return True
             if key in {QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter}:
+                self.search_timer.stop()
+                query = self.search_input.text().strip()
+                if query and query != self.view_model.state.search_query:
+                    self.view_model.search_securities(query)
                 self.view_model.confirm_highlighted_search()
                 return True
         return super().eventFilter(watched, event)
@@ -345,6 +352,41 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.view_model.select_security(security_id)
             except KeyError:
                 return
+
+    def _maybe_show_data_health_popup(self, state: AppUiState) -> None:
+        data_health = state.data_health
+        if data_health is None or not data_health.issues:
+            self._last_health_popup_key = None
+            return
+        if not _has_online_failure_issue(data_health.issues):
+            return
+        key = (data_health.status.value, data_health.issues)
+        if key == self._last_health_popup_key:
+            return
+        self._last_health_popup_key = key
+        status = data_health.status.value
+        issues = data_health.issues
+        QtCore.QTimer.singleShot(
+            0,
+            lambda status=status, issues=issues: self._show_data_health_popup(status, issues),
+        )
+
+    def _show_data_health_popup(self, status: str, issues: tuple[str, ...]) -> None:
+        popup = QtWidgets.QMessageBox(self)
+        popup.setObjectName("dataHealthPopup")
+        popup.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        popup.setWindowTitle("联网行情提示")
+        popup.setText(f"数据健康：{status}")
+        popup.setInformativeText("\n".join(issues))
+        popup.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+        popup.setModal(False)
+        popup.finished.connect(lambda _result, box=popup: self._forget_health_popup(box))
+        self._health_popups.append(popup)
+        popup.show()
+
+    def _forget_health_popup(self, popup: QtWidgets.QMessageBox) -> None:
+        if popup in self._health_popups:
+            self._health_popups.remove(popup)
 
     @QtCore.Slot()
     def _add_selected_to_watchlist(self) -> None:
@@ -763,6 +805,19 @@ def _decision_panel_text(state: AppUiState) -> str:
         f"说明：{decision.no_profit_guarantee}",
     ]
     return "\n".join(lines)
+
+
+def _health_banner_text(state: AppUiState) -> str:
+    data_health = state.data_health
+    if data_health is None or not data_health.issues:
+        return state.banner_text
+    if _has_online_failure_issue(data_health.issues):
+        return f"数据健康：{data_health.status.value}（详情弹窗）"
+    return f"数据健康：{data_health.status.value}（详情见状态）"
+
+
+def _has_online_failure_issue(issues: tuple[str, ...]) -> bool:
+    return any(issue.startswith(("联网搜索失败", "联网行情失败")) for issue in issues)
 
 
 def _brief_list_text(title: str, values: tuple[str, ...], *, limit: int) -> str:
