@@ -222,3 +222,11 @@
 - 交付：输入框回车时立即同步处理当前文本，不再等待防抖定时器；6位代码、本地市场前缀代码和交易所前缀代码生成本地兜底 `SecurityRef`；联网搜索断开但已有兜底候选或已选中标的时不再阻断数据健康；东方财富HTTP请求增加短重试并捕获服务端主动断开，K线请求补充必需 `ut` 参数；东方财富日K或quote失败时降级到Yahoo chart日线/quote；顶部红色长错误改为短状态，完整原因通过非阻塞弹窗展示。
 - 验收：在联网搜索抛出 `Remote end closed connection without response` 的情况下，输入 `513300` 并回车仍会选择 `SSE:513300`、请求K线和quote，并在行情成功后显示健康状态；长错误不得挤压输入框；东方财富历史K线或quote临时断开时，默认日线图可由备用源返回。
 - 完成证据：2026-06-30 完成 `test_enter_on_code_loads_chart_when_online_search_disconnects`、`test_online_failure_uses_short_banner_and_popup`、东方财富K线/quote到Yahoo备用源单元测试；真实联网复测 `513300` 当前搜索接口返回0，但日K返回31条、quote返回2.704，二者均由Yahoo备用源补齐。`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 192项和 `python -m china_quant_platform.release.audit` 均通过。
+
+### [x] TASK-030——同花顺优先的数据源路由
+- 依赖：TASK-003、TASK-005、TASK-029
+- 需求：FR-001、FR-003、FR-004、FR-020
+- 核心定位：默认优先使用同花顺 iFinD/QuantAPI 数据源；同花顺未配置或访问不通时，自动降级到东方财富/Yahoo兜底，避免单一公开接口不稳定阻断策略验证。
+- 交付：`TonghuashunIfindMarketDataProvider`、`TonghuashunIfindConfig`、`MultiSourceMarketDataProvider`、默认 provider 工厂、`.env.example` 同花顺配置项、GUI 默认多源启动链路。
+- 验收：有 `CQP_THS_IFIND_REFRESH_TOKEN` 时 provider 链首位为 `tonghuashun_ifind`；无 token 时自动跳过同花顺；同花顺请求失败时路由到下一数据源；不得提交真实 token。
+- 完成证据：2026-06-30 完成同花顺 iFinD HTTP适配器、token/.env配置读取、多源路由和默认工厂；新增 `test_tonghuashun_provider.py` 与 `test_multi_source_provider.py` 覆盖配置、代码识别、quote/K线映射、失败切换和默认优先级；`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 202项、`python -m china_quant_platform.release.audit`、PyInstaller打包、exe版本和GUI启动烟雾均通过。

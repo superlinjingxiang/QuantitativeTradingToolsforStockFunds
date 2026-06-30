@@ -8,7 +8,7 @@ from typing import cast
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from china_quant_platform.data import EastmoneyMarketDataProvider
+from china_quant_platform.data import create_default_market_data_provider
 from china_quant_platform.domain import AdjustmentMode, BarInterval
 from china_quant_platform.ui.chart import PriceChartWidget
 from china_quant_platform.ui.state import (
@@ -737,7 +737,9 @@ def create_application(argv: Sequence[str] | None = None) -> QtWidgets.QApplicat
 
 def run_gui(argv: Sequence[str] | None = None) -> int:
     app = create_application(argv)
-    window = MainWindow(ApplicationViewModel(market_data_provider=EastmoneyMarketDataProvider()))
+    window = MainWindow(
+        ApplicationViewModel(market_data_provider=create_default_market_data_provider())
+    )
     window.show()
     return app.exec()
 

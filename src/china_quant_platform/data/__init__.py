@@ -16,6 +16,7 @@ from china_quant_platform.data.gateway import (
     RealtimeConnectionStatus,
     RealtimeSubscriptionState,
 )
+from china_quant_platform.data.multi_source_provider import MultiSourceMarketDataProvider
 from china_quant_platform.data.provider import (
     BarsRequest,
     CorporateActionRequest,
@@ -24,6 +25,7 @@ from china_quant_platform.data.provider import (
     ProviderCapabilities,
     ProviderCapability,
 )
+from china_quant_platform.data.provider_factory import create_default_market_data_provider
 from china_quant_platform.data.quality import (
     DataQualityCheck,
     DataQualityIssue,
@@ -38,6 +40,13 @@ from china_quant_platform.data.security_master import (
     SecurityMasterRecord,
     SecurityMasterService,
     SecuritySearchResult,
+)
+from china_quant_platform.data.tonghuashun_provider import (
+    DEFAULT_REFRESH_TOKEN_ENV_NAMES,
+    TONGHUASHUN_CAPABILITIES,
+    TONGHUASHUN_PROVIDER_ID,
+    TonghuashunIfindConfig,
+    TonghuashunIfindMarketDataProvider,
 )
 
 __all__ = [
@@ -61,6 +70,7 @@ __all__ = [
     "HistoricalBarCache",
     "MarketDataGateway",
     "MarketDataProvider",
+    "MultiSourceMarketDataProvider",
     "ProviderCapabilities",
     "ProviderCapability",
     "RecentSecuritySelection",
@@ -69,4 +79,10 @@ __all__ = [
     "SecurityMasterRecord",
     "SecurityMasterService",
     "SecuritySearchResult",
+    "DEFAULT_REFRESH_TOKEN_ENV_NAMES",
+    "TONGHUASHUN_CAPABILITIES",
+    "TONGHUASHUN_PROVIDER_ID",
+    "TonghuashunIfindConfig",
+    "TonghuashunIfindMarketDataProvider",
+    "create_default_market_data_provider",
 ]

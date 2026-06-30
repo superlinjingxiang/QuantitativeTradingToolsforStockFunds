@@ -89,6 +89,22 @@ uv run python -m china_quant_platform --version
 uv run python -m china_quant_platform --gui
 ```
 
+## 行情数据源
+
+GUI 默认使用多数据源路由：
+
+1. 同花顺 iFinD / QuantAPI（已配置 `CQP_THS_IFIND_REFRESH_TOKEN` 时启用）
+2. 东方财富公开接口
+3. Yahoo chart 日线/quote 备用源
+
+同花顺 token 不提交到仓库。可在本机环境变量或本地忽略的 `.env` 中配置：
+
+```powershell
+$env:CQP_THS_IFIND_REFRESH_TOKEN = "你的refresh_token"
+```
+
+`refresh_token` 获取路径：同花顺超级命令客户端的“工具 -> refresh_token 查询”，或网页版超级命令的“账号详情”。是否收费取决于你的同花顺 iFinD/QuantAPI 账号权限；普通同花顺 App 账号不等同于已开通数据 API。如果未配置 token，程序会自动跳过同花顺并继续使用后备源。
+
 本机如需避开用户目录缓存权限问题，可设置项目内缓存：
 
 ```powershell
