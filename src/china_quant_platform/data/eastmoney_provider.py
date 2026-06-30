@@ -41,7 +41,10 @@ CHINA_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
 EASTMONEY_PROVIDER_ID = "eastmoney"
 QUOTE_URL = "https://push2.eastmoney.com/api/qt/stock/get"
 KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+YAHOO_CHART_URLS = (
+    "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+    "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}",
+)
 QUOTE_FIELDS = "f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f86"
 EASTMONEY_UT = "fa5fd1943c7b386f172d6893dbfba10b"
 YAHOO_INTERVALS = {
@@ -82,11 +85,15 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
         self,
         *,
         provider_id: str = EASTMONEY_PROVIDER_ID,
-        timeout_seconds: float = 8.0,
+        timeout_seconds: float = 2.0,
+        max_attempts: int = 1,
+        fallback_timeout_seconds: float = 8.0,
         poll_interval_seconds: float = 5.0,
     ) -> None:
         self._provider_id = provider_id
         self._timeout_seconds = timeout_seconds
+        self._fallback_timeout_seconds = fallback_timeout_seconds
+        self._max_attempts = max(1, max_attempts)
         self._poll_interval_seconds = poll_interval_seconds
         self._capabilities = ProviderCapabilities(
             provider_id=provider_id,
@@ -214,8 +221,18 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
             raise DataUnavailable(f"Eastmoney returned incomplete quote data for {secid}")
         return data
 
-    def _get_json(self, url: str, params: Mapping[str, object]) -> Mapping[str, Any]:
+    def _get_json(
+        self,
+        url: str,
+        params: Mapping[str, object],
+        *,
+        timeout_seconds: float | None = None,
+        max_attempts: int | None = None,
+    ) -> Mapping[str, Any]:
         full_url = f"{url}?{urlencode(params)}"
+        source_name = "Yahoo" if "finance.yahoo.com" in url else "Eastmoney"
+        timeout = self._timeout_seconds if timeout_seconds is None else timeout_seconds
+        attempts = self._max_attempts if max_attempts is None else max(1, max_attempts)
         request = Request(
             full_url,
             headers={
@@ -231,33 +248,50 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
             },
         )
         raw: bytes | None = None
-        for attempt in range(3):
+        for attempt in range(attempts):
             try:
-                with urlopen(request, timeout=self._timeout_seconds) as response:
+                with urlopen(request, timeout=timeout) as response:
                     raw = response.read()
                 break
             except (HTTPError, TimeoutError, URLError, HTTPException, OSError) as exc:
-                if attempt < 2:
+                if attempt < attempts - 1:
                     sleep(0.25 * (attempt + 1))
                     continue
-                raise DataUnavailable(f"Eastmoney request failed for {full_url}: {exc}") from exc
+                raise DataUnavailable(
+                    f"{source_name} request failed for {full_url}: {exc}"
+                ) from exc
         if raw is None:
-            raise DataUnavailable(f"Eastmoney request failed for {full_url}: empty response")
+            raise DataUnavailable(f"{source_name} request failed for {full_url}: empty response")
 
         try:
             decoded = raw.decode("utf-8")
             parsed = json.loads(decoded)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise DataUnavailable(f"Eastmoney returned invalid JSON for {full_url}") from exc
+            raise DataUnavailable(f"{source_name} returned invalid JSON for {full_url}") from exc
         if not isinstance(parsed, Mapping):
-            raise DataUnavailable(f"Eastmoney returned non-object JSON for {full_url}")
+            raise DataUnavailable(f"{source_name} returned non-object JSON for {full_url}")
         return parsed
+
+    def _get_yahoo_json(self, symbol: str, params: Mapping[str, object]) -> Mapping[str, Any]:
+        failures: list[str] = []
+        for url_template in YAHOO_CHART_URLS:
+            url = url_template.format(symbol=symbol)
+            try:
+                return self._get_json(
+                    url,
+                    params,
+                    timeout_seconds=self._fallback_timeout_seconds,
+                    max_attempts=1,
+                )
+            except DataUnavailable as exc:
+                failures.append(exc.engineering_message)
+        raise DataUnavailable("；".join(failures))
 
     def _get_yahoo_bars(self, request: BarsRequest) -> list[Bar]:
         symbol = _security_id_to_yahoo_symbol(request.security_id)
         start_time = _yahoo_period_start(request)
-        response = self._get_json(
-            YAHOO_CHART_URL.format(symbol=symbol),
+        response = self._get_yahoo_json(
+            symbol,
             {
                 "period1": int(start_time.timestamp()),
                 "period2": int(request.end_time.timestamp()),
@@ -342,8 +376,8 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
     def _get_yahoo_quote(self, security_id: str) -> Quote:
         symbol = _security_id_to_yahoo_symbol(security_id)
         end_time = datetime.now(tz=CHINA_TZ)
-        response = self._get_json(
-            YAHOO_CHART_URL.format(symbol=symbol),
+        response = self._get_yahoo_json(
+            symbol,
             {
                 "period1": int((end_time - timedelta(days=14)).timestamp()),
                 "period2": int(end_time.timestamp()),

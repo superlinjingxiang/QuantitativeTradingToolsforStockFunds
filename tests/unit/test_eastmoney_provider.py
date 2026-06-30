@@ -82,7 +82,11 @@ def test_eastmoney_daily_klines_are_mapped_to_bars(monkeypatch: MonkeyPatch) -> 
 def test_eastmoney_daily_klines_fall_back_to_yahoo(monkeypatch: MonkeyPatch) -> None:
     provider = EastmoneyMarketDataProvider()
 
-    def fake_get_json(url: str, _params: Mapping[str, object]) -> Mapping[str, Any]:
+    def fake_get_json(
+        url: str,
+        _params: Mapping[str, object],
+        **_kwargs: object,
+    ) -> Mapping[str, Any]:
         if "eastmoney.com" in url:
             raise DataUnavailable("remote disconnected")
         return {
@@ -130,7 +134,11 @@ def test_eastmoney_minute_klines_fall_back_to_yahoo(monkeypatch: MonkeyPatch) ->
     provider = EastmoneyMarketDataProvider()
     yahoo_intervals: list[object] = []
 
-    def fake_get_json(url: str, params: Mapping[str, object]) -> Mapping[str, Any]:
+    def fake_get_json(
+        url: str,
+        params: Mapping[str, object],
+        **_kwargs: object,
+    ) -> Mapping[str, Any]:
         if "eastmoney.com" in url:
             raise DataUnavailable("ssl handshake timed out")
         yahoo_intervals.append(params["interval"])
@@ -178,7 +186,11 @@ def test_eastmoney_minute_klines_fall_back_to_yahoo(monkeypatch: MonkeyPatch) ->
 def test_eastmoney_quote_falls_back_to_yahoo(monkeypatch: MonkeyPatch) -> None:
     provider = EastmoneyMarketDataProvider()
 
-    def fake_get_json(url: str, _params: Mapping[str, object]) -> Mapping[str, Any]:
+    def fake_get_json(
+        url: str,
+        _params: Mapping[str, object],
+        **_kwargs: object,
+    ) -> Mapping[str, Any]:
         if "eastmoney.com" in url:
             raise DataUnavailable("remote disconnected")
         return _yahoo_chart_payload()

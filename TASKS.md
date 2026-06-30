@@ -237,4 +237,4 @@
 - 核心定位：修复 `513300` 在 `30分` 等分钟周期下东方财富K线 SSL 握手超时导致图表无数据的问题；分钟线不得因为单一公开接口失败而阻断策略查看。
 - 交付：Yahoo chart 分钟/日/周/月 K 线统一兜底；1分/5分/15分/30分/60分周期映射；分钟线超长范围自动缩到 Yahoo 可返回窗口；东方财富分钟线失败回归测试。
 - 验收：东方财富分钟K线抛出 `ssl handshake timed out` 时，`SSE:513300` 的 `30分` 请求仍能返回 Yahoo K 线；数据源失败弹窗不应导致图表保持空白；不得引入真实账号或 token 依赖。
-- 完成证据：2026-06-30 完成 `test_eastmoney_minute_klines_fall_back_to_yahoo`，真实联网诊断 `SSE:513300` / `30分` 返回174根 Yahoo K线；`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 203项均通过。
+- 完成证据：2026-06-30 完成 `test_eastmoney_minute_klines_fall_back_to_yahoo` 和重复选择不清空图表回归测试；真实联网诊断 `SSE:513300` / `30分` 返回174根 Yahoo K线；真实GUI截图验证 `SSE:513300` / `周线` / `1年` 在约3秒内显示55个图表点，状态 `HEALTHY`；公开主源短超时、Yahoo兜底长超时与query1/query2备用域名已接入；`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 204项均通过。

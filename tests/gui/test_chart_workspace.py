@@ -115,6 +115,22 @@ def test_chart_range_and_overlay_changes_preserve_security_and_adjustment() -> N
     assert ChartOverlay.MOVING_AVERAGE in view_model.state.chart.overlays
 
 
+def test_reselecting_current_security_keeps_existing_chart_points() -> None:
+    view_model = ApplicationViewModel(clock=lambda: aware_datetime())
+    view_model.select_security("SSE:600519")
+    generation = view_model.state.selection_generation
+    view_model.load_chart_bars(
+        (make_bar(26, 101), make_bar(29, 103)),
+        generation=generation,
+    )
+
+    view_model.select_security("SSE:600519")
+
+    assert view_model.state.selected_security_id == "SSE:600519"
+    assert view_model.state.chart.point_count == 2
+    assert view_model.state.selection_generation == generation
+
+
 def test_chart_workspace_renders_points_and_controls_state(qtbot: Any) -> None:
     view_model = ApplicationViewModel(clock=lambda: aware_datetime())
     window = MainWindow(view_model)

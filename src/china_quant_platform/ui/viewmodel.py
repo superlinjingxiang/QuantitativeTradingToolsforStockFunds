@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -286,6 +286,10 @@ class ApplicationViewModel(QtCore.QObject):
     def select_security(self, security_id: str) -> None:
         if self._active_task is not None:
             self.cancel_active_task()
+        if security_id == self._state.selected_security_id:
+            if self._state.task_status is not UiTaskStatus.RUNNING:
+                self._reload_selected_security_data()
+            return
 
         selected_at = self._clock()
         security = self._security_master.select_security(
@@ -736,7 +740,6 @@ class ApplicationViewModel(QtCore.QObject):
         )
 
         async def load() -> _OnlineSecurityData:
-            bars = tuple(await provider.get_bars(request))
             decision_start_time = end_time - timedelta(days=420)
             decision_request = BarsRequest(
                 security_id=security_id,
@@ -745,8 +748,13 @@ class ApplicationViewModel(QtCore.QObject):
                 end_time=end_time,
                 adjustment=adjustment,
             )
-            decision_bars = tuple(await provider.get_bars(decision_request))
-            quote = await provider.get_quote(security_id)
+            bars_result, decision_bars_result, quote = await asyncio.gather(
+                _run_provider_operation(lambda: provider.get_bars(request)),
+                _run_provider_operation(lambda: provider.get_bars(decision_request)),
+                _run_provider_operation(lambda: provider.get_quote(security_id)),
+            )
+            bars = tuple(bars_result)
+            decision_bars = tuple(decision_bars_result)
             issue_text = () if bars else ("联网行情已连接，但历史K线为空。",)
             return _OnlineSecurityData(
                 security_id=security_id,
@@ -1022,6 +1030,10 @@ class ApplicationViewModel(QtCore.QObject):
                 }
             )
         )
+
+
+async def _run_provider_operation[T](operation: Callable[[], Coroutine[Any, Any, T]]) -> T:
+    return await asyncio.to_thread(lambda: asyncio.run(operation()))
 
 
 def build_demo_security_master() -> SecurityMasterService:
