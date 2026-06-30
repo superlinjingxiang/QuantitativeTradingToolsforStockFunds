@@ -12,8 +12,16 @@ from china_quant_platform.data import EastmoneyMarketDataProvider
 from china_quant_platform.domain import AdjustmentMode, BarInterval
 from china_quant_platform.ui.chart import PriceChartWidget
 from china_quant_platform.ui.state import AppUiState, ChartOverlay, ChartRangePreset, UiRunState
-from china_quant_platform.ui.theme import IOS_STYLE_SHEET, apply_ios_palette
+from china_quant_platform.ui.theme import (
+    DEFAULT_THEME_MODE,
+    UiThemeMode,
+    apply_theme_palette,
+    coerce_theme_mode,
+    style_sheet_for,
+)
 from china_quant_platform.ui.viewmodel import ApplicationViewModel
+
+THEME_SETTINGS_KEY = "appearance/theme"
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -21,9 +29,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self,
         view_model: ApplicationViewModel | None = None,
         parent: QtWidgets.QWidget | None = None,
+        *,
+        settings: QtCore.QSettings | None = None,
+        initial_theme: UiThemeMode | str | None = None,
     ) -> None:
         super().__init__(parent)
         self.view_model = view_model or ApplicationViewModel(self)
+        self.settings = settings or QtCore.QSettings("ChinaQuantPlatform", "DesktopShell")
+        self._theme_mode = (
+            coerce_theme_mode(initial_theme)
+            if initial_theme is not None
+            else _load_theme_mode(self.settings)
+        )
+        self._theme_actions: dict[UiThemeMode, QtGui.QAction] = {}
         self.setWindowTitle("中国股票与基金量化分析平台")
         self.resize(1280, 820)
         self.setObjectName("mainWindow")
@@ -67,6 +85,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_FileDialogDetailedView)
         )
         self.settings_button.setToolTip("设置")
+        self.settings_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
 
         self.status_label = QtWidgets.QLabel()
         self.status_label.setObjectName("stateLabel")
@@ -166,9 +185,30 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.setCentralWidget(self._build_central_widget())
         self.statusBar().addPermanentWidget(self.status_label)
-        self.setStyleSheet(IOS_STYLE_SHEET)
+        self._configure_settings_menu()
+        self.set_theme_mode(self._theme_mode, persist=False)
         self.view_model.state_changed.connect(self.render_state)
         self.render_state(self.view_model.state)
+
+    @property
+    def theme_mode(self) -> UiThemeMode:
+        return self._theme_mode
+
+    def set_theme_mode(self, theme_mode: UiThemeMode | str, *, persist: bool = True) -> None:
+        selected_mode = coerce_theme_mode(theme_mode)
+        self._theme_mode = selected_mode
+        self.setProperty("themeMode", selected_mode.value)
+        application = QtWidgets.QApplication.instance()
+        if application is not None:
+            apply_theme_palette(cast(QtWidgets.QApplication, application), selected_mode)
+        self.setStyleSheet(style_sheet_for(selected_mode))
+        self.price_chart.set_theme_mode(selected_mode)
+        for mode, action in self._theme_actions.items():
+            action.setChecked(mode is selected_mode)
+        self.settings_button.setToolTip(f"设置：{_theme_label(selected_mode)}")
+        if persist:
+            self.settings.setValue(THEME_SETTINGS_KEY, selected_mode.value)
+            self.settings.sync()
 
     @QtCore.Slot(object)
     def render_state(self, state: AppUiState) -> None:
@@ -234,6 +274,22 @@ class MainWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self.view_model.shutdown()
         super().closeEvent(event)
+
+    def _configure_settings_menu(self) -> None:
+        menu = QtWidgets.QMenu(self)
+        theme_group = QtGui.QActionGroup(self)
+        theme_group.setExclusive(True)
+        for mode in (UiThemeMode.DARK, UiThemeMode.LIGHT):
+            action = QtGui.QAction(_theme_label(mode), self)
+            action.setCheckable(True)
+            action.setData(mode.value)
+            action.triggered.connect(
+                lambda _checked=False, selected_mode=mode: self.set_theme_mode(selected_mode)
+            )
+            theme_group.addAction(action)
+            menu.addAction(action)
+            self._theme_actions[mode] = action
+        self.settings_button.setMenu(menu)
 
     @QtCore.Slot()
     def _schedule_search(self) -> None:
@@ -530,7 +586,7 @@ def create_application(argv: Sequence[str] | None = None) -> QtWidgets.QApplicat
         application = cast(QtWidgets.QApplication, app)
     else:
         application = QtWidgets.QApplication(list(argv or sys.argv))
-    apply_ios_palette(application)
+    apply_theme_palette(application, DEFAULT_THEME_MODE)
     return application
 
 
@@ -591,6 +647,16 @@ def _list_text(title: str, values: tuple[str, ...]) -> str:
     if not values:
         return f"{title}：--"
     return f"{title}：" + "；".join(values)
+
+
+def _load_theme_mode(settings: QtCore.QSettings) -> UiThemeMode:
+    return coerce_theme_mode(settings.value(THEME_SETTINGS_KEY), default=DEFAULT_THEME_MODE)
+
+
+def _theme_label(theme_mode: UiThemeMode) -> str:
+    if theme_mode is UiThemeMode.DARK:
+        return "黑色主题"
+    return "白色主题"
 
 
 __all__ = ["MainWindow", "create_application", "run_gui"]

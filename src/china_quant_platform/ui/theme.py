@@ -1,27 +1,146 @@
-"""iOS-inspired visual theme for the desktop shell."""
+"""Light and dark visual themes for the desktop shell."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
+
 from PySide6 import QtGui, QtWidgets
 
-IOS_BACKGROUND = "#F2F2F7"
-IOS_CARD = "#FFFFFF"
-IOS_CARD_MUTED = "#F9F9FB"
-IOS_SEPARATOR = "#D1D1D6"
-IOS_SEPARATOR_SOFT = "#E5E5EA"
-IOS_TEXT = "#1C1C1E"
-IOS_SECONDARY_TEXT = "#6E6E73"
-IOS_TERTIARY_TEXT = "#8E8E93"
-IOS_BLUE = "#007AFF"
-IOS_BLUE_PRESSED = "#005ECF"
-IOS_GREEN = "#34C759"
-IOS_RED = "#FF3B30"
-IOS_ORANGE = "#FF9500"
+
+class UiThemeMode(StrEnum):
+    LIGHT = "light"
+    DARK = "dark"
 
 
-def apply_ios_palette(app: QtWidgets.QApplication) -> None:
-    """Apply a light iOS-style palette and system font."""
+@dataclass(frozen=True, slots=True)
+class ThemeColors:
+    background: str
+    card: str
+    card_muted: str
+    raised: str
+    separator: str
+    separator_soft: str
+    text: str
+    secondary_text: str
+    tertiary_text: str
+    blue: str
+    blue_pressed: str
+    green: str
+    red: str
+    orange: str
+    health_background: str
+    health_text: str
+    health_border: str
+    blocked_background: str
+    blocked_text: str
+    blocked_border: str
+    tab_background: str
+    tab_border: str
+    hover: str
+    pressed: str
+    chart_grid: str
+    chart_volume: str
+    highlighted_text: str
 
+
+LIGHT_THEME = ThemeColors(
+    background="#F2F2F7",
+    card="#FFFFFF",
+    card_muted="#F9F9FB",
+    raised="#FFFFFF",
+    separator="#D1D1D6",
+    separator_soft="#E5E5EA",
+    text="#1C1C1E",
+    secondary_text="#6E6E73",
+    tertiary_text="#8E8E93",
+    blue="#007AFF",
+    blue_pressed="#005ECF",
+    green="#34C759",
+    red="#FF3B30",
+    orange="#FF9500",
+    health_background="rgba(52, 199, 89, 0.12)",
+    health_text="#176C2E",
+    health_border="rgba(52, 199, 89, 0.40)",
+    blocked_background="rgba(255, 59, 48, 0.12)",
+    blocked_text="#8E120B",
+    blocked_border="rgba(255, 59, 48, 0.44)",
+    tab_background="#E9E9EE",
+    tab_border="#E0E0E6",
+    hover="#F7F7FA",
+    pressed="#E9E9EE",
+    chart_grid="#EFEFF4",
+    chart_volume="#D1D1D6",
+    highlighted_text="#FFFFFF",
+)
+
+DARK_THEME = ThemeColors(
+    background="#090A0F",
+    card="#14161D",
+    card_muted="#1B1E27",
+    raised="#20242E",
+    separator="#3A3F4B",
+    separator_soft="#2A2F3A",
+    text="#F4F7FB",
+    secondary_text="#A8B0BE",
+    tertiary_text="#7D8594",
+    blue="#4DA3FF",
+    blue_pressed="#2587E8",
+    green="#30D158",
+    red="#FF453A",
+    orange="#FF9F0A",
+    health_background="rgba(48, 209, 88, 0.14)",
+    health_text="#9EF2B2",
+    health_border="rgba(48, 209, 88, 0.46)",
+    blocked_background="rgba(255, 69, 58, 0.16)",
+    blocked_text="#FFB5AF",
+    blocked_border="rgba(255, 69, 58, 0.52)",
+    tab_background="#171A22",
+    tab_border="#2D3340",
+    hover="#252B36",
+    pressed="#303746",
+    chart_grid="#252B36",
+    chart_volume="#3A4353",
+    highlighted_text="#FFFFFF",
+)
+
+DEFAULT_THEME_MODE = UiThemeMode.DARK
+
+IOS_BACKGROUND = LIGHT_THEME.background
+IOS_CARD = LIGHT_THEME.card
+IOS_CARD_MUTED = LIGHT_THEME.card_muted
+IOS_SEPARATOR = LIGHT_THEME.separator
+IOS_SEPARATOR_SOFT = LIGHT_THEME.separator_soft
+IOS_TEXT = LIGHT_THEME.text
+IOS_SECONDARY_TEXT = LIGHT_THEME.secondary_text
+IOS_TERTIARY_TEXT = LIGHT_THEME.tertiary_text
+IOS_BLUE = LIGHT_THEME.blue
+IOS_BLUE_PRESSED = LIGHT_THEME.blue_pressed
+IOS_GREEN = LIGHT_THEME.green
+IOS_RED = LIGHT_THEME.red
+IOS_ORANGE = LIGHT_THEME.orange
+
+
+def coerce_theme_mode(value: object, *, default: UiThemeMode = DEFAULT_THEME_MODE) -> UiThemeMode:
+    if isinstance(value, UiThemeMode):
+        return value
+    if isinstance(value, str):
+        try:
+            return UiThemeMode(value)
+        except ValueError:
+            return default
+    return default
+
+
+def get_theme_colors(mode: UiThemeMode | str) -> ThemeColors:
+    theme_mode = coerce_theme_mode(mode)
+    return DARK_THEME if theme_mode is UiThemeMode.DARK else LIGHT_THEME
+
+
+def apply_theme_palette(app: QtWidgets.QApplication, mode: UiThemeMode | str) -> None:
+    """Apply the selected application palette and standard UI font."""
+
+    colors = get_theme_colors(mode)
     families = set(QtGui.QFontDatabase.families())
     family = "Microsoft YaHei UI"
     if family not in families:
@@ -29,68 +148,102 @@ def apply_ios_palette(app: QtWidgets.QApplication) -> None:
     font = QtGui.QFont(family)
     font.setPointSize(10)
     app.setFont(font)
+    app.setProperty("themeMode", coerce_theme_mode(mode).value)
 
     palette = QtGui.QPalette()
-    palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor(IOS_BACKGROUND))
-    palette.setColor(QtGui.QPalette.ColorRole.WindowText, QtGui.QColor(IOS_TEXT))
-    palette.setColor(QtGui.QPalette.ColorRole.Base, QtGui.QColor(IOS_CARD))
-    palette.setColor(QtGui.QPalette.ColorRole.AlternateBase, QtGui.QColor(IOS_CARD_MUTED))
-    palette.setColor(QtGui.QPalette.ColorRole.Text, QtGui.QColor(IOS_TEXT))
-    palette.setColor(QtGui.QPalette.ColorRole.Button, QtGui.QColor(IOS_CARD))
-    palette.setColor(QtGui.QPalette.ColorRole.ButtonText, QtGui.QColor(IOS_BLUE))
-    palette.setColor(QtGui.QPalette.ColorRole.Highlight, QtGui.QColor(IOS_BLUE))
-    palette.setColor(QtGui.QPalette.ColorRole.HighlightedText, QtGui.QColor("#FFFFFF"))
+    palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor(colors.background))
+    palette.setColor(QtGui.QPalette.ColorRole.WindowText, QtGui.QColor(colors.text))
+    palette.setColor(QtGui.QPalette.ColorRole.Base, QtGui.QColor(colors.card))
+    palette.setColor(QtGui.QPalette.ColorRole.AlternateBase, QtGui.QColor(colors.card_muted))
+    palette.setColor(QtGui.QPalette.ColorRole.Text, QtGui.QColor(colors.text))
+    palette.setColor(QtGui.QPalette.ColorRole.Button, QtGui.QColor(colors.raised))
+    palette.setColor(QtGui.QPalette.ColorRole.ButtonText, QtGui.QColor(colors.text))
+    palette.setColor(QtGui.QPalette.ColorRole.Highlight, QtGui.QColor(colors.blue))
+    palette.setColor(
+        QtGui.QPalette.ColorRole.HighlightedText,
+        QtGui.QColor(colors.highlighted_text),
+    )
     app.setPalette(palette)
 
 
-IOS_STYLE_SHEET = f"""
+def apply_ios_palette(app: QtWidgets.QApplication) -> None:
+    """Backward-compatible helper that applies the default theme."""
+
+    apply_theme_palette(app, DEFAULT_THEME_MODE)
+
+
+def style_sheet_for(mode: UiThemeMode | str) -> str:
+    colors = get_theme_colors(mode)
+    return f"""
 QMainWindow,
 QWidget#appRoot {{
-    background: {IOS_BACKGROUND};
-    color: {IOS_TEXT};
+    background: {colors.background};
+    color: {colors.text};
     font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI";
 }}
 
 QStatusBar {{
-    background: {IOS_BACKGROUND};
-    border-top: 1px solid {IOS_SEPARATOR_SOFT};
-    color: {IOS_SECONDARY_TEXT};
+    background: {colors.background};
+    border-top: 1px solid {colors.separator_soft};
+    color: {colors.secondary_text};
+}}
+
+QMenu {{
+    background: {colors.raised};
+    border: 1px solid {colors.separator_soft};
+    border-radius: 8px;
+    padding: 6px;
+    color: {colors.text};
+}}
+
+QMenu::item {{
+    border-radius: 6px;
+    padding: 7px 24px 7px 24px;
+}}
+
+QMenu::item:selected {{
+    background: {colors.hover};
+}}
+
+QMenu::indicator:checked {{
+    background: {colors.blue};
+    border-radius: 5px;
 }}
 
 QLabel {{
-    color: {IOS_TEXT};
+    color: {colors.text};
 }}
 
 QLabel#marketTime,
 QLabel#stateLabel,
 QLabel#chartSummary {{
-    color: {IOS_SECONDARY_TEXT};
+    color: {colors.secondary_text};
     font-size: 12px;
 }}
 
 QLabel#healthBanner {{
-    border: 1px solid rgba(52, 199, 89, 0.40);
+    border: 1px solid {colors.health_border};
     border-radius: 8px;
     padding: 6px 12px;
-    background: rgba(52, 199, 89, 0.12);
-    color: #176C2E;
+    background: {colors.health_background};
+    color: {colors.health_text};
     font-weight: 600;
 }}
 
 QLabel#healthBanner[blocked="true"] {{
-    background: rgba(255, 59, 48, 0.12);
-    color: #8E120B;
-    border-color: rgba(255, 59, 48, 0.44);
+    background: {colors.blocked_background};
+    color: {colors.blocked_text};
+    border-color: {colors.blocked_border};
 }}
 
 QGroupBox {{
-    background: {IOS_CARD};
-    border: 1px solid {IOS_SEPARATOR_SOFT};
+    background: {colors.card};
+    border: 1px solid {colors.separator_soft};
     border-radius: 8px;
     margin-top: 18px;
     padding: 14px 10px 10px 10px;
     font-weight: 700;
-    color: {IOS_TEXT};
+    color: {colors.text};
 }}
 
 QGroupBox::title {{
@@ -99,32 +252,34 @@ QGroupBox::title {{
     left: 10px;
     top: 0px;
     padding: 0 4px;
-    color: {IOS_SECONDARY_TEXT};
+    color: {colors.secondary_text};
     font-size: 12px;
 }}
 
 QLineEdit {{
-    background: {IOS_CARD};
-    border: 1px solid {IOS_SEPARATOR_SOFT};
+    background: {colors.card};
+    border: 1px solid {colors.separator_soft};
     border-radius: 8px;
     min-height: 28px;
     padding: 5px 12px;
-    selection-background-color: {IOS_BLUE};
+    color: {colors.text};
+    selection-background-color: {colors.blue};
+    selection-color: {colors.highlighted_text};
 }}
 
 QLineEdit:focus {{
-    border: 1px solid {IOS_BLUE};
+    border: 1px solid {colors.blue};
 }}
 
 QListWidget,
 QTextBrowser {{
-    background: {IOS_CARD};
-    border: 1px solid {IOS_SEPARATOR_SOFT};
+    background: {colors.card};
+    border: 1px solid {colors.separator_soft};
     border-radius: 8px;
     padding: 4px;
-    color: {IOS_TEXT};
-    selection-background-color: rgba(0, 122, 255, 0.14);
-    selection-color: {IOS_TEXT};
+    color: {colors.text};
+    selection-background-color: rgba(77, 163, 255, 0.24);
+    selection-color: {colors.text};
 }}
 
 QListWidget::item {{
@@ -135,21 +290,21 @@ QListWidget::item {{
 
 QListWidget::item:selected,
 QListWidget::item:hover {{
-    background: rgba(0, 122, 255, 0.12);
-    color: {IOS_TEXT};
+    background: rgba(77, 163, 255, 0.20);
+    color: {colors.text};
 }}
 
 QTabWidget::pane {{
-    border: 1px solid {IOS_SEPARATOR_SOFT};
+    border: 1px solid {colors.separator_soft};
     border-radius: 8px;
-    background: {IOS_CARD};
+    background: {colors.card};
     top: -1px;
 }}
 
 QTabBar::tab {{
-    background: #E9E9EE;
-    color: {IOS_SECONDARY_TEXT};
-    border: 1px solid #E0E0E6;
+    background: {colors.tab_background};
+    color: {colors.secondary_text};
+    border: 1px solid {colors.tab_border};
     padding: 7px 16px;
     min-width: 76px;
 }}
@@ -165,23 +320,24 @@ QTabBar::tab:last {{
 }}
 
 QTabBar::tab:selected {{
-    background: {IOS_CARD};
-    color: {IOS_TEXT};
-    border-color: {IOS_SEPARATOR};
+    background: {colors.card};
+    color: {colors.text};
+    border-color: {colors.separator};
     font-weight: 700;
 }}
 
 QComboBox {{
-    background: {IOS_CARD};
-    border: 1px solid {IOS_SEPARATOR_SOFT};
+    background: {colors.card};
+    border: 1px solid {colors.separator_soft};
     border-radius: 8px;
     padding: 5px 28px 5px 10px;
     min-height: 26px;
-    color: {IOS_TEXT};
+    color: {colors.text};
+    selection-background-color: {colors.blue};
 }}
 
 QComboBox:focus {{
-    border-color: {IOS_BLUE};
+    border-color: {colors.blue};
 }}
 
 QComboBox::drop-down {{
@@ -190,7 +346,7 @@ QComboBox::drop-down {{
 }}
 
 QCheckBox {{
-    color: {IOS_SECONDARY_TEXT};
+    color: {colors.secondary_text};
     spacing: 6px;
 }}
 
@@ -198,31 +354,32 @@ QCheckBox::indicator {{
     width: 18px;
     height: 18px;
     border-radius: 8px;
-    border: 1px solid {IOS_SEPARATOR};
-    background: {IOS_CARD};
+    border: 1px solid {colors.separator};
+    background: {colors.card};
 }}
 
 QCheckBox::indicator:checked {{
-    background: {IOS_BLUE};
-    border: 1px solid {IOS_BLUE};
+    background: {colors.blue};
+    border: 1px solid {colors.blue};
 }}
 
 QToolButton {{
-    background: {IOS_CARD};
-    border: 1px solid {IOS_SEPARATOR_SOFT};
+    background: {colors.card};
+    border: 1px solid {colors.separator_soft};
     border-radius: 8px;
     min-width: 30px;
     min-height: 30px;
     padding: 2px;
+    color: {colors.text};
 }}
 
 QToolButton:hover {{
-    background: #F7F7FA;
-    border-color: {IOS_SEPARATOR};
+    background: {colors.hover};
+    border-color: {colors.separator};
 }}
 
 QToolButton:pressed {{
-    background: #E9E9EE;
+    background: {colors.pressed};
 }}
 
 QSplitter::handle {{
@@ -248,9 +405,15 @@ QScrollBar::sub-line:vertical {{
 """
 
 
+IOS_STYLE_SHEET = style_sheet_for(UiThemeMode.LIGHT)
+
+
 __all__ = [
+    "DEFAULT_THEME_MODE",
+    "DARK_THEME",
     "IOS_BACKGROUND",
     "IOS_BLUE",
+    "IOS_BLUE_PRESSED",
     "IOS_CARD",
     "IOS_CARD_MUTED",
     "IOS_GREEN",
@@ -262,5 +425,12 @@ __all__ = [
     "IOS_STYLE_SHEET",
     "IOS_TEXT",
     "IOS_TERTIARY_TEXT",
+    "LIGHT_THEME",
+    "ThemeColors",
+    "UiThemeMode",
     "apply_ios_palette",
+    "apply_theme_palette",
+    "coerce_theme_mode",
+    "get_theme_colors",
+    "style_sheet_for",
 ]

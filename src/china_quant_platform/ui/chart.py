@@ -6,10 +6,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from china_quant_platform.ui.state import ChartOverlay, ChartState
 from china_quant_platform.ui.theme import (
-    IOS_BLUE,
-    IOS_CARD,
-    IOS_SECONDARY_TEXT,
-    IOS_SEPARATOR_SOFT,
+    DEFAULT_THEME_MODE,
+    UiThemeMode,
+    get_theme_colors,
 )
 
 
@@ -19,6 +18,7 @@ class PriceChartWidget(QtWidgets.QWidget):
         self.setObjectName("priceChart")
         self.setMinimumHeight(260)
         self._chart_state = ChartState()
+        self._theme_mode = DEFAULT_THEME_MODE
 
     @property
     def chart_state(self) -> ChartState:
@@ -32,18 +32,24 @@ class PriceChartWidget(QtWidgets.QWidget):
         self._chart_state = chart_state
         self.update()
 
+    def set_theme_mode(self, theme_mode: UiThemeMode) -> None:
+        self._theme_mode = theme_mode
+        self.setProperty("themeMode", theme_mode.value)
+        self.update()
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         super().paintEvent(event)
+        colors = get_theme_colors(self._theme_mode)
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         rect = self.rect().adjusted(12, 12, -12, -12)
-        painter.setPen(QtGui.QPen(QtGui.QColor(IOS_SEPARATOR_SOFT), 1))
-        painter.setBrush(QtGui.QColor(IOS_CARD))
+        painter.setPen(QtGui.QPen(QtGui.QColor(colors.separator_soft), 1))
+        painter.setBrush(QtGui.QColor(colors.card))
         painter.drawRoundedRect(rect, 8, 8)
 
         points = self._chart_state.points
         if not points:
-            painter.setPen(QtGui.QColor(IOS_SECONDARY_TEXT))
+            painter.setPen(QtGui.QColor(colors.secondary_text))
             painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, "暂无图表数据")
             return
 
@@ -72,14 +78,15 @@ class PriceChartWidget(QtWidgets.QWidget):
             else:
                 path.lineTo(x, y)
 
-        painter.setPen(QtGui.QPen(QtGui.QColor(IOS_BLUE), 2))
+        painter.setPen(QtGui.QPen(QtGui.QColor(colors.blue), 2))
         painter.drawPath(path)
 
         if ChartOverlay.VOLUME in self._chart_state.overlays:
             self._draw_volume(painter, volume_rect)
 
     def _draw_grid(self, painter: QtGui.QPainter, rect: QtCore.QRect) -> None:
-        painter.setPen(QtGui.QPen(QtGui.QColor("#EFEFF4"), 1))
+        colors = get_theme_colors(self._theme_mode)
+        painter.setPen(QtGui.QPen(QtGui.QColor(colors.chart_grid), 1))
         for step in range(1, 4):
             y = rect.top() + rect.height() * step / 4
             painter.drawLine(QtCore.QPointF(rect.left(), y), QtCore.QPointF(rect.right(), y))
@@ -91,7 +98,8 @@ class PriceChartWidget(QtWidgets.QWidget):
             return
 
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.setBrush(QtGui.QColor("#D1D1D6"))
+        colors = get_theme_colors(self._theme_mode)
+        painter.setBrush(QtGui.QColor(colors.chart_volume))
         bar_width = max(1, rect.width() / max(len(points), 1) * 0.7)
         for index, point in enumerate(points):
             x = _scaled_x(index, len(points), rect) - bar_width / 2

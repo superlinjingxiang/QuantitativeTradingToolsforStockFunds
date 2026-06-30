@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from PySide6 import QtCore, QtWidgets
@@ -31,7 +32,13 @@ from china_quant_platform.domain import (
     SecurityRef,
     SecurityStatus,
 )
-from china_quant_platform.ui import ApplicationViewModel, MainWindow, UiRunState, UiTaskStatus
+from china_quant_platform.ui import (
+    ApplicationViewModel,
+    MainWindow,
+    UiRunState,
+    UiTaskStatus,
+    UiThemeMode,
+)
 
 
 def aware_datetime() -> datetime:
@@ -197,6 +204,40 @@ def test_main_window_updates_health_banner(qtbot: Any) -> None:
     assert banner is not None
     assert "INVALID" in banner.text()
     assert banner.property("blocked") is True
+
+
+def test_settings_button_switches_and_persists_theme(qtbot: Any, tmp_path: Path) -> None:
+    settings = QtCore.QSettings(
+        str(tmp_path / "theme.ini"),
+        QtCore.QSettings.Format.IniFormat,
+    )
+    view_model = ApplicationViewModel()
+    window = MainWindow(view_model, settings=settings)
+    qtbot.addWidget(window)
+
+    settings_button = window.findChild(QtWidgets.QToolButton, "settingsButton")
+    assert settings_button is not None
+    menu = settings_button.menu()
+    assert menu is not None
+    actions_by_mode = {action.data(): action for action in menu.actions()}
+
+    assert window.theme_mode is UiThemeMode.DARK
+    assert window.property("themeMode") == UiThemeMode.DARK.value
+    assert window.price_chart.property("themeMode") == UiThemeMode.DARK.value
+    assert actions_by_mode[UiThemeMode.DARK.value].isChecked() is True
+    assert actions_by_mode[UiThemeMode.LIGHT.value].text() == "白色主题"
+
+    actions_by_mode[UiThemeMode.LIGHT.value].trigger()
+
+    assert window.theme_mode is UiThemeMode.LIGHT
+    assert window.property("themeMode") == UiThemeMode.LIGHT.value
+    assert window.price_chart.property("themeMode") == UiThemeMode.LIGHT.value
+    assert settings.value("appearance/theme") == UiThemeMode.LIGHT.value
+
+    actions_by_mode[UiThemeMode.DARK.value].trigger()
+
+    assert window.theme_mode is UiThemeMode.DARK
+    assert settings.value("appearance/theme") == UiThemeMode.DARK.value
 
 
 def test_search_box_debounces_results_and_enter_confirms_selection(qtbot: Any) -> None:

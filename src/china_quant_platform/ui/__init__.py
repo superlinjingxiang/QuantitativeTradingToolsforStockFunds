@@ -23,6 +23,7 @@ from china_quant_platform.ui.state import (
     WatchlistItemState,
     WatchlistPanelState,
 )
+from china_quant_platform.ui.theme import UiThemeMode
 from china_quant_platform.ui.viewmodel import (
     ApplicationViewModel,
     CancellableQtTask,
@@ -50,6 +51,7 @@ __all__ = [
     "UiErrorState",
     "UiRunState",
     "UiTaskStatus",
+    "UiThemeMode",
     "WatchlistGroupState",
     "WatchlistItemState",
     "WatchlistPanelState",
