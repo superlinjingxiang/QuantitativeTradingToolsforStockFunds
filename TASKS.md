@@ -238,3 +238,11 @@
 - 交付：Yahoo chart 分钟/日/周/月 K 线统一兜底；1分/5分/15分/30分/60分周期映射；分钟线超长范围自动缩到 Yahoo 可返回窗口；东方财富分钟线失败回归测试。
 - 验收：东方财富分钟K线抛出 `ssl handshake timed out` 时，`SSE:513300` 的 `30分` 请求仍能返回 Yahoo K 线；数据源失败弹窗不应导致图表保持空白；不得引入真实账号或 token 依赖。
 - 完成证据：2026-06-30 完成 `test_eastmoney_minute_klines_fall_back_to_yahoo` 和重复选择不清空图表回归测试；真实联网诊断 `SSE:513300` / `30分` 返回174根 Yahoo K线；真实GUI截图验证 `SSE:513300` / `周线` / `1年` 在约3秒内显示55个图表点，状态 `HEALTHY`；公开主源短超时、Yahoo兜底长超时与query1/query2备用域名已接入；`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 204项均通过。
+
+### [x] TASK-032——图表价格、涨跌幅与悬停可读性修复
+- 依赖：TASK-010、TASK-028、TASK-031
+- 需求：FR-003、FR-004、FR-005、AC-03
+- 核心定位：修复用户无法从图表直接看出价格单位、最新涨跌和每个点价格的问题；图表体验服务于策略验证，不改变策略、回测或真实下单边界。
+- 交付：价格轴显示 `价格(CNY)` 和关键价位；顶部显示最新价、涨跌额和涨跌幅；成交量柱按涨跌红绿展示；新增涨跌幅趋势柱；折线悬停显示日期、收盘/最新价、涨跌额、涨跌幅、高低价和成交量；实时quote使用昨收价作为涨跌幅基准。
+- 验收：`513300` / `周线` / `1年` 图表能显示 `最新 2.704 +0.036 +1.35%`，悬停最新点显示 `收盘/最新: 2.704` 与 `涨跌: +0.036 (+1.35%)`；红绿成交量和涨跌幅趋势柱可见；不得引入新的图表依赖。
+- 完成证据：2026-06-30 完成 `ChartPointState.reference_price`、`PriceChartWidget` 悬停十字线/提示框、最新涨跌摘要、涨跌幅趋势柱和红绿成交量增强；新增GUI测试覆盖实时quote昨收基准与悬停提示。真实GUI截图 `reports/gui_513300_hover_tooltip.png` 验证55个图表点、状态 `HEALTHY`、最新价 `2.704`、涨跌 `+0.036 (+1.35%)`。`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 205项、`python -m china_quant_platform.release.audit`、PyInstaller打包、exe版本和GUI启动烟雾均通过。

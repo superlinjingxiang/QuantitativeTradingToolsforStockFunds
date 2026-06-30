@@ -80,6 +80,7 @@ class ChartPointState(DomainModel):
     close_price: float
     volume: float
     amount: float
+    reference_price: float | None = None
     is_realtime: bool = False
 
     @classmethod
@@ -104,6 +105,7 @@ class ChartPointState(DomainModel):
             close_price=quote.latest_price,
             volume=quote.volume,
             amount=quote.amount,
+            reference_price=quote.previous_close,
             is_realtime=True,
         )
 

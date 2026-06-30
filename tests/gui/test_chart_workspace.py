@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from china_quant_platform.domain import (
     AdjustmentMode,
@@ -83,6 +83,7 @@ def test_chart_state_loads_bars_and_appends_realtime_quote() -> None:
     view_model.apply_realtime_quote(make_quote(1, 104), generation=generation)
     assert view_model.state.chart.point_count == 3
     assert view_model.state.chart.realtime_update_count == 1
+    assert view_model.state.chart.points[-1].reference_price == 100
 
     view_model.apply_realtime_quote(make_quote(2, 105), generation=generation - 1)
     assert view_model.state.chart.point_count == 3
@@ -159,3 +160,33 @@ def test_chart_workspace_renders_points_and_controls_state(qtbot: Any) -> None:
     assert view_model.state.chart.range_preset is ChartRangePreset.THREE_MONTHS
     assert ChartOverlay.MOVING_AVERAGE in view_model.state.chart.overlays
     assert "点数：2" in window.chart_summary_label.text()
+
+
+def test_chart_hover_shows_price_and_change_pct(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=lambda: aware_datetime())
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+    window.resize(1000, 680)
+    window.show()
+
+    view_model.select_security("SSE:600519")
+    view_model.load_chart_bars(
+        (make_bar(26, 101), make_bar(29, 103)),
+        generation=view_model.state.selection_generation,
+    )
+    view_model.apply_realtime_quote(
+        make_quote(1, 104),
+        generation=view_model.state.selection_generation,
+    )
+    chart = window.findChild(PriceChartWidget, "priceChart")
+    assert chart is not None
+    chart.repaint()
+
+    qtbot.mouseMove(chart, QtCore.QPoint(chart.width() - 110, chart.height() // 2))
+
+    assert chart.hover_index is not None
+    assert "收盘/最新" in chart.toolTip()
+    assert "涨跌:" in chart.toolTip()
+    assert "%" in chart.toolTip()
+    assert "+4.000" in chart.toolTip()
+    assert "+4.00%" in chart.toolTip()

@@ -26,8 +26,14 @@ class PriceChartWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self.setObjectName("priceChart")
         self.setMinimumHeight(260)
+        self.setMouseTracking(True)
         self._chart_state = ChartState()
         self._theme_mode = DEFAULT_THEME_MODE
+        self._hover_index: int | None = None
+        self._last_data_price_rect = QtCore.QRectF()
+        self._last_data_x_rect = QtCore.QRectF()
+        self._last_min_price = 0.0
+        self._last_max_price = 0.0
 
     @property
     def chart_state(self) -> ChartState:
@@ -39,12 +45,53 @@ class PriceChartWidget(QtWidgets.QWidget):
 
     def set_chart_state(self, chart_state: ChartState) -> None:
         self._chart_state = chart_state
+        if self._hover_index is not None and self._hover_index >= len(chart_state.points):
+            self._hover_index = None
         self.update()
 
     def set_theme_mode(self, theme_mode: UiThemeMode) -> None:
         self._theme_mode = theme_mode
         self.setProperty("themeMode", theme_mode.value)
         self.update()
+
+    @property
+    def hover_index(self) -> int | None:
+        return self._hover_index
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        super().mouseMoveEvent(event)
+        if not self._chart_state.points or self._last_data_x_rect.isNull():
+            return
+        if not self._last_data_x_rect.adjusted(-12, -24, 12, 24).contains(event.position()):
+            if self._hover_index is not None:
+                self._hover_index = None
+                self.setToolTip("")
+                QtWidgets.QToolTip.hideText()
+                self.update()
+            return
+        index = _nearest_index_for_x(
+            event.position().x(),
+            len(self._chart_state.points),
+            self._last_data_x_rect,
+        )
+        if index != self._hover_index:
+            self._hover_index = index
+            self.update()
+        tooltip = _hover_text(self._chart_state.points, index, self._chart_state.interval.value)
+        self.setToolTip(tooltip)
+        QtWidgets.QToolTip.showText(
+            event.globalPosition().toPoint(),
+            tooltip,
+            self,
+        )
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:
+        super().leaveEvent(event)
+        if self._hover_index is not None:
+            self._hover_index = None
+            self.setToolTip("")
+            QtWidgets.QToolTip.hideText()
+            self.update()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         super().paintEvent(event)
@@ -71,20 +118,28 @@ class PriceChartWidget(QtWidgets.QWidget):
         has_volume = ChartOverlay.VOLUME in self._chart_state.overlays
         has_forecast = ChartOverlay.FORECAST in self._chart_state.overlays and len(points) >= 2
         if has_volume:
+            lower_gap = 8
             price_rect = QtCore.QRectF(
                 plot_rect.left(),
                 plot_rect.top(),
                 plot_rect.width(),
-                plot_rect.height() * 0.72,
+                plot_rect.height() * 0.62,
+            )
+            trend_rect = QtCore.QRectF(
+                plot_rect.left(),
+                price_rect.bottom() + lower_gap,
+                plot_rect.width(),
+                plot_rect.height() * 0.15,
             )
             volume_rect = QtCore.QRectF(
                 plot_rect.left(),
-                price_rect.bottom() + 10,
+                trend_rect.bottom() + lower_gap,
                 plot_rect.width(),
-                plot_rect.bottom() - price_rect.bottom() - 10,
+                plot_rect.bottom() - trend_rect.bottom() - lower_gap,
             )
         else:
             price_rect = QtCore.QRectF(plot_rect)
+            trend_rect = QtCore.QRectF()
             volume_rect = QtCore.QRectF()
 
         data_price_rect = (
@@ -94,6 +149,11 @@ class PriceChartWidget(QtWidgets.QWidget):
             volume_rect.adjusted(0, 0, -_FORECAST_WIDTH, 0)
             if has_forecast and has_volume
             else volume_rect
+        )
+        data_trend_rect = (
+            trend_rect.adjusted(0, 0, -_FORECAST_WIDTH, 0)
+            if has_forecast and has_volume
+            else trend_rect
         )
         prices = [point.low_price for point in points] + [point.high_price for point in points]
         min_price = min(prices)
@@ -105,6 +165,11 @@ class PriceChartWidget(QtWidgets.QWidget):
             padding = (max_price - min_price) * 0.05
             min_price -= padding
             max_price += padding
+
+        self._last_data_price_rect = QtCore.QRectF(data_price_rect)
+        self._last_data_x_rect = QtCore.QRectF(data_price_rect)
+        self._last_min_price = min_price
+        self._last_max_price = max_price
 
         self._draw_axes_and_grid(
             painter,
@@ -148,7 +213,16 @@ class PriceChartWidget(QtWidgets.QWidget):
             )
 
         if has_volume:
+            self._draw_change_histogram(painter, trend_rect, data_trend_rect)
             self._draw_volume(painter, volume_rect, data_volume_rect)
+
+        self._draw_latest_summary(painter, QtCore.QRectF(rect), data_price_rect)
+        self._draw_hover_overlay(
+            painter,
+            data_price_rect,
+            min_price=min_price,
+            max_price=max_price,
+        )
 
     def _draw_axes_and_grid(
         self,
@@ -335,6 +409,132 @@ class PriceChartWidget(QtWidgets.QWidget):
                 )
         painter.setFont(original_font)
 
+    def _draw_change_histogram(
+        self,
+        painter: QtGui.QPainter,
+        axis_rect: QtCore.QRectF,
+        data_rect: QtCore.QRectF,
+    ) -> None:
+        points = self._chart_state.points
+        changes = [_point_change_pct(points, index) for index in range(len(points))]
+        max_abs_change = max((abs(value) for value in changes), default=0.0)
+        if max_abs_change <= 0:
+            max_abs_change = 0.01
+
+        colors = get_theme_colors(self._theme_mode)
+        zero_y = axis_rect.center().y()
+        painter.setPen(QtGui.QPen(QtGui.QColor(colors.chart_grid), 1))
+        painter.drawLine(
+            QtCore.QPointF(axis_rect.left(), zero_y),
+            QtCore.QPointF(axis_rect.right(), zero_y),
+        )
+        painter.setPen(QtGui.QColor(colors.secondary_text))
+        painter.drawText(
+            QtCore.QRectF(axis_rect.left() - _CHART_MARGIN_LEFT + 8, axis_rect.top(), 58, 18),
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            f"{max_abs_change * 100:.1f}%",
+        )
+        painter.drawText(
+            QtCore.QRectF(
+                axis_rect.left() - _CHART_MARGIN_LEFT + 8, axis_rect.bottom() - 18, 58, 18
+            ),
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            "涨跌幅",
+        )
+
+        bar_width = max(2, data_rect.width() / max(len(points), 1) * 0.62)
+        for index, change in enumerate(changes):
+            x = _scaled_x(index, len(points), data_rect) - bar_width / 2
+            normalized = min(1.0, abs(change) / max_abs_change)
+            height = max(1.0, axis_rect.height() * 0.48 * normalized)
+            if change >= 0:
+                y = zero_y - height
+                color = colors.red
+            else:
+                y = zero_y
+                color = colors.green
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
+            painter.setBrush(QtGui.QColor(color))
+            painter.drawRect(QtCore.QRectF(x, y, bar_width, height))
+
+    def _draw_latest_summary(
+        self,
+        painter: QtGui.QPainter,
+        card_rect: QtCore.QRectF,
+        data_rect: QtCore.QRectF,
+    ) -> None:
+        points = self._chart_state.points
+        if not points:
+            return
+        colors = get_theme_colors(self._theme_mode)
+        latest = points[-1]
+        change = _point_change(points, len(points) - 1)
+        pct = _point_change_pct(points, len(points) - 1)
+        trend_color = colors.red if change >= 0 else colors.green
+        summary = f"最新 {latest.close_price:.3f}  {change:+.3f}  {pct * 100:+.2f}%"
+        font = QtGui.QFont(self.font())
+        font.setPointSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor(trend_color))
+        painter.drawText(
+            QtCore.QRectF(data_rect.left(), card_rect.top() + 8, min(280, data_rect.width()), 22),
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            summary,
+        )
+
+    def _draw_hover_overlay(
+        self,
+        painter: QtGui.QPainter,
+        rect: QtCore.QRectF,
+        *,
+        min_price: float,
+        max_price: float,
+    ) -> None:
+        index = self._hover_index
+        points = self._chart_state.points
+        if index is None or not (0 <= index < len(points)):
+            return
+        colors = get_theme_colors(self._theme_mode)
+        point = points[index]
+        x = _scaled_x(index, len(points), rect)
+        y = _scaled_y(point.close_price, min_price, max_price, rect)
+
+        crosshair = QtGui.QPen(QtGui.QColor(colors.secondary_text), 1)
+        crosshair.setStyle(QtCore.Qt.PenStyle.DashLine)
+        painter.setPen(crosshair)
+        painter.drawLine(QtCore.QPointF(x, rect.top()), QtCore.QPointF(x, rect.bottom()))
+        painter.drawLine(QtCore.QPointF(rect.left(), y), QtCore.QPointF(rect.right(), y))
+        painter.setPen(QtGui.QPen(QtGui.QColor(colors.blue), 2))
+        painter.setBrush(QtGui.QColor(colors.card))
+        painter.drawEllipse(QtCore.QPointF(x, y), 4, 4)
+
+        text = _hover_text(points, index, self._chart_state.interval.value)
+        font = QtGui.QFont(self.font())
+        font.setPointSize(8)
+        painter.setFont(font)
+        text_rect = QtGui.QFontMetrics(font).boundingRect(
+            QtCore.QRect(0, 0, 260, 120),
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.TextFlag.TextWordWrap,
+            text,
+        )
+        box_width = max(154, text_rect.width() + 18)
+        box_height = text_rect.height() + 14
+        box_x = x + 12 if x + box_width + 12 < rect.right() else x - box_width - 12
+        box_y = y - box_height - 12 if y - box_height - 12 > rect.top() else y + 12
+        box_rect = QtCore.QRectF(box_x, box_y, box_width, box_height)
+        fill = QtGui.QColor(colors.raised)
+        fill.setAlpha(238)
+        painter.setPen(QtGui.QPen(QtGui.QColor(colors.separator), 1))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(box_rect, 6, 6)
+        painter.setPen(QtGui.QColor(colors.text))
+        painter.drawText(
+            box_rect.adjusted(9, 7, -9, -7),
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
+            text,
+        )
+
     def _draw_signal_markers(
         self,
         painter: QtGui.QPainter,
@@ -450,6 +650,50 @@ def _average_abs_move(points: tuple[ChartPointState, ...]) -> float:
         for index in range(1, len(points))
     ]
     return sum(moves) / len(moves)
+
+
+def _point_change(points: tuple[ChartPointState, ...], index: int) -> float:
+    point = points[index]
+    return point.close_price - _point_reference_price(points, index)
+
+
+def _point_change_pct(points: tuple[ChartPointState, ...], index: int) -> float:
+    point = points[index]
+    base = _point_reference_price(points, index)
+    if base == 0:
+        return 0.0
+    return (point.close_price - base) / base
+
+
+def _point_reference_price(points: tuple[ChartPointState, ...], index: int) -> float:
+    point = points[index]
+    if point.reference_price is not None:
+        return point.reference_price
+    if index <= 0:
+        return point.open_price
+    return points[index - 1].close_price
+
+
+def _nearest_index_for_x(x: float, count: int, rect: QtCore.QRectF) -> int:
+    if count <= 1 or rect.width() <= 0:
+        return 0
+    ratio = (x - rect.left()) / rect.width()
+    return max(0, min(count - 1, round(ratio * (count - 1))))
+
+
+def _hover_text(points: tuple[ChartPointState, ...], index: int, interval: str) -> str:
+    point = points[index]
+    change = _point_change(points, index)
+    pct = _point_change_pct(points, index)
+    return "\n".join(
+        (
+            _time_axis_label(point.time_label, interval),
+            f"收盘/最新: {point.close_price:.3f}",
+            f"涨跌: {change:+.3f} ({pct * 100:+.2f}%)",
+            f"高/低: {point.high_price:.3f} / {point.low_price:.3f}",
+            f"量: {_compact_number(point.volume)}",
+        )
+    )
 
 
 def _scaled_x(index: int, count: int, rect: QtCore.QRectF) -> float:
