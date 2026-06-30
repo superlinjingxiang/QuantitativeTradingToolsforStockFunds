@@ -5,7 +5,10 @@ from __future__ import annotations
 import subprocess
 import sys
 
+from pytest import MonkeyPatch
+
 import china_quant_platform
+from china_quant_platform.__main__ import _is_packaged_app_without_args
 
 
 def test_package_exposes_public_foundation_api() -> None:
@@ -25,3 +28,12 @@ def test_module_version_command() -> None:
     )
 
     assert result.stdout.strip() == china_quant_platform.__version__
+
+
+def test_packaged_exe_without_args_defaults_to_gui(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "argv", ["china-quant-platform.exe"])
+
+    assert _is_packaged_app_without_args(None) is True
+    assert _is_packaged_app_without_args(()) is True
+    assert _is_packaged_app_without_args(("--version",)) is False

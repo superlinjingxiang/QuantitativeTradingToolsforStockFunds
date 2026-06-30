@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 
 from china_quant_platform import __version__
@@ -28,6 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    if _is_packaged_app_without_args(argv):
+        from china_quant_platform.ui import run_gui
+
+        return run_gui()
+
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.version:
@@ -43,6 +49,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"china_quant_platform {__version__}")
     print(f"project_root={context.project_root}")
     return 0
+
+
+def _is_packaged_app_without_args(argv: Sequence[str] | None) -> bool:
+    if not getattr(sys, "frozen", False):
+        return False
+    if argv is None:
+        return len(sys.argv) <= 1
+    return len(argv) == 0
 
 
 if __name__ == "__main__":
