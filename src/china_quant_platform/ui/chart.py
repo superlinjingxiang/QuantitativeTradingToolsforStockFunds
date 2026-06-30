@@ -5,6 +5,12 @@ from __future__ import annotations
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from china_quant_platform.ui.state import ChartOverlay, ChartState
+from china_quant_platform.ui.theme import (
+    IOS_BLUE,
+    IOS_CARD,
+    IOS_SECONDARY_TEXT,
+    IOS_SEPARATOR_SOFT,
+)
 
 
 class PriceChartWidget(QtWidgets.QWidget):
@@ -31,13 +37,13 @@ class PriceChartWidget(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         rect = self.rect().adjusted(12, 12, -12, -12)
-        painter.fillRect(rect, QtGui.QColor("#ffffff"))
-        painter.setPen(QtGui.QPen(QtGui.QColor("#c7ccd4"), 1))
-        painter.drawRect(rect)
+        painter.setPen(QtGui.QPen(QtGui.QColor(IOS_SEPARATOR_SOFT), 1))
+        painter.setBrush(QtGui.QColor(IOS_CARD))
+        painter.drawRoundedRect(rect, 8, 8)
 
         points = self._chart_state.points
         if not points:
-            painter.setPen(QtGui.QColor("#4b5563"))
+            painter.setPen(QtGui.QColor(IOS_SECONDARY_TEXT))
             painter.drawText(rect, QtCore.Qt.AlignmentFlag.AlignCenter, "暂无图表数据")
             return
 
@@ -55,6 +61,8 @@ class PriceChartWidget(QtWidgets.QWidget):
             min_price -= 1
             max_price += 1
 
+        self._draw_grid(painter, price_rect)
+
         path = QtGui.QPainterPath()
         for index, point in enumerate(points):
             x = _scaled_x(index, len(points), price_rect)
@@ -64,11 +72,17 @@ class PriceChartWidget(QtWidgets.QWidget):
             else:
                 path.lineTo(x, y)
 
-        painter.setPen(QtGui.QPen(QtGui.QColor("#1f6feb"), 2))
+        painter.setPen(QtGui.QPen(QtGui.QColor(IOS_BLUE), 2))
         painter.drawPath(path)
 
         if ChartOverlay.VOLUME in self._chart_state.overlays:
             self._draw_volume(painter, volume_rect)
+
+    def _draw_grid(self, painter: QtGui.QPainter, rect: QtCore.QRect) -> None:
+        painter.setPen(QtGui.QPen(QtGui.QColor("#EFEFF4"), 1))
+        for step in range(1, 4):
+            y = rect.top() + rect.height() * step / 4
+            painter.drawLine(QtCore.QPointF(rect.left(), y), QtCore.QPointF(rect.right(), y))
 
     def _draw_volume(self, painter: QtGui.QPainter, rect: QtCore.QRect) -> None:
         points = self._chart_state.points
@@ -77,7 +91,7 @@ class PriceChartWidget(QtWidgets.QWidget):
             return
 
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
-        painter.setBrush(QtGui.QColor("#9ca3af"))
+        painter.setBrush(QtGui.QColor("#D1D1D6"))
         bar_width = max(1, rect.width() / max(len(points), 1) * 0.7)
         for index, point in enumerate(points):
             x = _scaled_x(index, len(points), rect) - bar_width / 2

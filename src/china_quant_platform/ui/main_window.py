@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from china_quant_platform.domain import AdjustmentMode, BarInterval
 from china_quant_platform.ui.chart import PriceChartWidget
 from china_quant_platform.ui.state import AppUiState, ChartOverlay, ChartRangePreset, UiRunState
+from china_quant_platform.ui.theme import IOS_STYLE_SHEET, apply_ios_palette
 from china_quant_platform.ui.viewmodel import ApplicationViewModel
 
 
@@ -24,6 +25,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.view_model = view_model or ApplicationViewModel(self)
         self.setWindowTitle("中国股票与基金量化分析平台")
         self.resize(1280, 820)
+        self.setObjectName("mainWindow")
 
         self.search_input = QtWidgets.QLineEdit()
         self.search_input.setObjectName("securitySearch")
@@ -163,6 +165,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.setCentralWidget(self._build_central_widget())
         self.statusBar().addPermanentWidget(self.status_label)
+        self.setStyleSheet(IOS_STYLE_SHEET)
         self.view_model.state_changed.connect(self.render_state)
         self.render_state(self.view_model.state)
 
@@ -292,6 +295,11 @@ class MainWindow(QtWidgets.QMainWindow):
         label = QtWidgets.QLabel()
         label.setObjectName(object_name)
         label.setWordWrap(True)
+        label.setMinimumHeight(170)
+        label.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
         label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
         return label
@@ -390,18 +398,20 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_central_widget(self) -> QtWidgets.QWidget:
         root = QtWidgets.QWidget()
+        root.setObjectName("appRoot")
         layout = QtWidgets.QVBoxLayout(root)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 12)
+        layout.setSpacing(12)
 
         search_box = QtWidgets.QWidget()
         search_layout = QtWidgets.QVBoxLayout(search_box)
         search_layout.setContentsMargins(0, 0, 0, 0)
-        search_layout.setSpacing(4)
+        search_layout.setSpacing(6)
         search_layout.addWidget(self.search_input)
         search_layout.addWidget(self.search_results)
 
         top_bar = QtWidgets.QHBoxLayout()
+        top_bar.setSpacing(10)
         top_bar.addWidget(search_box, stretch=2)
         top_bar.addWidget(self.health_banner, stretch=3)
         top_bar.addWidget(self.market_time_label, stretch=1)
@@ -419,28 +429,15 @@ class MainWindow(QtWidgets.QMainWindow):
         splitter.setStretchFactor(2, 2)
         layout.addWidget(splitter, stretch=1)
         layout.addWidget(self.tabs)
-
-        root.setStyleSheet(
-            """
-            QLabel#healthBanner {
-                border: 1px solid #8a8f98;
-                border-radius: 4px;
-                padding: 4px 10px;
-                background: #eef6f0;
-                color: #14351f;
-            }
-            QLabel#healthBanner[blocked="true"] {
-                background: #fde8e8;
-                color: #5b1111;
-                border-color: #c24141;
-            }
-            """
-        )
         return root
 
     def _left_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
+        panel.setObjectName("leftPanel")
+        panel.setMinimumWidth(210)
         layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
         for title, widget in (
             ("自选列表", self.watchlist),
             ("指数", self.market_indices),
@@ -456,8 +453,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _center_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
+        panel.setObjectName("centerPanel")
+        panel.setMinimumWidth(560)
         layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
         toolbar = QtWidgets.QHBoxLayout()
+        toolbar.setSpacing(8)
         toolbar.addWidget(self.interval_combo)
         toolbar.addWidget(self.range_combo)
         toolbar.addWidget(self.adjustment_combo)
@@ -473,22 +475,27 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _right_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
+        panel.setObjectName("rightPanel")
+        panel.setMinimumWidth(230)
         layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
         for title, label in (
             ("当前策略", self.strategy_panel_label),
             ("预期走势", self.forecast_panel_label),
             ("操作与风险", self.operation_panel_label),
         ):
             group = QtWidgets.QGroupBox(title)
-            group.setMinimumHeight(140)
+            group.setMinimumHeight(210)
             group_layout = QtWidgets.QVBoxLayout(group)
             group_layout.addWidget(label)
-            layout.addWidget(group)
+            layout.addWidget(group, stretch=1)
         return panel
 
     def _placeholder_page(self, title: str) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
         label = QtWidgets.QLabel(title)
         label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
@@ -497,8 +504,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def _knowledge_page(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
         left = QtWidgets.QWidget()
         left_layout = QtWidgets.QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
         left_layout.addWidget(self.knowledge_search)
         left_layout.addWidget(self.knowledge_topics)
         layout.addWidget(left, stretch=1)
@@ -509,8 +520,11 @@ class MainWindow(QtWidgets.QMainWindow):
 def create_application(argv: Sequence[str] | None = None) -> QtWidgets.QApplication:
     app = QtWidgets.QApplication.instance()
     if app is not None:
-        return cast(QtWidgets.QApplication, app)
-    return QtWidgets.QApplication(list(argv or sys.argv))
+        application = cast(QtWidgets.QApplication, app)
+    else:
+        application = QtWidgets.QApplication(list(argv or sys.argv))
+    apply_ios_palette(application)
+    return application
 
 
 def run_gui(argv: Sequence[str] | None = None) -> int:
