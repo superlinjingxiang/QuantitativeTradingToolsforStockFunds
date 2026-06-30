@@ -126,6 +126,55 @@ def test_eastmoney_daily_klines_fall_back_to_yahoo(monkeypatch: MonkeyPatch) -> 
     assert bars[0].volume == 1_676_431
 
 
+def test_eastmoney_minute_klines_fall_back_to_yahoo(monkeypatch: MonkeyPatch) -> None:
+    provider = EastmoneyMarketDataProvider()
+    yahoo_intervals: list[object] = []
+
+    def fake_get_json(url: str, params: Mapping[str, object]) -> Mapping[str, Any]:
+        if "eastmoney.com" in url:
+            raise DataUnavailable("ssl handshake timed out")
+        yahoo_intervals.append(params["interval"])
+        return {
+            "chart": {
+                "result": [
+                    {
+                        "timestamp": [1782783000, 1782784800],
+                        "indicators": {
+                            "quote": [
+                                {
+                                    "open": [2.703, 2.704],
+                                    "high": [2.719, 2.713],
+                                    "low": [2.696, 2.701],
+                                    "close": [2.704, 2.711],
+                                    "volume": [320_000, 280_000],
+                                }
+                            ]
+                        },
+                    }
+                ],
+                "error": None,
+            }
+        }
+
+    monkeypatch.setattr(provider, "_get_json", fake_get_json)
+    request = BarsRequest(
+        security_id="SSE:513300",
+        interval=BarInterval.THIRTY_MINUTES,
+        start_time=datetime(2026, 6, 30, tzinfo=UTC),
+        end_time=datetime(2026, 7, 1, tzinfo=UTC),
+        adjustment=AdjustmentMode.NONE,
+    )
+
+    bars = asyncio.run(provider.get_bars(request))
+
+    assert yahoo_intervals == ["30m"]
+    assert len(bars) == 2
+    assert bars[0].provider == "yahoo"
+    assert bars[0].interval is BarInterval.THIRTY_MINUTES
+    assert bars[0].close_price == 2.704
+    assert bars[0].end_time > bars[0].start_time
+
+
 def test_eastmoney_quote_falls_back_to_yahoo(monkeypatch: MonkeyPatch) -> None:
     provider = EastmoneyMarketDataProvider()
 

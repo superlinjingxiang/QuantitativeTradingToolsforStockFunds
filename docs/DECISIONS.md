@@ -317,3 +317,13 @@
 - 影响：GUI启动默认使用 provider 工厂；后续可以继续接入 Tushare、AkShare 或本地行情缓存而不改 ViewModel；数据健康和策略证据仍需保留 provider 来源。
 - 受影响的需求：TASK-030、FR-001、FR-003、FR-004、FR-020。
 - 所需测试/迁移：同花顺配置读取、同花顺quote/K线解析、多源失败切换、默认provider优先级、凭据扫描和发布审计。
+
+### ADR-032——分钟K线失败时使用Yahoo intraday兜底
+- 日期：2026-06-30
+- 状态：已接受
+- 背景：东方财富 `push2his` 分钟K线接口会出现 SSL 握手超时，导致用户选择 `30分` 后 `513300` 已识别但图表无数据。此前 Yahoo 兜底只覆盖日线和quote，无法修复分钟周期空白。
+- 决策：将 Eastmoney Provider 的 K 线兜底统一为 Yahoo chart；`1m/5m/15m/30m/60m` 使用 Yahoo intraday interval，日/周/月分别映射 `1d/1wk/1mo`。分钟线范围超过 Yahoo 可返回窗口时，自动截取最近可用窗口，优先返回可验证行情而不是空白失败。
+- 已考虑的替代方案：UI强制降回日线，或只提示用户改周期。强制降级会掩盖用户当前周期选择；只提示不解决策略查看所需的行情输入。
+- 影响：公开源不稳定时，分钟图仍可显示最近可用K线；数据来源继续保存在 `provider` 和 `schema_version` 中，后续证据层可区分 Eastmoney 与 Yahoo。
+- 受影响的需求：TASK-031、FR-001、FR-003、FR-004、FR-021。
+- 所需测试/迁移：分钟K线Yahoo兜底单元测试、真实联网 `513300` / `30分` 诊断、全量ruff/mypy/pytest回归。

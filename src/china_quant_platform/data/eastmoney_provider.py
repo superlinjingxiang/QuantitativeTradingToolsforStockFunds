@@ -44,6 +44,25 @@ KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 QUOTE_FIELDS = "f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f86"
 EASTMONEY_UT = "fa5fd1943c7b386f172d6893dbfba10b"
+YAHOO_INTERVALS = {
+    BarInterval.TICK: "1m",
+    BarInterval.ONE_MINUTE: "1m",
+    BarInterval.FIVE_MINUTES: "5m",
+    BarInterval.FIFTEEN_MINUTES: "15m",
+    BarInterval.THIRTY_MINUTES: "30m",
+    BarInterval.SIXTY_MINUTES: "60m",
+    BarInterval.DAILY: "1d",
+    BarInterval.WEEKLY: "1wk",
+    BarInterval.MONTHLY: "1mo",
+}
+YAHOO_INTRADAY_MAX_LOOKBACK = {
+    BarInterval.TICK: timedelta(days=7),
+    BarInterval.ONE_MINUTE: timedelta(days=7),
+    BarInterval.FIVE_MINUTES: timedelta(days=60),
+    BarInterval.FIFTEEN_MINUTES: timedelta(days=60),
+    BarInterval.THIRTY_MINUTES: timedelta(days=60),
+    BarInterval.SIXTY_MINUTES: timedelta(days=60),
+}
 
 EASTMONEY_CAPABILITIES = frozenset(
     {
@@ -140,9 +159,7 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
             if not isinstance(raw_klines, list):
                 raise DataUnavailable(f"Eastmoney returned malformed K-line data for {secid}")
         except DataUnavailable:
-            if request.interval is BarInterval.DAILY:
-                return self._get_yahoo_daily_bars(request)
-            raise
+            return self._get_yahoo_bars(request)
 
         bars = [
             _bar_from_kline(
@@ -236,14 +253,15 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
             raise DataUnavailable(f"Eastmoney returned non-object JSON for {full_url}")
         return parsed
 
-    def _get_yahoo_daily_bars(self, request: BarsRequest) -> list[Bar]:
+    def _get_yahoo_bars(self, request: BarsRequest) -> list[Bar]:
         symbol = _security_id_to_yahoo_symbol(request.security_id)
+        start_time = _yahoo_period_start(request)
         response = self._get_json(
             YAHOO_CHART_URL.format(symbol=symbol),
             {
-                "period1": int(request.start_time.timestamp()),
+                "period1": int(start_time.timestamp()),
                 "period2": int(request.end_time.timestamp()),
-                "interval": "1d",
+                "interval": _yahoo_interval(request.interval),
                 "events": "history",
                 "includeAdjustedClose": "true",
             },
@@ -289,15 +307,16 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
                 else 1.0
             )
             source_time = datetime.fromtimestamp(raw_timestamp, tz=CHINA_TZ)
-            trade_date = source_time.date()
-            start_time = datetime.combine(trade_date, time(9, 30), tzinfo=CHINA_TZ)
-            end_time = datetime.combine(trade_date, time(15, 0), tzinfo=CHINA_TZ)
+            bar_start_time, bar_end_time, trade_date = _yahoo_bar_window(
+                source_time,
+                request.interval,
+            )
             bars.append(
                 Bar(
                     security_id=request.security_id,
-                    interval=BarInterval.DAILY,
-                    start_time=start_time,
-                    end_time=end_time,
+                    interval=request.interval,
+                    start_time=bar_start_time,
+                    end_time=bar_end_time,
                     trade_date=trade_date,
                     open_price=open_price * ratio,
                     high_price=high_price * ratio,
@@ -308,8 +327,8 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
                     adjustment=request.adjustment,
                     provider="yahoo",
                     schema_version="yahoo.chart.v8.fallback",
-                    source_time=end_time,
-                    observed_at=end_time,
+                    source_time=bar_end_time,
+                    observed_at=bar_end_time,
                     received_at=datetime.now(tz=CHINA_TZ),
                     quality_status=RecordQualityStatus.OK,
                 )
@@ -438,6 +457,34 @@ def _security_id_to_yahoo_symbol(security_id: str) -> str:
     if market == "0":
         return f"{code}.SZ"
     raise DataUnavailable(f"Cannot convert security_id {security_id!r} to Yahoo symbol")
+
+
+def _yahoo_period_start(request: BarsRequest) -> datetime:
+    max_lookback = YAHOO_INTRADAY_MAX_LOOKBACK.get(request.interval)
+    if max_lookback is None:
+        return request.start_time
+    return max(request.start_time, request.end_time - max_lookback)
+
+
+def _yahoo_interval(interval: BarInterval) -> str:
+    try:
+        return YAHOO_INTERVALS[interval]
+    except KeyError as exc:
+        raise DataUnavailable(f"Yahoo does not support interval {interval.value}") from exc
+
+
+def _yahoo_bar_window(
+    source_time: datetime,
+    interval: BarInterval,
+) -> tuple[datetime, datetime, date]:
+    if interval in {BarInterval.DAILY, BarInterval.WEEKLY, BarInterval.MONTHLY}:
+        trade_date = source_time.date()
+        start_time = datetime.combine(trade_date, time(9, 30), tzinfo=CHINA_TZ)
+        end_time = datetime.combine(trade_date, time(15, 0), tzinfo=CHINA_TZ)
+        return start_time, end_time, trade_date
+    start_time = source_time
+    end_time = start_time + timedelta(minutes=_interval_minutes(interval))
+    return start_time, end_time, start_time.date()
 
 
 def _secid_to_security_id(secid: str) -> str:

@@ -230,3 +230,11 @@
 - 交付：`TonghuashunIfindMarketDataProvider`、`TonghuashunIfindConfig`、`MultiSourceMarketDataProvider`、默认 provider 工厂、`.env.example` 同花顺配置项、GUI 默认多源启动链路。
 - 验收：有 `CQP_THS_IFIND_REFRESH_TOKEN` 时 provider 链首位为 `tonghuashun_ifind`；无 token 时自动跳过同花顺；同花顺请求失败时路由到下一数据源；不得提交真实 token。
 - 完成证据：2026-06-30 完成同花顺 iFinD HTTP适配器、token/.env配置读取、多源路由和默认工厂；新增 `test_tonghuashun_provider.py` 与 `test_multi_source_provider.py` 覆盖配置、代码识别、quote/K线映射、失败切换和默认优先级；`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 202项、`python -m china_quant_platform.release.audit`、PyInstaller打包、exe版本和GUI启动烟雾均通过。
+
+### [x] TASK-031——分钟K线联网兜底修复
+- 依赖：TASK-029、TASK-030
+- 需求：FR-001、FR-003、FR-004、FR-021
+- 核心定位：修复 `513300` 在 `30分` 等分钟周期下东方财富K线 SSL 握手超时导致图表无数据的问题；分钟线不得因为单一公开接口失败而阻断策略查看。
+- 交付：Yahoo chart 分钟/日/周/月 K 线统一兜底；1分/5分/15分/30分/60分周期映射；分钟线超长范围自动缩到 Yahoo 可返回窗口；东方财富分钟线失败回归测试。
+- 验收：东方财富分钟K线抛出 `ssl handshake timed out` 时，`SSE:513300` 的 `30分` 请求仍能返回 Yahoo K 线；数据源失败弹窗不应导致图表保持空白；不得引入真实账号或 token 依赖。
+- 完成证据：2026-06-30 完成 `test_eastmoney_minute_klines_fall_back_to_yahoo`，真实联网诊断 `SSE:513300` / `30分` 返回174根 Yahoo K线；`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 203项均通过。
