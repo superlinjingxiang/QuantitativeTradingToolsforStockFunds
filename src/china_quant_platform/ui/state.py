@@ -374,7 +374,7 @@ class AppUiState(DomainModel):
     @property
     def banner_text(self) -> str:
         if self.data_health is None:
-            return "数据健康：未连接"
+            return "数据健康：等待行情"
         issue_text = "；".join(self.data_health.issues)
         if issue_text:
             return f"数据健康：{self.data_health.status.value}｜{issue_text}"

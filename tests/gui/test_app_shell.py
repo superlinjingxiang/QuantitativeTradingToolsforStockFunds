@@ -2,12 +2,35 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 from PySide6 import QtCore, QtWidgets
 
-from china_quant_platform.domain import DataHealth, DataHealthStatus, DataStale
+from china_quant_platform.data import (
+    BarsRequest,
+    CorporateActionRequest,
+    FundNavRequest,
+    ProviderCapabilities,
+    ProviderCapability,
+)
+from china_quant_platform.domain import (
+    AssetType,
+    Bar,
+    BarInterval,
+    CorporateAction,
+    Currency,
+    DataHealth,
+    DataHealthStatus,
+    DataStale,
+    Exchange,
+    FundNav,
+    Quote,
+    RecordQualityStatus,
+    SecurityRef,
+    SecurityStatus,
+)
 from china_quant_platform.ui import ApplicationViewModel, MainWindow, UiRunState, UiTaskStatus
 
 
@@ -31,6 +54,97 @@ def invalid_health() -> DataHealth:
         as_of=aware_datetime(),
         issues=("invalid ohlc",),
     )
+
+
+class InstantOnlineProvider:
+    provider_id = "instant_online"
+    capabilities = ProviderCapabilities(
+        provider_id=provider_id,
+        supported=frozenset(
+            {
+                ProviderCapability.SECURITY_SEARCH,
+                ProviderCapability.REALTIME_QUOTE,
+                ProviderCapability.HISTORICAL_BARS,
+            }
+        ),
+    )
+
+    async def search_security(self, keyword: str) -> list[SecurityRef]:
+        if keyword != "513300":
+            return []
+        return [
+            SecurityRef(
+                security_id="SSE:513300",
+                symbol="513300",
+                name="纳斯达克ETF华夏",
+                asset_type=AssetType.ETF,
+                exchange=Exchange.SSE,
+                currency=Currency.CNY,
+                listed_date=aware_datetime().date(),
+                status_date=aware_datetime().date(),
+                status=SecurityStatus.ACTIVE,
+            )
+        ]
+
+    async def get_quote(self, security_id: str) -> Quote:
+        source_time = aware_datetime()
+        return Quote(
+            security_id=security_id,
+            latest_price=2.668,
+            previous_close=2.65,
+            open_price=2.652,
+            high_price=2.671,
+            low_price=2.642,
+            volume=1_572_452,
+            amount=418_140_505,
+            provider=self.provider_id,
+            schema_version="instant.v1",
+            source_time=source_time,
+            observed_at=source_time,
+            received_at=source_time,
+            quality_status=RecordQualityStatus.OK,
+        )
+
+    async def get_bars(self, request: BarsRequest) -> list[Bar]:
+        end_time = datetime(2026, 6, 26, 15, 0, tzinfo=UTC)
+        return [
+            Bar(
+                security_id=request.security_id,
+                interval=BarInterval.DAILY,
+                start_time=datetime(2026, 6, 26, 9, 30, tzinfo=UTC),
+                end_time=end_time,
+                trade_date=end_time.date(),
+                open_price=2.6,
+                high_price=2.7,
+                low_price=2.55,
+                close_price=2.65,
+                volume=1_000_000,
+                amount=2_650_000,
+                adjustment=request.adjustment,
+                provider=self.provider_id,
+                schema_version="instant.v1",
+                source_time=end_time,
+                observed_at=end_time,
+                received_at=end_time,
+                quality_status=RecordQualityStatus.OK,
+            )
+        ]
+
+    def subscribe_quotes(self, security_ids: Sequence[str]) -> AsyncIterator[Quote]:
+        return self._empty_quote_stream(security_ids)
+
+    async def get_corporate_actions(
+        self,
+        request: CorporateActionRequest,
+    ) -> list[CorporateAction]:
+        return []
+
+    async def get_fund_nav(self, request: FundNavRequest) -> list[FundNav]:
+        return []
+
+    async def _empty_quote_stream(self, security_ids: Sequence[str]) -> AsyncIterator[Quote]:
+        if False:
+            yield await self.get_quote(security_ids[0])
 
 
 def test_view_model_maps_data_health_to_blocking_state() -> None:
@@ -122,6 +236,35 @@ def test_search_box_arrow_keys_move_highlight(qtbot: Any) -> None:
 
     assert view_model.state.highlighted_search_index == 1
     assert search_results.currentRow() == 1
+
+
+def test_online_provider_searches_code_and_loads_chart(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(
+        clock=aware_datetime,
+        market_data_provider=InstantOnlineProvider(),
+    )
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    view_model.search_securities("513300")
+    qtbot.waitUntil(lambda: bool(view_model.state.search_results), timeout=1000)
+
+    assert view_model.state.search_results[0].security_id == "SSE:513300"
+
+    view_model.confirm_highlighted_search()
+    qtbot.waitUntil(
+        lambda: (
+            view_model.state.data_health is not None and view_model.state.chart.point_count == 2
+        ),
+        timeout=1000,
+    )
+
+    assert view_model.state.selected_security_id == "SSE:513300"
+    assert view_model.state.data_health is not None
+    assert view_model.state.data_health.status is DataHealthStatus.HEALTHY
+    assert view_model.state.run_state is UiRunState.REALTIME_RUNNING
+    assert "HEALTHY" in window.health_banner.text()
+    assert "2026-06-29" in window.market_time_label.text()
 
 
 def test_demo_task_can_be_cancelled_without_blocking_qt(qtbot: Any) -> None:

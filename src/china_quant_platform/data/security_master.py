@@ -169,6 +169,22 @@ class SecurityMasterService:
         )
         del self._recent[self._recent_limit :]
 
+    def upsert_security(self, security: SecurityRef) -> None:
+        record = self._records.get(security.security_id)
+        if record is None:
+            self._records[security.security_id] = SecurityMasterRecord(
+                security_id=security.security_id,
+                snapshots=(security,),
+            )
+            return
+
+        snapshots_by_date = {snapshot.status_date: snapshot for snapshot in record.snapshots}
+        snapshots_by_date[security.status_date] = security
+        self._records[security.security_id] = SecurityMasterRecord(
+            security_id=security.security_id,
+            snapshots=tuple(sorted(snapshots_by_date.values(), key=lambda item: item.status_date)),
+        )
+
     def recent_searches(
         self,
         *,

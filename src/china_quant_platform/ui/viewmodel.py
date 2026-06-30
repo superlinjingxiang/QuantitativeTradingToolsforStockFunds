@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
-from datetime import UTC, date, datetime
-from typing import Any
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, Literal
 
 from PySide6 import QtCore
 
-from china_quant_platform.data import SecurityMasterService
+from china_quant_platform.data import (
+    BarsRequest,
+    MarketDataProvider,
+    SecurityMasterService,
+    SecuritySearchResult,
+)
 from china_quant_platform.domain import (
     AbstainReason,
     AdjustmentMode,
@@ -101,6 +109,25 @@ class CancellableQtTask(QtCore.QObject):
         self.finished.emit(self._result_factory())
 
 
+_BackgroundJobKind = Literal["search", "security_data"]
+
+
+@dataclass(slots=True)
+class _BackgroundJob:
+    kind: _BackgroundJobKind
+    token: int
+    generation: int
+    future: Future[object]
+
+
+@dataclass(frozen=True, slots=True)
+class _OnlineSecurityData:
+    security_id: str
+    bars: tuple[Bar, ...]
+    quote: Quote
+    data_health: DataHealth
+
+
 class ApplicationViewModel(QtCore.QObject):
     state_changed = QtCore.Signal(object)
 
@@ -109,14 +136,22 @@ class ApplicationViewModel(QtCore.QObject):
         parent: QtCore.QObject | None = None,
         *,
         security_master: SecurityMasterService | None = None,
+        market_data_provider: MarketDataProvider | None = None,
         knowledge_center: KnowledgeCenter | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         super().__init__(parent)
         self._active_task: CancellableQtTask | None = None
         self._security_master = security_master or build_demo_security_master()
+        self._market_data_provider = market_data_provider
         self._knowledge_center = knowledge_center or KnowledgeCenter()
         self._clock = clock or (lambda: datetime.now(tz=UTC))
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="market-data")
+        self._background_jobs: list[_BackgroundJob] = []
+        self._background_poll_timer = QtCore.QTimer(self)
+        self._background_poll_timer.setInterval(50)
+        self._background_poll_timer.timeout.connect(self._drain_background_jobs)
+        self._search_token = 0
         self._state = AppUiState(
             knowledge=KnowledgeCenterState.from_topics(self._knowledge_center.list_topics())
         )
@@ -131,6 +166,8 @@ class ApplicationViewModel(QtCore.QObject):
 
     def search_securities(self, query: str, *, as_of: date | None = None) -> None:
         stripped_query = query.strip()
+        self._search_token += 1
+        search_token = self._search_token
         if not stripped_query:
             self._set_state(
                 self._state.model_copy(
@@ -162,6 +199,10 @@ class ApplicationViewModel(QtCore.QObject):
                 }
             )
         )
+        if self._market_data_provider is not None and (
+            not candidates or _looks_like_security_code(stripped_query)
+        ):
+            self._start_online_security_search(stripped_query, search_token)
 
     def move_search_highlight(self, delta: int) -> None:
         if not self._state.search_results:
@@ -245,6 +286,8 @@ class ApplicationViewModel(QtCore.QObject):
                 }
             )
         )
+        if self._market_data_provider is not None:
+            self._start_online_security_data_load(security.security_id, next_generation)
 
     def set_chart_interval(self, interval: BarInterval) -> None:
         self._set_state(
@@ -544,6 +587,194 @@ class ApplicationViewModel(QtCore.QObject):
         )
         self._active_task.cancel()
 
+    def shutdown(self) -> None:
+        self._background_poll_timer.stop()
+        for job in self._background_jobs:
+            job.future.cancel()
+        self._background_jobs = []
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _start_online_security_search(self, query: str, token: int) -> None:
+        provider = self._market_data_provider
+        if provider is None:
+            return
+
+        def search() -> object:
+            return asyncio.run(provider.search_security(query))
+
+        self._submit_background_job(
+            kind="search",
+            token=token,
+            generation=self._state.selection_generation,
+            func=search,
+        )
+
+    def _start_online_security_data_load(self, security_id: str, generation: int) -> None:
+        provider = self._market_data_provider
+        if provider is None:
+            return
+
+        interval = self._state.chart.interval
+        adjustment = self._state.chart.adjustment
+        range_preset = self._state.chart.range_preset
+        end_time = self._clock()
+        start_time = _range_start(end_time, range_preset)
+        request = BarsRequest(
+            security_id=security_id,
+            interval=interval,
+            start_time=start_time,
+            end_time=end_time,
+            adjustment=adjustment,
+        )
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "run_state": UiRunState.FETCHING_REMOTE_HISTORY,
+                    "task_status": UiTaskStatus.RUNNING,
+                    "active_task_name": "联网行情",
+                }
+            )
+        )
+
+        async def load() -> _OnlineSecurityData:
+            bars = tuple(await provider.get_bars(request))
+            quote = await provider.get_quote(security_id)
+            issue_text = () if bars else ("联网行情已连接，但历史K线为空。",)
+            return _OnlineSecurityData(
+                security_id=security_id,
+                bars=bars,
+                quote=quote,
+                data_health=DataHealth(
+                    status=DataHealthStatus.HEALTHY if bars else DataHealthStatus.DEGRADED,
+                    block_signal=False,
+                    as_of=self._clock(),
+                    issues=issue_text,
+                ),
+            )
+
+        self._submit_background_job(
+            kind="security_data",
+            token=generation,
+            generation=generation,
+            func=lambda: asyncio.run(load()),
+        )
+
+    def _submit_background_job(
+        self,
+        *,
+        kind: _BackgroundJobKind,
+        token: int,
+        generation: int,
+        func: Callable[[], object],
+    ) -> None:
+        future = self._executor.submit(func)
+        self._background_jobs.append(
+            _BackgroundJob(kind=kind, token=token, generation=generation, future=future)
+        )
+        if not self._background_poll_timer.isActive():
+            self._background_poll_timer.start()
+
+    @QtCore.Slot()
+    def _drain_background_jobs(self) -> None:
+        pending: list[_BackgroundJob] = []
+        for job in self._background_jobs:
+            if not job.future.done():
+                pending.append(job)
+                continue
+
+            try:
+                result = job.future.result()
+            except BaseException as exc:  # noqa: BLE001 - converted to UI-safe health state.
+                self._handle_background_failure(job, exc)
+                continue
+
+            if job.kind == "search":
+                self._handle_online_search_result(job, result)
+            else:
+                self._handle_online_security_data(job, result)
+
+        self._background_jobs = pending
+        if not self._background_jobs:
+            self._background_poll_timer.stop()
+
+    def _handle_online_search_result(self, job: _BackgroundJob, result: object) -> None:
+        if job.token != self._search_token:
+            return
+        if not isinstance(result, list):
+            return
+
+        securities = tuple(item for item in result if isinstance(item, SecurityRef))
+        for security in securities:
+            self._security_master.upsert_security(security)
+
+        query = self._state.search_query
+        candidates = tuple(
+            SearchCandidateState.from_search_result(
+                SecuritySearchResult(
+                    query=query or security.symbol,
+                    security=security,
+                    score=_online_search_score(query, security),
+                    matched_fields=("online", "symbol"),
+                )
+            )
+            for security in securities
+        )
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "search_results": candidates,
+                    "highlighted_search_index": 0 if candidates else None,
+                    "run_state": UiRunState.SEARCHING if candidates else UiRunState.IDLE,
+                    "latest_error": None,
+                }
+            )
+        )
+
+    def _handle_online_security_data(self, job: _BackgroundJob, result: object) -> None:
+        if job.generation != self._state.selection_generation:
+            return
+        if not isinstance(result, _OnlineSecurityData):
+            return
+        if result.security_id != self._state.selected_security_id:
+            return
+
+        self.load_chart_bars(result.bars, generation=job.generation)
+        self.apply_realtime_quote(result.quote, generation=job.generation)
+        self.apply_data_health(result.data_health)
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "task_status": UiTaskStatus.COMPLETED,
+                    "active_task_name": None,
+                }
+            )
+        )
+
+    def _handle_background_failure(self, job: _BackgroundJob, error: BaseException) -> None:
+        if job.kind == "search" and job.token != self._search_token:
+            return
+        if job.kind == "security_data" and job.generation != self._state.selection_generation:
+            return
+
+        prefix = "联网搜索失败" if job.kind == "search" else "联网行情失败"
+        self.apply_data_health(
+            DataHealth(
+                status=DataHealthStatus.DEGRADED,
+                block_signal=True,
+                as_of=self._clock(),
+                issues=(f"{prefix}：{_short_error(error)}",),
+            )
+        )
+        if job.kind == "security_data":
+            self._set_state(
+                self._state.model_copy(
+                    update={
+                        "task_status": UiTaskStatus.FAILED,
+                        "active_task_name": None,
+                    }
+                )
+            )
+
     def _complete_task(self, name: str, generation: int) -> None:
         if generation != self._state.selection_generation:
             return
@@ -732,6 +963,54 @@ def _watchlist_item_with_signal(
         )
         updates["is_stale"] = data_health.status is DataHealthStatus.STALE
     return item.model_copy(update=updates)
+
+
+def _looks_like_security_code(query: str) -> bool:
+    normalized = query.strip().upper()
+    if normalized.isdigit() and len(normalized) == 6:
+        return True
+    if "." in normalized:
+        market, _, code = normalized.partition(".")
+        return market in {"0", "1"} and code.isdigit() and len(code) == 6
+    if ":" in normalized:
+        exchange, _, code = normalized.partition(":")
+        return exchange in {"SSE", "SH", "SZSE", "SZ"} and code.isdigit() and len(code) == 6
+    return False
+
+
+def _range_start(end_time: datetime, range_preset: ChartRangePreset) -> datetime:
+    match range_preset:
+        case ChartRangePreset.FIVE_DAYS:
+            days = 10
+        case ChartRangePreset.THREE_MONTHS:
+            days = 110
+        case ChartRangePreset.SIX_MONTHS:
+            days = 210
+        case ChartRangePreset.ONE_YEAR:
+            days = 370
+        case ChartRangePreset.THREE_YEARS:
+            days = 370 * 3
+        case ChartRangePreset.FIVE_YEARS:
+            days = 370 * 5
+        case ChartRangePreset.CUSTOM:
+            days = 370
+        case _:
+            days = 45
+    return end_time - timedelta(days=days)
+
+
+def _online_search_score(query: str, security: SecurityRef) -> float:
+    normalized = query.strip().upper()
+    if normalized in {security.symbol.upper(), security.security_id.upper()}:
+        return 1.0
+    return 0.9 if normalized and normalized in security.symbol.upper() else 0.8
+
+
+def _short_error(error: BaseException) -> str:
+    if isinstance(error, DomainError):
+        return error.engineering_message
+    message = str(error).strip()
+    return message or error.__class__.__name__
 
 
 __all__ = ["ApplicationViewModel", "CancellableQtTask", "build_demo_security_master"]

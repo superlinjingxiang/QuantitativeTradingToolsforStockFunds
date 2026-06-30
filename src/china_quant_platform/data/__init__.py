@@ -1,6 +1,12 @@
 """Market data protocols, adapters, normalization, and quality gates."""
 
 from china_quant_platform.data.cache import BarCacheAppendResult, HistoricalBarCache
+from china_quant_platform.data.eastmoney_provider import (
+    CHINA_TZ,
+    EASTMONEY_CAPABILITIES,
+    EASTMONEY_PROVIDER_ID,
+    EastmoneyMarketDataProvider,
+)
 from china_quant_platform.data.fake_provider import (
     DEFAULT_FAKE_CAPABILITIES,
     DeterministicFakeMarketDataProvider,
@@ -38,8 +44,11 @@ __all__ = [
     "AsyncRateLimiter",
     "BarCacheAppendResult",
     "BarsRequest",
+    "CHINA_TZ",
     "CorporateActionRequest",
     "DEFAULT_FAKE_CAPABILITIES",
+    "EASTMONEY_CAPABILITIES",
+    "EASTMONEY_PROVIDER_ID",
     "DataQualityCheck",
     "DataQualityIssue",
     "DataQualityPolicy",
@@ -47,6 +56,7 @@ __all__ = [
     "DataQualityService",
     "DataQualitySeverity",
     "DeterministicFakeMarketDataProvider",
+    "EastmoneyMarketDataProvider",
     "FundNavRequest",
     "HistoricalBarCache",
     "MarketDataGateway",

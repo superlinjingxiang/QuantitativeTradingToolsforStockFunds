@@ -8,6 +8,7 @@ from typing import cast
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from china_quant_platform.data import EastmoneyMarketDataProvider
 from china_quant_platform.domain import AdjustmentMode, BarInterval
 from china_quant_platform.ui.chart import PriceChartWidget
 from china_quant_platform.ui.state import AppUiState, ChartOverlay, ChartRangePreset, UiRunState
@@ -196,6 +197,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.health_banner.setProperty("state", state.run_state.value)
         self.health_banner.style().unpolish(self.health_banner)
         self.health_banner.style().polish(self.health_banner)
+        latest_point_time = state.chart.points[-1].time_label if state.chart.points else "--"
+        self.market_time_label.setText(f"行情时间：{latest_point_time}")
 
         selected = state.selected_security_id or "--"
         self.status_label.setText(
@@ -227,6 +230,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.view_model.confirm_highlighted_search()
                 return True
         return super().eventFilter(watched, event)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self.view_model.shutdown()
+        super().closeEvent(event)
 
     @QtCore.Slot()
     def _schedule_search(self) -> None:
@@ -529,7 +536,7 @@ def create_application(argv: Sequence[str] | None = None) -> QtWidgets.QApplicat
 
 def run_gui(argv: Sequence[str] | None = None) -> int:
     app = create_application(argv)
-    window = MainWindow()
+    window = MainWindow(ApplicationViewModel(market_data_provider=EastmoneyMarketDataProvider()))
     window.show()
     return app.exec()
 
