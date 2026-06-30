@@ -7,6 +7,7 @@ from enum import StrEnum
 from pydantic import Field
 
 from china_quant_platform.data import SecuritySearchResult
+from china_quant_platform.decision import DecisionReport, EvidenceGateStatus
 from china_quant_platform.domain import (
     AdjustmentMode,
     AnalysisReport,
@@ -17,6 +18,7 @@ from china_quant_platform.domain import (
     DomainErrorKind,
     FinalSignal,
     Quote,
+    SecurityRef,
 )
 from china_quant_platform.domain.base import DomainModel
 from china_quant_platform.knowledge import HelpTopic
@@ -153,6 +155,24 @@ class SearchCandidateState(DomainModel):
         )
 
 
+class RecentSecurityState(DomainModel):
+    security_id: str
+    symbol: str
+    name: str
+    asset_type: str
+    exchange: str
+
+    @classmethod
+    def from_security_ref(cls, security: SecurityRef) -> RecentSecurityState:
+        return cls(
+            security_id=security.security_id,
+            symbol=security.symbol,
+            name=security.name,
+            asset_type=security.asset_type.value,
+            exchange=security.exchange.value,
+        )
+
+
 class StrategyPanelState(DomainModel):
     strategy_name: str = "--"
     strategy_id: str = "--"
@@ -186,6 +206,36 @@ class OperationPanelState(DomainModel):
     negative_drivers: tuple[str, ...] = ()
     exit_or_invalidation_conditions: tuple[str, ...] = ()
     abstain_reason: str | None = None
+
+
+class DecisionPanelState(DomainModel):
+    report: DecisionReport | None = None
+    final_signal: str = "--"
+    readiness: str = "--"
+    confidence: str = "--"
+    target_position_limit: str = "--"
+    profitability_summary: str = "--"
+    simulation_summary: str = "--"
+    gate_summary: str = "--"
+    blocking_reasons: tuple[str, ...] = ()
+    caveats: tuple[str, ...] = ()
+    no_profit_guarantee: str = "--"
+
+    @classmethod
+    def from_report(cls, report: DecisionReport) -> DecisionPanelState:
+        return cls(
+            report=report,
+            final_signal=report.final_signal.value,
+            readiness=report.execution_readiness.value,
+            confidence=_format_percent(report.confidence),
+            target_position_limit=_position_limit_text(report.target_position_limit),
+            profitability_summary=_profitability_summary(report),
+            simulation_summary=_simulation_summary(report),
+            gate_summary=_gate_summary(report),
+            blocking_reasons=tuple(report.negative_evidence),
+            caveats=tuple(report.caveats),
+            no_profit_guarantee=report.no_profit_guarantee,
+        )
 
 
 class AnalysisPanelState(DomainModel):
@@ -362,9 +412,11 @@ class AppUiState(DomainModel):
     data_health: DataHealth | None = None
     market_overview: MarketOverviewPanelState = Field(default_factory=MarketOverviewPanelState)
     watchlist: WatchlistPanelState = Field(default_factory=WatchlistPanelState)
+    recent_securities: tuple[RecentSecurityState, ...] = ()
     knowledge: KnowledgeCenterState = Field(default_factory=KnowledgeCenterState)
     chart: ChartState = Field(default_factory=ChartState)
     analysis: AnalysisPanelState = Field(default_factory=AnalysisPanelState)
+    decision: DecisionPanelState = Field(default_factory=DecisionPanelState)
     latest_error: UiErrorState | None = None
 
     @property
@@ -469,6 +521,47 @@ def _position_limit_text(limit: float | None) -> str:
     return _format_percent(limit)
 
 
+def _profitability_summary(report: DecisionReport) -> str:
+    evidence = report.profitability
+    if evidence is None:
+        return "历史赚钱证据：缺失"
+    total_return = "--" if evidence.total_return is None else _format_percent(evidence.total_return)
+    max_drawdown = "--" if evidence.max_drawdown is None else _format_percent(evidence.max_drawdown)
+    excess_return = (
+        "--" if evidence.excess_return is None else _format_percent(evidence.excess_return)
+    )
+    return (
+        f"历史净收益：{total_return}；最大回撤：{max_drawdown}；"
+        f"相对基准：{excess_return}；交易次数：{evidence.trade_count}"
+    )
+
+
+def _simulation_summary(report: DecisionReport) -> str:
+    evidence = report.simulation
+    if evidence is None:
+        return "模拟盘证据：缺失"
+    slippage = (
+        "--"
+        if evidence.max_abs_slippage_pct is None
+        else _format_percent(evidence.max_abs_slippage_pct)
+    )
+    return (
+        f"模拟净值：{evidence.net_asset_value:.2f}；成交：{evidence.execution_count}；"
+        f"偏差超限：{evidence.threshold_breach_count}；最大滑点：{slippage}"
+    )
+
+
+def _gate_summary(report: DecisionReport) -> str:
+    blocked = tuple(
+        gate
+        for gate in report.gates
+        if gate.status in {EvidenceGateStatus.FAIL, EvidenceGateStatus.MISSING}
+    )
+    if not blocked:
+        return "全部门槛通过"
+    return "；".join(f"{gate.name}:{gate.status.value}" for gate in blocked)
+
+
 def _format_percent(value: float) -> str:
     return f"{value * 100:.1f}%"
 
@@ -516,12 +609,14 @@ __all__ = [
     "ChartPointState",
     "ChartRangePreset",
     "ChartState",
+    "DecisionPanelState",
     "ForecastPanelState",
     "KnowledgeCenterState",
     "KnowledgeTopicState",
     "MarketIndexPanelState",
     "MarketOverviewPanelState",
     "OperationPanelState",
+    "RecentSecurityState",
     "SearchCandidateState",
     "StrategyPanelState",
     "UiErrorState",

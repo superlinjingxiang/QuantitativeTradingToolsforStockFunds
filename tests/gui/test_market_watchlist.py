@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from china_quant_platform.domain import (
     DataHealth,
@@ -131,6 +131,52 @@ def test_market_overview_and_watchlist_render_in_left_panel(qtbot: Any) -> None:
 
     index_list.itemActivated.emit(index_list.item(0))
     assert view_model.state.selected_security_id == "INDEX:000001"
+
+
+def test_watchlist_buttons_add_and_remove_current_selection(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=as_of)
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    add_button = window.findChild(QtWidgets.QToolButton, "addWatchlistItem")
+    remove_button = window.findChild(QtWidgets.QToolButton, "removeWatchlistItem")
+    watchlist = window.findChild(QtWidgets.QListWidget, "watchlistItems")
+    assert add_button is not None
+    assert remove_button is not None
+    assert watchlist is not None
+    assert add_button.isEnabled() is False
+    assert remove_button.isEnabled() is False
+
+    view_model.select_security("SSE:600519")
+    assert add_button.isEnabled() is True
+
+    qtbot.mouseClick(add_button, QtCore.Qt.MouseButton.LeftButton)
+    assert tuple(item.security_id for item in view_model.state.watchlist.items) == ("SSE:600519",)
+    assert watchlist.count() == 1
+    assert add_button.isEnabled() is False
+    assert remove_button.isEnabled() is True
+
+    qtbot.mouseClick(remove_button, QtCore.Qt.MouseButton.LeftButton)
+    assert view_model.state.watchlist.items == ()
+    assert watchlist.count() == 0
+
+
+def test_recent_securities_render_and_select_from_left_panel(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=as_of)
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    view_model.select_security("SSE:600519")
+    view_model.select_security("SSE:510300")
+
+    recent = window.findChild(QtWidgets.QListWidget, "recentSecurityItems")
+    assert recent is not None
+    assert recent.count() == 2
+    assert recent.item(0).data(QtCore.Qt.ItemDataRole.UserRole) == "SSE:510300"
+    assert "贵州茅台" in recent.item(1).text()
+
+    recent.itemActivated.emit(recent.item(1))
+    assert view_model.state.selected_security_id == "SSE:600519"
 
 
 def test_stale_market_overview_is_visible_without_replacing_current_selection(qtbot: Any) -> None:

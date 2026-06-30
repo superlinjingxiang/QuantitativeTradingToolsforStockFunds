@@ -35,4 +35,7 @@ def test_requirements_yaml_is_parseable() -> None:
 
     assert isinstance(requirements, dict)
     assert requirements["project"] == "china_quant_platform"
-    assert requirements["version"] == "1.0"
+    assert requirements["version"] == "1.2"
+    assert requirements["functional_requirements"][-1]["id"] == "FR-022"
+    assert requirements["post_mvp_acceptance_gates"][0]["id"] == "SDA-001"
+    assert requirements["post_mvp_acceptance_gates"][-1]["id"] == "EPV-006"

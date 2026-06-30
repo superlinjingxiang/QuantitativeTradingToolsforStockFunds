@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,7 @@ from china_quant_platform.data import (
     ProviderCapability,
 )
 from china_quant_platform.domain import (
+    AdjustmentMode,
     AssetType,
     Bar,
     BarInterval,
@@ -34,6 +35,7 @@ from china_quant_platform.domain import (
 )
 from china_quant_platform.ui import (
     ApplicationViewModel,
+    ChartRangePreset,
     MainWindow,
     UiRunState,
     UiTaskStatus,
@@ -76,6 +78,9 @@ class InstantOnlineProvider:
         ),
     )
 
+    def __init__(self) -> None:
+        self.bar_requests: list[BarsRequest] = []
+
     async def search_security(self, keyword: str) -> list[SecurityRef]:
         if keyword != "513300":
             return []
@@ -113,11 +118,12 @@ class InstantOnlineProvider:
         )
 
     async def get_bars(self, request: BarsRequest) -> list[Bar]:
+        self.bar_requests.append(request)
         end_time = datetime(2026, 6, 26, 15, 0, tzinfo=UTC)
         return [
             Bar(
                 security_id=request.security_id,
-                interval=BarInterval.DAILY,
+                interval=request.interval,
                 start_time=datetime(2026, 6, 26, 9, 30, tzinfo=UTC),
                 end_time=end_time,
                 trade_date=end_time.date(),
@@ -280,9 +286,10 @@ def test_search_box_arrow_keys_move_highlight(qtbot: Any) -> None:
 
 
 def test_online_provider_searches_code_and_loads_chart(qtbot: Any) -> None:
+    provider = InstantOnlineProvider()
     view_model = ApplicationViewModel(
         clock=aware_datetime,
-        market_data_provider=InstantOnlineProvider(),
+        market_data_provider=provider,
     )
     window = MainWindow(view_model)
     qtbot.addWidget(window)
@@ -303,9 +310,52 @@ def test_online_provider_searches_code_and_loads_chart(qtbot: Any) -> None:
     assert view_model.state.selected_security_id == "SSE:513300"
     assert view_model.state.data_health is not None
     assert view_model.state.data_health.status is DataHealthStatus.HEALTHY
-    assert view_model.state.run_state is UiRunState.REALTIME_RUNNING
+    assert view_model.state.run_state is UiRunState.INSUFFICIENT_HISTORY
+    assert view_model.state.decision.report is not None
+    assert view_model.state.decision.final_signal == "ABSTAIN"
+    decision_label = window.findChild(QtWidgets.QLabel, "decisionPanelText")
+    assert decision_label is not None
+    qtbot.waitUntil(lambda: "原因" in decision_label.text(), timeout=1000)
+    assert "历史K线不足" in decision_label.text()
     assert "HEALTHY" in window.health_banner.text()
     assert "2026-06-29" in window.market_time_label.text()
+    assert provider.bar_requests[0].interval is BarInterval.DAILY
+
+
+def test_chart_controls_reload_online_market_data(qtbot: Any) -> None:
+    provider = InstantOnlineProvider()
+    view_model = ApplicationViewModel(
+        clock=aware_datetime,
+        market_data_provider=provider,
+    )
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    view_model.search_securities("513300")
+    qtbot.waitUntil(lambda: bool(view_model.state.search_results), timeout=1000)
+    view_model.confirm_highlighted_search()
+    qtbot.waitUntil(lambda: len(provider.bar_requests) >= 2, timeout=1000)
+
+    provider.bar_requests.clear()
+    view_model.set_chart_interval(BarInterval.ONE_MINUTE)
+    qtbot.waitUntil(
+        lambda: (
+            len(provider.bar_requests) >= 2
+            and view_model.state.task_status is UiTaskStatus.COMPLETED
+        ),
+        timeout=1000,
+    )
+    assert provider.bar_requests[0].interval is BarInterval.ONE_MINUTE
+
+    provider.bar_requests.clear()
+    view_model.set_chart_range(ChartRangePreset.THREE_MONTHS)
+    qtbot.waitUntil(lambda: len(provider.bar_requests) >= 2, timeout=1000)
+    assert provider.bar_requests[0].start_time <= aware_datetime() - timedelta(days=100)
+
+    provider.bar_requests.clear()
+    view_model.set_chart_adjustment(AdjustmentMode.FORWARD)
+    qtbot.waitUntil(lambda: len(provider.bar_requests) >= 2, timeout=1000)
+    assert provider.bar_requests[0].adjustment is AdjustmentMode.FORWARD
 
 
 def test_demo_task_can_be_cancelled_without_blocking_qt(qtbot: Any) -> None:

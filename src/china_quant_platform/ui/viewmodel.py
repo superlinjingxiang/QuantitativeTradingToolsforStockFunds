@@ -17,6 +17,7 @@ from china_quant_platform.data import (
     SecurityMasterService,
     SecuritySearchResult,
 )
+from china_quant_platform.decision import DecisionReport, build_research_decision_from_market_data
 from china_quant_platform.domain import (
     AbstainReason,
     AdjustmentMode,
@@ -42,7 +43,9 @@ from china_quant_platform.ui.state import (
     ChartOverlay,
     ChartPointState,
     ChartRangePreset,
+    DecisionPanelState,
     KnowledgeCenterState,
+    RecentSecurityState,
     SearchCandidateState,
     UiErrorState,
     UiRunState,
@@ -124,6 +127,7 @@ class _BackgroundJob:
 class _OnlineSecurityData:
     security_id: str
     bars: tuple[Bar, ...]
+    decision_bars: tuple[Bar, ...]
     quote: Quote
     data_health: DataHealth
 
@@ -152,6 +156,7 @@ class ApplicationViewModel(QtCore.QObject):
         self._background_poll_timer.setInterval(50)
         self._background_poll_timer.timeout.connect(self._drain_background_jobs)
         self._search_token = 0
+        self._security_data_token = 0
         self._state = AppUiState(
             knowledge=KnowledgeCenterState.from_topics(self._knowledge_center.list_topics())
         )
@@ -252,6 +257,17 @@ class ApplicationViewModel(QtCore.QObject):
             return None
         return KnowledgeCenterState.from_topics((topic,), selected=topic).selected_body
 
+    def _recent_security_states(
+        self,
+        *,
+        as_of: date | None = None,
+        limit: int = 8,
+    ) -> tuple[RecentSecurityState, ...]:
+        return tuple(
+            RecentSecurityState.from_security_ref(security)
+            for security in self._security_master.recent_searches(as_of=as_of, limit=limit)
+        )
+
     def select_security(self, security_id: str) -> None:
         if self._active_task is not None:
             self.cancel_active_task()
@@ -271,6 +287,7 @@ class ApplicationViewModel(QtCore.QObject):
                     "search_query": "",
                     "search_results": (),
                     "highlighted_search_index": None,
+                    "recent_securities": self._recent_security_states(as_of=selected_at.date()),
                     "chart": self._state.chart.model_copy(
                         update={
                             "points": (),
@@ -279,6 +296,7 @@ class ApplicationViewModel(QtCore.QObject):
                         }
                     ),
                     "analysis": AnalysisPanelState(),
+                    "decision": DecisionPanelState(),
                     "run_state": UiRunState.LOADING_CACHE_HISTORY,
                     "task_status": UiTaskStatus.IDLE,
                     "active_task_name": None,
@@ -290,20 +308,28 @@ class ApplicationViewModel(QtCore.QObject):
             self._start_online_security_data_load(security.security_id, next_generation)
 
     def set_chart_interval(self, interval: BarInterval) -> None:
+        if self._state.chart.interval == interval:
+            return
         self._set_state(
             self._state.model_copy(
                 update={"chart": self._state.chart.model_copy(update={"interval": interval})}
             )
         )
+        self._reload_selected_security_data()
 
     def set_chart_adjustment(self, adjustment: AdjustmentMode) -> None:
+        if self._state.chart.adjustment == adjustment:
+            return
         self._set_state(
             self._state.model_copy(
                 update={"chart": self._state.chart.model_copy(update={"adjustment": adjustment})}
             )
         )
+        self._reload_selected_security_data()
 
     def set_chart_range(self, range_preset: ChartRangePreset) -> None:
+        if self._state.chart.range_preset == range_preset:
+            return
         self._set_state(
             self._state.model_copy(
                 update={
@@ -311,6 +337,7 @@ class ApplicationViewModel(QtCore.QObject):
                 }
             )
         )
+        self._reload_selected_security_data()
 
     def set_chart_overlay_enabled(self, overlay: ChartOverlay, enabled: bool) -> None:
         overlays = set(self._state.chart.overlays)
@@ -435,6 +462,11 @@ class ApplicationViewModel(QtCore.QObject):
                 pinned=pinned,
             )
         self._set_watchlist_items(tuple(current_items.values()))
+        self._set_state(
+            self._state.model_copy(
+                update={"recent_securities": self._recent_security_states(as_of=selected_at.date())}
+            )
+        )
 
     def remove_watchlist_item(self, security_id: str) -> None:
         items = tuple(
@@ -485,6 +517,29 @@ class ApplicationViewModel(QtCore.QObject):
         )
         self._set_watchlist_items(items)
 
+    def apply_watchlist_market_snapshot(
+        self,
+        security_id: str,
+        *,
+        latest_price: float | None = None,
+        change_pct: float | None = None,
+        data_health: DataHealth | None = None,
+    ) -> None:
+        if not any(item.security_id == security_id for item in self._state.watchlist.items):
+            return
+        items = tuple(
+            _watchlist_item_with_market_snapshot(
+                item,
+                latest_price=latest_price,
+                change_pct=change_pct,
+                data_health=data_health,
+            )
+            if item.security_id == security_id
+            else item
+            for item in self._state.watchlist.items
+        )
+        self._set_watchlist_items(items)
+
     def select_watchlist_item(self, security_id: str) -> None:
         if any(item.security_id == security_id for item in self._state.watchlist.items):
             self.select_security(security_id)
@@ -517,6 +572,32 @@ class ApplicationViewModel(QtCore.QObject):
                         applicable_conditions=applicable_conditions,
                     ),
                     "run_state": _run_state_for_analysis_report(report),
+                    "latest_error": None,
+                }
+            )
+        )
+
+    def apply_decision_report(
+        self,
+        report: DecisionReport,
+        *,
+        generation: int | None = None,
+    ) -> None:
+        if self._is_stale_generation(generation):
+            return
+        if (
+            self._state.selected_security_id is not None
+            and report.request.security_id != self._state.selected_security_id
+        ):
+            return
+
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "data_health": report.analysis_report.data_health,
+                    "analysis": AnalysisPanelState.from_report(report.analysis_report),
+                    "decision": DecisionPanelState.from_report(report),
+                    "run_state": _run_state_for_analysis_report(report.analysis_report),
                     "latest_error": None,
                 }
             )
@@ -576,6 +657,7 @@ class ApplicationViewModel(QtCore.QObject):
 
     def cancel_active_task(self) -> None:
         if self._active_task is None:
+            self._cancel_background_security_data()
             return
         self._set_state(
             self._state.model_copy(
@@ -614,6 +696,8 @@ class ApplicationViewModel(QtCore.QObject):
         if provider is None:
             return
 
+        self._security_data_token += 1
+        data_token = self._security_data_token
         interval = self._state.chart.interval
         adjustment = self._state.chart.adjustment
         range_preset = self._state.chart.range_preset
@@ -638,11 +722,21 @@ class ApplicationViewModel(QtCore.QObject):
 
         async def load() -> _OnlineSecurityData:
             bars = tuple(await provider.get_bars(request))
+            decision_start_time = end_time - timedelta(days=420)
+            decision_request = BarsRequest(
+                security_id=security_id,
+                interval=BarInterval.DAILY,
+                start_time=decision_start_time,
+                end_time=end_time,
+                adjustment=adjustment,
+            )
+            decision_bars = tuple(await provider.get_bars(decision_request))
             quote = await provider.get_quote(security_id)
             issue_text = () if bars else ("联网行情已连接，但历史K线为空。",)
             return _OnlineSecurityData(
                 security_id=security_id,
                 bars=bars,
+                decision_bars=decision_bars or bars,
                 quote=quote,
                 data_health=DataHealth(
                     status=DataHealthStatus.HEALTHY if bars else DataHealthStatus.DEGRADED,
@@ -654,7 +748,7 @@ class ApplicationViewModel(QtCore.QObject):
 
         self._submit_background_job(
             kind="security_data",
-            token=generation,
+            token=data_token,
             generation=generation,
             func=lambda: asyncio.run(load()),
         )
@@ -733,6 +827,8 @@ class ApplicationViewModel(QtCore.QObject):
     def _handle_online_security_data(self, job: _BackgroundJob, result: object) -> None:
         if job.generation != self._state.selection_generation:
             return
+        if job.token != self._security_data_token:
+            return
         if not isinstance(result, _OnlineSecurityData):
             return
         if result.security_id != self._state.selected_security_id:
@@ -741,6 +837,13 @@ class ApplicationViewModel(QtCore.QObject):
         self.load_chart_bars(result.bars, generation=job.generation)
         self.apply_realtime_quote(result.quote, generation=job.generation)
         self.apply_data_health(result.data_health)
+        self._apply_online_decision_report(result, generation=job.generation)
+        self.apply_watchlist_market_snapshot(
+            result.security_id,
+            latest_price=result.quote.latest_price,
+            change_pct=_quote_change_pct(result.quote),
+            data_health=result.data_health,
+        )
         self._set_state(
             self._state.model_copy(
                 update={
@@ -750,10 +853,35 @@ class ApplicationViewModel(QtCore.QObject):
             )
         )
 
+    def _apply_online_decision_report(
+        self,
+        result: _OnlineSecurityData,
+        *,
+        generation: int,
+    ) -> None:
+        try:
+            selected_at = self._clock()
+            security = self._security_master.select_security(
+                result.security_id,
+                selected_at=selected_at,
+                as_of=selected_at.date(),
+            )
+            decision = build_research_decision_from_market_data(
+                security=security,
+                bars=result.decision_bars,
+                quote=result.quote,
+                data_health=result.data_health,
+            )
+        except Exception:  # noqa: BLE001 - decision output is optional for market rendering.
+            return
+        self.apply_decision_report(decision, generation=generation)
+
     def _handle_background_failure(self, job: _BackgroundJob, error: BaseException) -> None:
         if job.kind == "search" and job.token != self._search_token:
             return
         if job.kind == "security_data" and job.generation != self._state.selection_generation:
+            return
+        if job.kind == "security_data" and job.token != self._security_data_token:
             return
 
         prefix = "联网搜索失败" if job.kind == "search" else "联网行情失败"
@@ -762,7 +890,7 @@ class ApplicationViewModel(QtCore.QObject):
                 status=DataHealthStatus.DEGRADED,
                 block_signal=True,
                 as_of=self._clock(),
-                issues=(f"{prefix}：{_short_error(error)}",),
+                issues=_online_failure_issues(prefix, error),
             )
         )
         if job.kind == "security_data":
@@ -838,6 +966,39 @@ class ApplicationViewModel(QtCore.QObject):
     def _set_watchlist_items(self, items: tuple[WatchlistItemState, ...]) -> None:
         self._set_state(
             self._state.model_copy(update={"watchlist": _watchlist_panel_from_items(items)})
+        )
+
+    def _reload_selected_security_data(self) -> None:
+        if self._market_data_provider is None:
+            return
+        security_id = self._state.selected_security_id
+        if security_id is None:
+            return
+        self._start_online_security_data_load(security_id, self._state.selection_generation)
+
+    def _cancel_background_security_data(self) -> None:
+        if not any(job.kind == "security_data" for job in self._background_jobs):
+            return
+        self._security_data_token += 1
+        for job in self._background_jobs:
+            if job.kind == "security_data":
+                job.future.cancel()
+        self._background_jobs = [
+            job for job in self._background_jobs if job.kind != "security_data"
+        ]
+        if not self._background_jobs:
+            self._background_poll_timer.stop()
+        next_run_state = (
+            UiRunState.REALTIME_RUNNING if self._state.chart.points else UiRunState.IDLE
+        )
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "run_state": next_run_state,
+                    "task_status": UiTaskStatus.CANCELLED,
+                    "active_task_name": "联网行情",
+                }
+            )
         )
 
 
@@ -965,6 +1126,33 @@ def _watchlist_item_with_signal(
     return item.model_copy(update=updates)
 
 
+def _watchlist_item_with_market_snapshot(
+    item: WatchlistItemState,
+    *,
+    latest_price: float | None,
+    change_pct: float | None,
+    data_health: DataHealth | None,
+) -> WatchlistItemState:
+    updates: dict[str, object] = {}
+    if latest_price is not None:
+        updates["latest_price"] = f"{latest_price:.2f}"
+    if change_pct is not None:
+        updates["change_pct"] = f"{change_pct * 100:.1f}%"
+    if data_health is not None:
+        issue_text = "；".join(data_health.issues)
+        updates["data_health_text"] = (
+            f"{data_health.status.value}: {issue_text}" if issue_text else data_health.status.value
+        )
+        updates["is_stale"] = data_health.status is DataHealthStatus.STALE
+    return item.model_copy(update=updates)
+
+
+def _quote_change_pct(quote: Quote) -> float | None:
+    if quote.previous_close <= 0:
+        return None
+    return (quote.latest_price - quote.previous_close) / quote.previous_close
+
+
 def _looks_like_security_code(query: str) -> bool:
     normalized = query.strip().upper()
     if normalized.isdigit() and len(normalized) == 6:
@@ -1011,6 +1199,14 @@ def _short_error(error: BaseException) -> str:
         return error.engineering_message
     message = str(error).strip()
     return message or error.__class__.__name__
+
+
+def _online_failure_issues(prefix: str, error: BaseException) -> tuple[str, ...]:
+    return (
+        f"{prefix}：{_short_error(error)}",
+        "A股收盘后实时价可能停在收盘价，但历史K线仍应可获取；失败通常不是因为15:00后闭市。",
+        "请检查打包程序是否能访问东方财富公共接口，以及系统代理、防火墙或证书设置。",
+    )
 
 
 __all__ = ["ApplicationViewModel", "CancellableQtTask", "build_demo_security_master"]

@@ -1,0 +1,239 @@
+"""Decision hub tests for TASK-026."""
+
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, time, timedelta
+
+from china_quant_platform.decision import (
+    DecisionHub,
+    DecisionRequest,
+    EvidenceGateStatus,
+    ExecutionReadiness,
+    ProfitabilityEvidence,
+    SimulationEvidence,
+    build_research_decision_from_market_data,
+)
+from china_quant_platform.domain import (
+    AbstainReason,
+    AnalysisReport,
+    AssetType,
+    Bar,
+    BarInterval,
+    Currency,
+    DataHealth,
+    DataHealthStatus,
+    DirectionProbabilities,
+    Exchange,
+    FinalSignal,
+    Quote,
+    RecordQualityStatus,
+    SecurityRef,
+    SecurityStatus,
+)
+
+
+def as_of() -> datetime:
+    return datetime(2026, 6, 30, 15, 0, tzinfo=UTC)
+
+
+def healthy_data() -> DataHealth:
+    return DataHealth(status=DataHealthStatus.HEALTHY, block_signal=False, as_of=as_of())
+
+
+def blocked_data() -> DataHealth:
+    return DataHealth(
+        status=DataHealthStatus.STALE,
+        block_signal=True,
+        as_of=as_of(),
+        issues=("stale quote",),
+    )
+
+
+def request() -> DecisionRequest:
+    return DecisionRequest(security_id="SSE:600519", as_of=as_of())
+
+
+def analysis(final_signal: FinalSignal = FinalSignal.BUY_CANDIDATE) -> AnalysisReport:
+    return AnalysisReport(
+        security_id="SSE:600519",
+        as_of=as_of(),
+        data_health=healthy_data() if final_signal is not FinalSignal.ABSTAIN else blocked_data(),
+        strategy_id="strategy.demo",
+        strategy_version="v1",
+        horizon=5,
+        market_regime="TREND_UP",
+        direction_probabilities=DirectionProbabilities(up=0.62, flat=0.23, down=0.15),
+        raw_signal="BUY_BIAS" if final_signal is not FinalSignal.ABSTAIN else "ABSTAIN",
+        final_signal=final_signal,
+        valid_until=as_of() + timedelta(days=1),
+        positive_drivers=("momentum supports candidate",),
+        negative_drivers=("volatility still limits position",),
+        model_version="forecast-v1",
+        rule_version="rules-cn-v1",
+        data_snapshot_id="snapshot-001",
+        expected_return_quantiles={"p05": -0.02, "p50": 0.03, "p95": 0.08},
+        expected_drawdown=-0.04,
+        grade="B",
+        target_position_limit=0.05,
+        exit_or_invalidation_conditions=("trend break",),
+        abstain_reason=None if final_signal is not FinalSignal.ABSTAIN else AbstainReason.DATA,
+    )
+
+
+def profitability() -> ProfitabilityEvidence:
+    return ProfitabilityEvidence(
+        source="fixture",
+        strategy_id="strategy.demo",
+        strategy_version="v1",
+        total_return=0.18,
+        annualized_return=0.12,
+        max_drawdown=-0.08,
+        benchmark_total_return=0.05,
+        excess_return=0.13,
+        trade_count=24,
+        turnover=5.2,
+        cost_drag=0.012,
+        calibration_sample_count=80,
+        brier_score=0.18,
+        checksum="profitability-fixture",
+    )
+
+
+def simulation() -> SimulationEvidence:
+    return SimulationEvidence(
+        account_id="paper-main",
+        net_asset_value=105_000,
+        realized_pnl=2_000,
+        unrealized_pnl=3_000,
+        order_count=12,
+        execution_count=12,
+        deviation_count=12,
+        threshold_breach_count=0,
+        max_abs_slippage_pct=0.002,
+        checksum="simulation-fixture",
+    )
+
+
+def security() -> SecurityRef:
+    return SecurityRef(
+        security_id="SSE:600519",
+        symbol="600519",
+        name="贵州茅台",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        currency=Currency.CNY,
+        listed_date=date(2001, 8, 27),
+        status_date=date(2026, 6, 30),
+        status=SecurityStatus.ACTIVE,
+    )
+
+
+def quote() -> Quote:
+    now = as_of()
+    return Quote(
+        security_id="SSE:600519",
+        latest_price=126.0,
+        previous_close=124.0,
+        open_price=124.5,
+        high_price=127.0,
+        low_price=123.5,
+        volume=10_000,
+        amount=1_260_000,
+        provider="fixture",
+        schema_version="fixture.v1",
+        source_time=now,
+        observed_at=now,
+        received_at=now,
+        quality_status=RecordQualityStatus.OK,
+    )
+
+
+def bars(count: int = 90) -> tuple[Bar, ...]:
+    output: list[Bar] = []
+    start = date(2026, 1, 2)
+    trading_index = 0
+    current_day = start
+    while len(output) < count:
+        if current_day.weekday() < 5:
+            close = 100.0 + trading_index * 0.45 + (trading_index % 7) * 0.08
+            start_time = datetime.combine(current_day, time(9, 30), tzinfo=UTC)
+            end_time = datetime.combine(current_day, time(15, 0), tzinfo=UTC)
+            output.append(
+                Bar(
+                    security_id="SSE:600519",
+                    interval=BarInterval.DAILY,
+                    start_time=start_time,
+                    end_time=end_time,
+                    trade_date=current_day,
+                    open_price=close - 0.4,
+                    high_price=close + 0.9,
+                    low_price=close - 0.8,
+                    close_price=close,
+                    volume=100_000 + trading_index,
+                    amount=close * 100_000,
+                    provider="fixture",
+                    schema_version="fixture.v1",
+                    source_time=end_time,
+                    observed_at=end_time,
+                    received_at=end_time,
+                    quality_status=RecordQualityStatus.OK,
+                )
+            )
+            trading_index += 1
+        current_day += timedelta(days=1)
+    return tuple(output)
+
+
+def test_missing_evidence_downgrades_tradeable_signal_to_watch() -> None:
+    report = DecisionHub().build_report(request=request(), analysis_report=analysis())
+
+    assert report.final_signal is FinalSignal.WATCH
+    assert report.execution_readiness is ExecutionReadiness.RESEARCH_ONLY
+    assert any(gate.status is EvidenceGateStatus.MISSING for gate in report.gates)
+    assert report.target_position_limit == 0.0
+    assert report.real_order_submission_enabled is False
+    assert "不保证盈利" in report.no_profit_guarantee
+
+
+def test_all_evidence_passes_to_api_candidate_without_real_order_path() -> None:
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis(),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    assert report.final_signal is FinalSignal.BUY_CANDIDATE
+    assert report.execution_readiness is ExecutionReadiness.API_CANDIDATE
+    assert all(gate.status is EvidenceGateStatus.PASS for gate in report.gates)
+    assert report.target_position_limit == 0.05
+    assert report.real_order_submission_enabled is False
+
+
+def test_blocked_data_forces_abstain_even_when_other_evidence_exists() -> None:
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis(FinalSignal.ABSTAIN),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    assert report.final_signal is FinalSignal.ABSTAIN
+    assert report.execution_readiness is ExecutionReadiness.NOT_ELIGIBLE
+    assert any("stale quote" in reason for gate in report.gates for reason in gate.reasons)
+
+
+def test_research_decision_from_market_data_contains_profitability_context() -> None:
+    report = build_research_decision_from_market_data(
+        security=security(),
+        bars=bars(),
+        quote=quote(),
+        data_health=healthy_data(),
+    )
+
+    assert report.analysis_report.security_id == "SSE:600519"
+    assert report.profitability is not None
+    assert report.profitability.trade_count > 0
+    assert report.simulation is None
+    assert report.final_signal in {FinalSignal.WATCH, FinalSignal.BUY_CANDIDATE}
+    assert any("模拟盘" in item for item in report.negative_evidence)

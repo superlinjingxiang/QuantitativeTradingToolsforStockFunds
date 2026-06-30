@@ -9,7 +9,7 @@ PySide6 视图 / ViewModel
         ↓ 命令和只读状态
 应用服务 / 任务编排
         ↓
-领域模型 ─ 策略 ─ 预测 ─ 风险 ─ 组合 ─ 回测
+领域模型 ─ 策略 ─ 预测 ─ 风险 ─ 组合 ─ 回测 ─ 决策中枢
         ↓
 规则引擎 ─ 数据质量 ─ 数据供应商抽象
         ↓
@@ -23,6 +23,7 @@ PySide6 视图 / ViewModel
 ```text
 ui -> application -> domain
 application -> data protocols / strategy / backtest / risk
+decision -> domain / analysis / reporting / simulation
 provider adapters -> data protocols + vendor SDKs
 storage adapters -> repository protocols + storage libraries
 strategy -> domain + indicators + factors
@@ -56,6 +57,7 @@ china_quant_platform/
 │   ├── strategies/
 │   ├── forecasting/
 │   ├── backtest/
+│   ├── decision/
 │   ├── risk/
 │   ├── portfolio/
 │   ├── simulation/
@@ -90,6 +92,7 @@ china_quant_platform/
 | `PortfolioEngine` | 现金、持仓、可卖数量、估值和盈亏 |
 | `BacktestEngine` | 事件排序和模拟市场回放 |
 | `SimulationBroker` | 使用实时数据进行模拟下单与成交 |
+| `DecisionHub` | 汇总分析、回测、模拟盘和门禁证据，输出最终建议与执行候选状态 |
 | `AuditService` | 保存数据、规则、信号和回测的版本化证据 |
 | `TaskScheduler` | 可取消的后台任务和定时工作流 |
 

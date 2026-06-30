@@ -3,6 +3,8 @@
 from pathlib import Path
 
 project_root = Path(SPECPATH).parent
+if not (project_root / "src").exists():
+    project_root = project_root.parent
 src_root = project_root / "src"
 block_cipher = None
 

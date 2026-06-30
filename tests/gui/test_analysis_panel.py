@@ -7,6 +7,13 @@ from typing import Any
 
 from PySide6 import QtWidgets
 
+from china_quant_platform.decision import (
+    DecisionHub,
+    DecisionRequest,
+    ExecutionReadiness,
+    ProfitabilityEvidence,
+    SimulationEvidence,
+)
 from china_quant_platform.domain import (
     AbstainReason,
     AnalysisReport,
@@ -65,6 +72,44 @@ def report(
     )
 
 
+def decision_request() -> DecisionRequest:
+    return DecisionRequest(security_id="SSE:600519", as_of=as_of())
+
+
+def profitability() -> ProfitabilityEvidence:
+    return ProfitabilityEvidence(
+        source="gui-fixture",
+        strategy_id="strategy.demo",
+        strategy_version="v1",
+        total_return=0.16,
+        annualized_return=0.10,
+        max_drawdown=-0.06,
+        benchmark_total_return=0.04,
+        excess_return=0.12,
+        trade_count=20,
+        turnover=4.0,
+        cost_drag=0.01,
+        calibration_sample_count=60,
+        brier_score=0.18,
+        checksum="gui-profitability",
+    )
+
+
+def simulation() -> SimulationEvidence:
+    return SimulationEvidence(
+        account_id="paper-gui",
+        net_asset_value=103_000,
+        realized_pnl=1_200,
+        unrealized_pnl=1_800,
+        order_count=8,
+        execution_count=8,
+        deviation_count=8,
+        threshold_breach_count=0,
+        max_abs_slippage_pct=0.001,
+        checksum="gui-simulation",
+    )
+
+
 def test_view_model_applies_analysis_report_to_panel_state() -> None:
     view_model = ApplicationViewModel(clock=as_of)
     view_model.select_security("SSE:600519")
@@ -85,6 +130,29 @@ def test_view_model_applies_analysis_report_to_panel_state() -> None:
     assert view_model.state.analysis.operation.target_position_limit == "5.0%"
 
 
+def test_view_model_and_window_render_decision_report(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=as_of)
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+    view_model.select_security("SSE:600519")
+    decision = DecisionHub().build_report(
+        request=decision_request(),
+        analysis_report=report(),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    view_model.apply_decision_report(decision, generation=view_model.state.selection_generation)
+
+    decision_label = window.findChild(QtWidgets.QLabel, "decisionPanelText")
+    assert decision_label is not None
+    assert view_model.state.decision.readiness == ExecutionReadiness.API_CANDIDATE.value
+    assert "BUY_CANDIDATE" in decision_label.text()
+    assert "API_CANDIDATE" in decision_label.text()
+    assert "历史净收益" in decision_label.text()
+    assert "不保证盈利" in decision_label.text()
+
+
 def test_main_window_renders_strategy_forecast_and_operation_panels(qtbot: Any) -> None:
     view_model = ApplicationViewModel(clock=as_of)
     window = MainWindow(view_model)
@@ -102,9 +170,15 @@ def test_main_window_renders_strategy_forecast_and_operation_panels(qtbot: Any) 
     strategy_label = window.findChild(QtWidgets.QLabel, "strategyPanelText")
     forecast_label = window.findChild(QtWidgets.QLabel, "forecastPanelText")
     operation_label = window.findChild(QtWidgets.QLabel, "operationPanelText")
+    strategy_scroll = window.findChild(QtWidgets.QScrollArea, "strategyPanelTextScroll")
+    forecast_scroll = window.findChild(QtWidgets.QScrollArea, "forecastPanelTextScroll")
     assert strategy_label is not None
     assert forecast_label is not None
     assert operation_label is not None
+    assert strategy_scroll is not None
+    assert forecast_scroll is not None
+    assert strategy_scroll.widget() is strategy_label
+    assert forecast_scroll.widget() is forecast_label
     assert "Demo momentum strategy" in strategy_label.text()
     assert "rules-cn-v1" in strategy_label.text()
     assert "上涨62.0%" in forecast_label.text()

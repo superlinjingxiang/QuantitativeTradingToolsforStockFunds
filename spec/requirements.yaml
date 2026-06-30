@@ -1,7 +1,7 @@
-version: '1.0'
-as_of: '2026-06-28'
+version: '1.2'
+as_of: '2026-06-30'
 project: china_quant_platform
-mission: 构建面向中国股票与基金的桌面量化分析平台，提供可搜索行情、可解释策略分析、真实约束回测、风险控制和模拟交易。
+mission: 构建面向中国股票与基金的桌面量化分析平台，以策略决策中枢为核心，提供可搜索行情、可解释策略分析、真实约束回测、风险控制、模拟交易和可复现的赚钱证据。
 constraints:
 - id: C-001
   text: 不得宣称保证盈利；ABSTAIN（不交易）是合法结果。
@@ -13,6 +13,8 @@ constraints:
   text: 回测必须使用时点数据，并建模按日期生效的规则与成本。
 - id: C-005
   text: 陈旧、非法、缺失、未授权或分布外输入必须阻止新的交易信号。
+- id: C-006
+  text: GUI只是查看、解释和验证入口；不得用界面展示替代样本外、回测、模拟盘和风控证据。
 functional_requirements:
 - id: FR-001
   priority: P0
@@ -74,6 +76,16 @@ functional_requirements:
 - id: FR-020
   priority: P0
   title: 信号与运行审计追踪
+- id: FR-021
+  priority: P0
+  title: 策略决策中枢
+  status: implemented
+  text: 对当前标的或标的池整合行情、因子、预测、风险、回测和模拟盘证据，输出可解释操作建议、仓位上限、失效条件和是否进入执行候选。
+- id: FR-022
+  priority: P0
+  title: 策略盈利验证实验室
+  status: planned
+  text: 对候选策略运行样本外、滚动前推、成本压力、过拟合诊断和模拟盘偏差验证，并把通过状态反馈给DecisionHub。
 non_functional_requirements:
 - id: NFR-01
   text: 在约定夹具和硬件上，本地搜索P95小于300毫秒。
@@ -120,6 +132,67 @@ source_documents:
   product: docs/product-specs/PRODUCT_SPEC.md
   technical: docs/technical/TECHNICAL_SPEC.md
   traceability: docs/TRACEABILITY.md
+post_mvp_acceptance_gates:
+- id: SDA-001
+  task: TASK-026
+  status: implemented
+  evidence: tests/unit/test_decision_hub.py; tests/gui/test_analysis_panel.py
+  text: 任一当前标的必须生成统一DecisionReport，包含行情、策略、预测、风险、回测证据、模拟盘证据和审计摘要。
+- id: SDA-002
+  task: TASK-026
+  status: implemented
+  evidence: tests/unit/test_decision_hub.py; tests/gui/test_analysis_panel.py
+  text: 建议必须明确为买入候选、持有、减仓、卖出、观察或ABSTAIN，并给出置信度、仓位上限、有效期和失效条件。
+- id: SDA-003
+  task: TASK-026
+  status: implemented
+  evidence: tests/unit/test_decision_hub.py
+  text: 若样本外、成本压力、风险预算、概率校准或模拟盘证据不足，必须输出观察或ABSTAIN，不得输出可执行候选。
+- id: SDA-004
+  task: TASK-026
+  status: implemented
+  evidence: tests/unit/test_decision_hub.py; src/china_quant_platform/decision/research.py
+  text: 决策报告必须展示历史赚钱证据，包括扣除成本后的净收益、最大回撤、基准比较、交易次数和稳定性说明。
+- id: SDA-005
+  task: TASK-026
+  status: implemented
+  evidence: tests/gui/test_analysis_panel.py; tests/gui/test_app_shell.py
+  text: GUI必须把策略建议和赚钱证据展示在当前标的上下文中，同时保留“不保证盈利”的边界说明。
+- id: SDA-006
+  task: TASK-026
+  status: implemented
+  evidence: tests/unit/test_decision_hub.py; tests/unit/test_simulation_broker.py
+  text: 决策中枢不得提交真实订单，只能输出未来API执行候选状态和所需风控字段。
+- id: EPV-001
+  task: TASK-027
+  status: planned
+  evidence: planned sample split and leakage tests
+  text: 每个候选策略必须有固定训练、验证、最终样本外和滚动前推切分，并记录数据快照、证券池和规则版本。
+- id: EPV-002
+  task: TASK-027
+  status: planned
+  evidence: planned backtest report regression tests
+  text: 回测报告必须同时给出扣除成本后的净收益、最大回撤、风险调整收益、基准比较、交易次数、换手率和年份/市场状态拆解。
+- id: EPV-003
+  task: TASK-027
+  status: planned
+  evidence: planned stress and sensitivity tests
+  text: 必须运行成本、滑点、流动性容量、涨跌停/停牌和参数敏感性压力测试；压力后失效的策略不得进入执行候选。
+- id: EPV-004
+  task: TASK-027
+  status: planned
+  evidence: planned overfitting diagnostic tests and model cards
+  text: 必须提供过拟合和多重检验诊断，包括参数稳定性、样本量下限、校准误差和策略选择偏差说明。
+- id: EPV-005
+  task: TASK-027
+  status: planned
+  evidence: planned paper-trading deviation tests
+  text: 模拟盘必须记录信号时间、可得报价、模拟成交、滑点偏差、漏单/重复信号、数据延迟和异常恢复；偏差超限时自动降级。
+- id: EPV-006
+  task: TASK-027
+  status: planned
+  evidence: planned DecisionHub integration gate tests
+  text: DecisionHub只能使用通过EPV门槛的证据提升执行候选等级；证据缺失、过期或失败时输出WATCH或ABSTAIN。
 release_audit:
   command: python -m china_quant_platform.release.audit
   checklist: docs/release/RELEASE_CHECKLIST.md

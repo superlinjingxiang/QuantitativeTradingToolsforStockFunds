@@ -11,7 +11,12 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from china_quant_platform.data import EastmoneyMarketDataProvider
 from china_quant_platform.domain import AdjustmentMode, BarInterval
 from china_quant_platform.ui.chart import PriceChartWidget
-from china_quant_platform.ui.state import AppUiState, ChartOverlay, ChartRangePreset, UiRunState
+from china_quant_platform.ui.state import (
+    AppUiState,
+    ChartOverlay,
+    ChartRangePreset,
+    UiTaskStatus,
+)
 from china_quant_platform.ui.theme import (
     DEFAULT_THEME_MODE,
     UiThemeMode,
@@ -43,7 +48,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._theme_actions: dict[UiThemeMode, QtGui.QAction] = {}
         self.setWindowTitle("中国股票与基金量化分析平台")
-        self.resize(1280, 820)
+        self.resize(1440, 900)
         self.setObjectName("mainWindow")
 
         self.search_input = QtWidgets.QLineEdit()
@@ -115,6 +120,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.watchlist.itemActivated.connect(self._activate_security_item)
         self.watchlist.itemClicked.connect(self._activate_security_item)
 
+        self.add_watchlist_button = QtWidgets.QToolButton()
+        self.add_watchlist_button.setObjectName("addWatchlistItem")
+        self.add_watchlist_button.setIcon(
+            self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_DialogApplyButton)
+        )
+        self.add_watchlist_button.setToolTip("添加当前标的到自选列表")
+        self.add_watchlist_button.clicked.connect(self._add_selected_to_watchlist)
+
+        self.remove_watchlist_button = QtWidgets.QToolButton()
+        self.remove_watchlist_button.setObjectName("removeWatchlistItem")
+        self.remove_watchlist_button.setIcon(
+            self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_TrashIcon)
+        )
+        self.remove_watchlist_button.setToolTip("从自选列表删除当前标的")
+        self.remove_watchlist_button.clicked.connect(self._remove_current_watchlist_item)
+
         self.market_indices = QtWidgets.QListWidget()
         self.market_indices.setObjectName("marketIndexItems")
         self.market_indices.itemActivated.connect(self._activate_security_item)
@@ -126,6 +147,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.recent_securities = QtWidgets.QListWidget()
         self.recent_securities.setObjectName("recentSecurityItems")
+        self.recent_securities.itemActivated.connect(self._activate_security_item)
+        self.recent_securities.itemClicked.connect(self._activate_security_item)
 
         self.interval_combo = QtWidgets.QComboBox()
         self.interval_combo.setObjectName("chartInterval")
@@ -182,6 +205,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.strategy_panel_label = self._panel_label("strategyPanelText")
         self.forecast_panel_label = self._panel_label("forecastPanelText")
         self.operation_panel_label = self._panel_label("operationPanelText")
+        self.decision_panel_label = self._panel_label("decisionPanelText")
 
         self.setCentralWidget(self._build_central_widget())
         self.statusBar().addPermanentWidget(self.status_label)
@@ -244,7 +268,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_label.setText(
             f"状态：{state.run_state.value}｜任务：{state.task_status.value}｜标的：{selected}"
         )
-        self.cancel_button.setEnabled(state.run_state is UiRunState.BACKTEST_RUNNING)
+        self.cancel_button.setEnabled(
+            state.task_status
+            in {
+                UiTaskStatus.RUNNING,
+                UiTaskStatus.CANCELLING,
+            }
+        )
         self._sync_chart_controls(state)
         self.price_chart.set_chart_state(state.chart)
         self.chart_summary_label.setText(
@@ -252,10 +282,12 @@ class MainWindow(QtWidgets.QMainWindow):
             f"范围：{state.chart.range_preset.value}｜点数：{state.chart.point_count}"
         )
         self._sync_market_and_watchlist(state)
+        self._sync_watchlist_buttons(state)
         self._sync_knowledge(state)
         self.strategy_panel_label.setText(_strategy_panel_text(state))
         self.forecast_panel_label.setText(_forecast_panel_text(state))
         self.operation_panel_label.setText(_operation_panel_text(state))
+        self.decision_panel_label.setText(_decision_panel_text(state))
 
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if watched is self.search_input and event.type() == QtCore.QEvent.Type.KeyPress:
@@ -314,6 +346,23 @@ class MainWindow(QtWidgets.QMainWindow):
             except KeyError:
                 return
 
+    @QtCore.Slot()
+    def _add_selected_to_watchlist(self) -> None:
+        security_id = self.view_model.state.selected_security_id
+        if security_id is not None:
+            self.view_model.add_watchlist_item(security_id, pinned=True)
+
+    @QtCore.Slot()
+    def _remove_current_watchlist_item(self) -> None:
+        item = self.watchlist.currentItem()
+        security_id = item.data(QtCore.Qt.ItemDataRole.UserRole) if item is not None else None
+        if not isinstance(security_id, str):
+            selected = self.view_model.state.selected_security_id
+            watchlist_ids = {item.security_id for item in self.view_model.state.watchlist.items}
+            security_id = selected if selected in watchlist_ids else None
+        if isinstance(security_id, str):
+            self.view_model.remove_watchlist_item(security_id)
+
     @QtCore.Slot(QtWidgets.QListWidgetItem)
     def _activate_knowledge_topic(self, item: QtWidgets.QListWidgetItem) -> None:
         topic_id = item.data(QtCore.Qt.ItemDataRole.UserRole)
@@ -358,14 +407,28 @@ class MainWindow(QtWidgets.QMainWindow):
         label = QtWidgets.QLabel()
         label.setObjectName(object_name)
         label.setWordWrap(True)
-        label.setMinimumHeight(170)
+        label.setMinimumHeight(0)
+        label.setContentsMargins(0, 0, 4, 0)
         label.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Preferred,
             QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.MinimumExpanding,
         )
         label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
         return label
+
+    def _panel_scroll_area(
+        self,
+        label: QtWidgets.QLabel,
+        object_name: str,
+    ) -> QtWidgets.QScrollArea:
+        scroll_area = QtWidgets.QScrollArea()
+        scroll_area.setObjectName(object_name)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll_area.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setWidget(label)
+        return scroll_area
 
     def _sync_chart_controls(self, state: AppUiState) -> None:
         self._set_combo_data(self.interval_combo, state.chart.interval.value)
@@ -414,6 +477,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 for index in overview.indices
             ),
         )
+        self._select_list_item(self.market_indices, state.selected_security_id)
         self._set_list_items(
             self.watchlist,
             tuple(
@@ -425,6 +489,26 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 for item in state.watchlist.items
             ),
+        )
+        self._select_list_item(self.watchlist, state.selected_security_id)
+        self._set_list_items(
+            self.recent_securities,
+            tuple(
+                (
+                    item.security_id,
+                    f"{item.symbol}  {item.name}  {item.asset_type}  {item.exchange}",
+                )
+                for item in state.recent_securities
+            ),
+        )
+        self._select_list_item(self.recent_securities, state.selected_security_id)
+
+    def _sync_watchlist_buttons(self, state: AppUiState) -> None:
+        watchlist_ids = {item.security_id for item in state.watchlist.items}
+        selected = state.selected_security_id
+        self.add_watchlist_button.setEnabled(selected is not None and selected not in watchlist_ids)
+        self.remove_watchlist_button.setEnabled(
+            bool(watchlist_ids) and selected is not None and selected in watchlist_ids
         )
 
     def _set_list_items(
@@ -438,6 +522,17 @@ class MainWindow(QtWidgets.QMainWindow):
             item = QtWidgets.QListWidgetItem(text)
             item.setData(QtCore.Qt.ItemDataRole.UserRole, security_id)
             widget.addItem(item)
+        widget.blockSignals(False)
+
+    def _select_list_item(self, widget: QtWidgets.QListWidget, security_id: str | None) -> None:
+        if security_id is None:
+            return
+        widget.blockSignals(True)
+        for row in range(widget.count()):
+            item = widget.item(row)
+            if item.data(QtCore.Qt.ItemDataRole.UserRole) == security_id:
+                widget.setCurrentItem(item)
+                break
         widget.blockSignals(False)
 
     def _sync_knowledge(self, state: AppUiState) -> None:
@@ -508,6 +603,13 @@ class MainWindow(QtWidgets.QMainWindow):
         ):
             group = QtWidgets.QGroupBox(title)
             group_layout = QtWidgets.QVBoxLayout(group)
+            if title == "自选列表":
+                action_layout = QtWidgets.QHBoxLayout()
+                action_layout.setContentsMargins(0, 0, 0, 0)
+                action_layout.addWidget(self.add_watchlist_button)
+                action_layout.addWidget(self.remove_watchlist_button)
+                action_layout.addStretch(1)
+                group_layout.addLayout(action_layout)
             if title == "指数":
                 group_layout.addWidget(self.market_overview_summary)
             group_layout.addWidget(widget)
@@ -539,7 +641,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _right_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
         panel.setObjectName("rightPanel")
-        panel.setMinimumWidth(230)
+        panel.setMinimumWidth(330)
         layout = QtWidgets.QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -547,11 +649,12 @@ class MainWindow(QtWidgets.QMainWindow):
             ("当前策略", self.strategy_panel_label),
             ("预期走势", self.forecast_panel_label),
             ("操作与风险", self.operation_panel_label),
+            ("决策证据", self.decision_panel_label),
         ):
             group = QtWidgets.QGroupBox(title)
-            group.setMinimumHeight(210)
+            group.setMinimumHeight(160)
             group_layout = QtWidgets.QVBoxLayout(group)
-            group_layout.addWidget(label)
+            group_layout.addWidget(self._panel_scroll_area(label, f"{label.objectName()}Scroll"))
             layout.addWidget(group, stretch=1)
         return panel
 
@@ -601,12 +704,14 @@ def _strategy_panel_text(state: AppUiState) -> str:
     strategy = state.analysis.strategy
     lines = [
         f"策略：{strategy.strategy_name}",
-        f"ID/版本：{strategy.strategy_id} / {strategy.strategy_version}",
+        f"ID：{_wrap_panel_value(strategy.strategy_id)}",
+        f"版本：{_wrap_panel_value(strategy.strategy_version)}",
         f"周期：{strategy.horizon_label}",
         f"市场状态：{strategy.market_regime}",
         f"原始信号：{strategy.raw_signal}",
-        f"模型/规则/快照：{strategy.model_version} / "
-        f"{strategy.rule_version} / {strategy.data_snapshot_id}",
+        f"模型：{_wrap_panel_value(strategy.model_version)}",
+        f"规则：{_wrap_panel_value(strategy.rule_version)}",
+        f"快照：{_wrap_panel_value(strategy.data_snapshot_id)}",
         _list_text("适用条件", strategy.applicable_conditions),
         _list_text("失效条件", strategy.invalidation_conditions),
     ]
@@ -622,7 +727,7 @@ def _forecast_panel_text(state: AppUiState) -> str:
             f"收益区间：{forecast.expected_return_range}",
             f"预期回撤：{forecast.expected_drawdown}",
             f"校准/说明：{forecast.confidence_note}",
-            f"模型：{forecast.model_version}",
+            f"模型：{_wrap_panel_value(forecast.model_version)}",
         ]
     )
 
@@ -643,10 +748,42 @@ def _operation_panel_text(state: AppUiState) -> str:
     return "\n".join(lines)
 
 
+def _decision_panel_text(state: AppUiState) -> str:
+    decision = state.decision
+    lines = [
+        f"最终建议：{decision.final_signal}",
+        f"执行候选：{decision.readiness}",
+        f"置信度：{decision.confidence}",
+        f"仓位上限：{decision.target_position_limit}",
+        f"历史证据：{decision.profitability_summary}",
+        f"模拟证据：{decision.simulation_summary}",
+        f"门槛：{decision.gate_summary}",
+        _brief_list_text("原因", decision.blocking_reasons, limit=3),
+        _brief_list_text("边界", decision.caveats, limit=2),
+        f"说明：{decision.no_profit_guarantee}",
+    ]
+    return "\n".join(lines)
+
+
+def _brief_list_text(title: str, values: tuple[str, ...], *, limit: int) -> str:
+    if not values:
+        return f"{title}：--"
+    selected = values[:limit]
+    suffix = "" if len(values) <= limit else f"；另{len(values) - limit}项"
+    return f"{title}：" + "；\n  ".join(_wrap_panel_value(value) for value in selected) + suffix
+
+
 def _list_text(title: str, values: tuple[str, ...]) -> str:
     if not values:
         return f"{title}：--"
-    return f"{title}：" + "；".join(values)
+    return f"{title}：" + "；\n  ".join(_wrap_panel_value(value) for value in values)
+
+
+def _wrap_panel_value(value: str, *, width: int = 34) -> str:
+    if len(value) <= width:
+        return value
+    chunks = [value[index : index + width] for index in range(0, len(value), width)]
+    return "\n  ".join(chunks)
 
 
 def _load_theme_mode(settings: QtCore.QSettings) -> UiThemeMode:
