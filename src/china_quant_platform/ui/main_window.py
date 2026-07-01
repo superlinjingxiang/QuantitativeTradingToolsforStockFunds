@@ -15,6 +15,7 @@ from china_quant_platform.ui.state import (
     AppUiState,
     ChartOverlay,
     ChartRangePreset,
+    MarketIndexPanelState,
     UiTaskStatus,
 )
 from china_quant_platform.ui.theme import (
@@ -142,6 +143,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.market_indices.setObjectName("marketIndexItems")
         self.market_indices.itemActivated.connect(self._activate_security_item)
         self.market_indices.itemClicked.connect(self._activate_security_item)
+
+        self.refresh_market_button = QtWidgets.QToolButton()
+        self.refresh_market_button.setObjectName("refreshMarketOverview")
+        self.refresh_market_button.setIcon(
+            self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_BrowserReload)
+        )
+        self.refresh_market_button.setToolTip("刷新主要指数")
+        self.refresh_market_button.clicked.connect(self.view_model.refresh_market_overview)
 
         self.market_overview_summary = QtWidgets.QLabel()
         self.market_overview_summary.setObjectName("marketOverviewSummary")
@@ -512,11 +521,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_list_items(
             self.market_indices,
             tuple(
-                (
-                    index.security_id,
-                    f"{index.name}  {index.latest_value}  {index.change_pct}  {index.turnover}",
-                )
-                for index in overview.indices
+                (index.security_id, _market_index_item_text(index)) for index in overview.indices
             ),
         )
         self._select_list_item(self.market_indices, state.selected_security_id)
@@ -563,6 +568,9 @@ class MainWindow(QtWidgets.QMainWindow):
         for security_id, text in entries:
             item = QtWidgets.QListWidgetItem(text)
             item.setData(QtCore.Qt.ItemDataRole.UserRole, security_id)
+            item.setToolTip(text.replace("\n", "  "))
+            if "\n" in text:
+                item.setSizeHint(QtCore.QSize(0, 48))
             widget.addItem(item)
         widget.blockSignals(False)
 
@@ -653,7 +661,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 action_layout.addStretch(1)
                 group_layout.addLayout(action_layout)
             if title == "指数":
-                group_layout.addWidget(self.market_overview_summary)
+                market_header = QtWidgets.QHBoxLayout()
+                market_header.setContentsMargins(0, 0, 0, 0)
+                market_header.addWidget(self.market_overview_summary, stretch=1)
+                market_header.addWidget(self.refresh_market_button)
+                group_layout.addLayout(market_header)
             group_layout.addWidget(widget)
             layout.addWidget(group)
         return panel
@@ -760,6 +772,12 @@ def _strategy_panel_text(state: AppUiState) -> str:
         _list_text("失效条件", strategy.invalidation_conditions),
     ]
     return "\n".join(lines)
+
+
+def _market_index_item_text(index: MarketIndexPanelState) -> str:
+    if index.latest_value == "--":
+        return f"{index.name}\n--  {index.change_pct}"
+    return f"{index.name}\n{index.latest_value}  {index.change_pct}"
 
 
 def _forecast_panel_text(state: AppUiState) -> str:

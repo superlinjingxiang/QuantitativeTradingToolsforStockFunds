@@ -246,3 +246,11 @@
 - 交付：价格轴显示 `价格(CNY)` 和关键价位；顶部显示最新价、涨跌额和涨跌幅；成交量柱按涨跌红绿展示；新增涨跌幅趋势柱；折线悬停显示日期、收盘/最新价、涨跌额、涨跌幅、高低价和成交量；实时quote使用昨收价作为涨跌幅基准。
 - 验收：`513300` / `周线` / `1年` 图表能显示 `最新 2.704 +0.036 +1.35%`，悬停最新点显示 `收盘/最新: 2.704` 与 `涨跌: +0.036 (+1.35%)`；红绿成交量和涨跌幅趋势柱可见；不得引入新的图表依赖。
 - 完成证据：2026-06-30 完成 `ChartPointState.reference_price`、`PriceChartWidget` 悬停十字线/提示框、最新涨跌摘要、涨跌幅趋势柱和红绿成交量增强；新增GUI测试覆盖实时quote昨收基准与悬停提示。真实GUI截图 `reports/gui_513300_hover_tooltip.png` 验证55个图表点、状态 `HEALTHY`、最新价 `2.704`、涨跌 `+0.036 (+1.35%)`。`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 205项、`python -m china_quant_platform.release.audit`、PyInstaller打包、exe版本和GUI启动烟雾均通过。
+
+### [x] TASK-033——指数模块自动刷新与可读展示
+- 依赖：TASK-021、TASK-028、TASK-030
+- 需求：FR-010、FR-011、AC-02
+- 核心定位：修复左侧“指数”模块启动后没有任何显示的问题，让市场概览成为策略判断的可见上下文，但不改变策略盈利验证和真实下单边界。
+- 交付：默认指数占位；启动时自动刷新上证指数与深证成指；指数quote失败时使用最近日K合成点位和涨跌幅；指数面板刷新按钮；两行式指数列表；点击指数可切换到对应图表标的。
+- 验收：启动GUI后指数面板不为空；联网成功时显示市场状态、市场广度、成交额、波动、数据健康、上证指数和深证成指点位/涨跌幅；quote接口临时失败时日K兜底仍能显示指数；不得引入新的付费账号依赖。
+- 完成证据：2026-07-01 完成 `refresh_market_overview()` 自动后台刷新、`MarketOverviewPanelState` 默认/加载/失败占位、指数日K兜底合成quote和左侧刷新按钮；新增GUI测试覆盖默认占位、自动刷新、quote失败日K兜底和指数点击切换。真实GUI截图 `reports/gui_market_indices_overview_final.png` 验证约0.5秒显示上证指数 `4073.90 +1.16%`、深证成指 `15812.87 +0.19%`、数据 `HEALTHY`。`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 208项、`python -m china_quant_platform.release.audit`、PyInstaller打包、exe版本和GUI启动烟雾均通过。

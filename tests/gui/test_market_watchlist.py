@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from PySide6 import QtCore, QtWidgets
 
+from china_quant_platform.data import (
+    BarsRequest,
+    CorporateActionRequest,
+    FundNavRequest,
+    ProviderCapabilities,
+    ProviderCapability,
+)
 from china_quant_platform.domain import (
+    Bar,
+    CorporateAction,
     DataHealth,
     DataHealthStatus,
     FinalSignal,
+    FundNav,
     Quote,
     RecordQualityStatus,
+    SecurityRef,
 )
 from china_quant_platform.market import build_market_overview
 from china_quant_platform.ui import ApplicationViewModel, MainWindow
@@ -56,6 +68,154 @@ def stale_health() -> DataHealth:
         as_of=as_of(),
         issues=("stale watchlist quote",),
     )
+
+
+class InstantIndexProvider:
+    provider_id = "instant_index"
+    capabilities = ProviderCapabilities(
+        provider_id=provider_id,
+        supported=frozenset({ProviderCapability.REALTIME_QUOTE}),
+    )
+
+    async def search_security(self, keyword: str) -> list[SecurityRef]:
+        return []
+
+    async def get_quote(self, security_id: str) -> Quote:
+        if security_id == "SSE:000001":
+            return quote(security_id, 3_060.0, 3_000.0, amount=100_000_000)
+        if security_id == "SZSE:399001":
+            return quote(security_id, 10_100.0, 10_000.0, amount=200_000_000)
+        return quote(security_id, 100.0, 100.0)
+
+    async def get_bars(self, request: BarsRequest) -> list[Bar]:
+        return []
+
+    def subscribe_quotes(self, security_ids: Sequence[str]) -> AsyncIterator[Quote]:
+        return self._empty_quote_stream(security_ids)
+
+    async def get_corporate_actions(
+        self,
+        request: CorporateActionRequest,
+    ) -> list[CorporateAction]:
+        return []
+
+    async def get_fund_nav(self, request: FundNavRequest) -> list[FundNav]:
+        return []
+
+    async def _empty_quote_stream(self, security_ids: Sequence[str]) -> AsyncIterator[Quote]:
+        if False:
+            yield await self.get_quote(security_ids[0])
+
+
+class QuoteFailingIndexBarsProvider(InstantIndexProvider):
+    async def get_quote(self, security_id: str) -> Quote:
+        raise ConnectionError("quote closed connection")
+
+    async def get_bars(self, request: BarsRequest) -> list[Bar]:
+        first_end = as_of() - timedelta(days=1)
+        second_end = as_of()
+        return [
+            Bar(
+                security_id=request.security_id,
+                interval=request.interval,
+                start_time=first_end - timedelta(hours=6),
+                end_time=first_end,
+                trade_date=first_end.date(),
+                open_price=99,
+                high_price=101,
+                low_price=98,
+                close_price=100,
+                volume=100_000,
+                amount=100_000_000,
+                adjustment=request.adjustment,
+                provider=self.provider_id,
+                schema_version="fixture.v1",
+                source_time=first_end,
+                observed_at=first_end,
+                received_at=first_end,
+                quality_status=RecordQualityStatus.OK,
+            ),
+            Bar(
+                security_id=request.security_id,
+                interval=request.interval,
+                start_time=second_end - timedelta(hours=6),
+                end_time=second_end,
+                trade_date=second_end.date(),
+                open_price=100,
+                high_price=104,
+                low_price=99,
+                close_price=102,
+                volume=120_000,
+                amount=120_000_000,
+                adjustment=request.adjustment,
+                provider=self.provider_id,
+                schema_version="fixture.v1",
+                source_time=second_end,
+                observed_at=second_end,
+                received_at=second_end,
+                quality_status=RecordQualityStatus.OK,
+            ),
+        ]
+
+
+def test_market_overview_defaults_to_visible_index_placeholders(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=as_of)
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    summary = window.findChild(QtWidgets.QLabel, "marketOverviewSummary")
+    index_list = window.findChild(QtWidgets.QListWidget, "marketIndexItems")
+    refresh_button = window.findChild(QtWidgets.QToolButton, "refreshMarketOverview")
+    assert summary is not None
+    assert index_list is not None
+    assert refresh_button is not None
+    assert "等待行情" in summary.text()
+    assert index_list.count() == 2
+    assert "上证指数" in index_list.item(0).text()
+    assert "等待行情" in index_list.item(0).text()
+
+
+def test_market_overview_auto_refreshes_index_quotes(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(
+        clock=as_of,
+        market_data_provider=InstantIndexProvider(),
+    )
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    index_list = window.findChild(QtWidgets.QListWidget, "marketIndexItems")
+    summary = window.findChild(QtWidgets.QLabel, "marketOverviewSummary")
+    assert index_list is not None
+    assert summary is not None
+
+    qtbot.waitUntil(lambda: "3060.00" in index_list.item(0).text(), timeout=1000)
+
+    assert index_list.count() == 2
+    assert "上证指数" in index_list.item(0).text()
+    assert "+2.00%" in index_list.item(0).text()
+    assert "深证成指" in index_list.item(1).text()
+    assert "市场广度：上涨2 / 下跌0 / 平盘0" in summary.text()
+    assert "数据：HEALTHY" in summary.text()
+
+    index_list.itemActivated.emit(index_list.item(0))
+    assert view_model.state.selected_security_id == "SSE:000001"
+
+
+def test_market_overview_falls_back_to_daily_bars_when_quote_fails(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(
+        clock=as_of,
+        market_data_provider=QuoteFailingIndexBarsProvider(),
+    )
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    index_list = window.findChild(QtWidgets.QListWidget, "marketIndexItems")
+    assert index_list is not None
+
+    qtbot.waitUntil(lambda: "102.00" in index_list.item(0).text(), timeout=1000)
+
+    assert "+2.00%" in index_list.item(0).text()
+    assert view_model.state.market_overview.data_health_text == "HEALTHY"
 
 
 def test_watchlist_groups_signals_and_stale_state_do_not_change_selection() -> None:

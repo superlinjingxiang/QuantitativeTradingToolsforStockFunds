@@ -28,6 +28,7 @@ from china_quant_platform.domain import (
     Currency,
     DataHealth,
     DataHealthStatus,
+    DataUnavailable,
     DomainError,
     Exchange,
     FinalSignal,
@@ -36,7 +37,7 @@ from china_quant_platform.domain import (
     SecurityStatus,
 )
 from china_quant_platform.knowledge import KnowledgeCenter
-from china_quant_platform.market import MarketOverview
+from china_quant_platform.market import MarketOverview, build_market_overview
 from china_quant_platform.ui.state import (
     AnalysisPanelState,
     AppUiState,
@@ -45,6 +46,7 @@ from china_quant_platform.ui.state import (
     ChartRangePreset,
     DecisionPanelState,
     KnowledgeCenterState,
+    MarketOverviewPanelState,
     RecentSecurityState,
     SearchCandidateState,
     UiErrorState,
@@ -112,7 +114,14 @@ class CancellableQtTask(QtCore.QObject):
         self.finished.emit(self._result_factory())
 
 
-_BackgroundJobKind = Literal["search", "security_data"]
+_BackgroundJobKind = Literal["search", "security_data", "market_overview"]
+
+_DEFAULT_MARKET_INDEX_NAMES: dict[str, str] = {
+    "SSE:000001": "上证指数",
+    "SZSE:399001": "深证成指",
+}
+_DEFAULT_MARKET_INDEX_IDS = tuple(_DEFAULT_MARKET_INDEX_NAMES)
+_MARKET_OVERVIEW_STALE_AFTER_SECONDS = 7 * 24 * 60 * 60
 
 
 @dataclass(slots=True)
@@ -130,6 +139,12 @@ class _OnlineSecurityData:
     decision_bars: tuple[Bar, ...]
     quote: Quote
     data_health: DataHealth
+
+
+@dataclass(frozen=True, slots=True)
+class _OnlineMarketOverviewData:
+    overview: MarketOverview
+    failures: tuple[str, ...] = ()
 
 
 class ApplicationViewModel(QtCore.QObject):
@@ -157,9 +172,11 @@ class ApplicationViewModel(QtCore.QObject):
         self._background_poll_timer.timeout.connect(self._drain_background_jobs)
         self._search_token = 0
         self._security_data_token = 0
+        self._market_overview_token = 0
         self._state = AppUiState(
             knowledge=KnowledgeCenterState.from_topics(self._knowledge_center.list_topics())
         )
+        self.refresh_market_overview()
 
     @property
     def state(self) -> AppUiState:
@@ -450,6 +467,69 @@ class ApplicationViewModel(QtCore.QObject):
             self._state.model_copy(
                 update={"market_overview": self._state.market_overview.from_overview(overview)}
             )
+        )
+
+    def refresh_market_overview(self) -> None:
+        provider = self._market_data_provider
+        if provider is None:
+            return
+
+        self._market_overview_token += 1
+        token = self._market_overview_token
+        self._set_state(
+            self._state.model_copy(update={"market_overview": MarketOverviewPanelState.loading()})
+        )
+
+        def quote_operation(security_id: str) -> Callable[[], Coroutine[Any, Any, Quote]]:
+            return lambda: _load_market_index_quote(
+                provider=provider,
+                security_id=security_id,
+                as_of=self._clock(),
+            )
+
+        async def load() -> _OnlineMarketOverviewData:
+            quote_results = await asyncio.gather(
+                *(
+                    _run_provider_operation(quote_operation(security_id))
+                    for security_id in _DEFAULT_MARKET_INDEX_IDS
+                ),
+                return_exceptions=True,
+            )
+            quotes = tuple(result for result in quote_results if isinstance(result, Quote))
+            failures = tuple(
+                f"{security_id}: {_short_error(result)}"
+                for security_id, result in zip(
+                    _DEFAULT_MARKET_INDEX_IDS,
+                    quote_results,
+                    strict=True,
+                )
+                if isinstance(result, BaseException)
+            )
+            overview = build_market_overview(
+                index_quotes=quotes,
+                constituent_quotes=quotes,
+                as_of=self._clock(),
+                index_names=_DEFAULT_MARKET_INDEX_NAMES,
+                stale_after_seconds=_MARKET_OVERVIEW_STALE_AFTER_SECONDS,
+            )
+            if failures and quotes:
+                overview = overview.model_copy(
+                    update={
+                        "data_health": DataHealth(
+                            status=DataHealthStatus.DEGRADED,
+                            block_signal=False,
+                            as_of=self._clock(),
+                            issues=failures,
+                        )
+                    }
+                )
+            return _OnlineMarketOverviewData(overview=overview, failures=failures)
+
+        self._submit_background_job(
+            kind="market_overview",
+            token=token,
+            generation=self._state.selection_generation,
+            func=lambda: asyncio.run(load()),
         )
 
     def add_watchlist_item(
@@ -807,8 +887,10 @@ class ApplicationViewModel(QtCore.QObject):
 
             if job.kind == "search":
                 self._handle_online_search_result(job, result)
-            else:
+            elif job.kind == "security_data":
                 self._handle_online_security_data(job, result)
+            else:
+                self._handle_online_market_overview(job, result)
 
         self._background_jobs = pending
         if not self._background_jobs:
@@ -879,6 +961,24 @@ class ApplicationViewModel(QtCore.QObject):
             )
         )
 
+    def _handle_online_market_overview(self, job: _BackgroundJob, result: object) -> None:
+        if job.token != self._market_overview_token:
+            return
+        if not isinstance(result, _OnlineMarketOverviewData):
+            return
+        if not result.overview.indices and result.failures:
+            self._set_state(
+                self._state.model_copy(
+                    update={
+                        "market_overview": MarketOverviewPanelState.failed(
+                            _compact_failure_text(result.failures)
+                        )
+                    }
+                )
+            )
+            return
+        self.apply_market_overview(result.overview)
+
     def _apply_online_decision_report(
         self,
         result: _OnlineSecurityData,
@@ -903,6 +1003,14 @@ class ApplicationViewModel(QtCore.QObject):
         self.apply_decision_report(decision, generation=generation)
 
     def _handle_background_failure(self, job: _BackgroundJob, error: BaseException) -> None:
+        if job.kind == "market_overview":
+            if job.token == self._market_overview_token:
+                self._set_state(
+                    self._state.model_copy(
+                        update={"market_overview": MarketOverviewPanelState.failed(str(error))}
+                    )
+                )
+            return
         if job.kind == "search" and job.token != self._search_token:
             return
         if job.kind == "search" and (
@@ -1036,6 +1144,63 @@ async def _run_provider_operation[T](operation: Callable[[], Coroutine[Any, Any,
     return await asyncio.to_thread(lambda: asyncio.run(operation()))
 
 
+async def _load_market_index_quote(
+    *,
+    provider: MarketDataProvider,
+    security_id: str,
+    as_of: datetime,
+) -> Quote:
+    try:
+        return await provider.get_quote(security_id)
+    except BaseException as quote_error:
+        start_time = as_of - timedelta(days=21)
+        try:
+            bars = await provider.get_bars(
+                BarsRequest(
+                    security_id=security_id,
+                    interval=BarInterval.DAILY,
+                    start_time=start_time,
+                    end_time=as_of,
+                    adjustment=AdjustmentMode.NONE,
+                )
+            )
+        except BaseException as bars_error:
+            raise DataUnavailable(
+                "指数quote失败，日K兜底也失败："
+                f"quote={_short_error(quote_error)}；bars={_short_error(bars_error)}"
+            ) from bars_error
+        return _quote_from_latest_index_bars(security_id, tuple(bars), quote_error=quote_error)
+
+
+def _quote_from_latest_index_bars(
+    security_id: str,
+    bars: tuple[Bar, ...],
+    *,
+    quote_error: BaseException,
+) -> Quote:
+    if not bars:
+        raise DataUnavailable(f"指数quote失败且日K为空：{_short_error(quote_error)}")
+    sorted_bars = tuple(sorted(bars, key=lambda bar: bar.end_time))
+    latest = sorted_bars[-1]
+    previous = sorted_bars[-2] if len(sorted_bars) >= 2 else latest
+    return Quote(
+        security_id=security_id,
+        latest_price=latest.close_price,
+        previous_close=previous.close_price,
+        open_price=latest.open_price,
+        high_price=latest.high_price,
+        low_price=latest.low_price,
+        volume=latest.volume,
+        amount=latest.amount,
+        provider=f"{latest.provider}.bar_fallback",
+        schema_version="market_overview.bar_fallback.v1",
+        source_time=latest.source_time,
+        observed_at=latest.observed_at,
+        received_at=latest.received_at,
+        quality_status=latest.quality_status,
+    )
+
+
 def build_demo_security_master() -> SecurityMasterService:
     securities = (
         SecurityRef(
@@ -1073,6 +1238,30 @@ def build_demo_security_master() -> SecurityMasterService:
             status_date=date(2026, 6, 28),
             status=SecurityStatus.ACTIVE,
             aliases=("Huaxia Growth",),
+        ),
+        SecurityRef(
+            security_id="SSE:000001",
+            symbol="000001",
+            name="上证指数",
+            asset_type=AssetType.INDEX,
+            exchange=Exchange.SSE,
+            currency=Currency.CNY,
+            listed_date=date(1990, 12, 19),
+            status_date=date(2026, 6, 28),
+            status=SecurityStatus.ACTIVE,
+            aliases=("SSE Composite", "上证综指", "INDEX:000001"),
+        ),
+        SecurityRef(
+            security_id="SZSE:399001",
+            symbol="399001",
+            name="深证成指",
+            asset_type=AssetType.INDEX,
+            exchange=Exchange.SZSE,
+            currency=Currency.CNY,
+            listed_date=date(1991, 4, 3),
+            status_date=date(2026, 6, 28),
+            status=SecurityStatus.ACTIVE,
+            aliases=("SZSE Component", "INDEX:399001"),
         ),
         SecurityRef(
             security_id="INDEX:000001",
@@ -1289,6 +1478,13 @@ def _online_failure_issues(prefix: str, error: BaseException) -> tuple[str, ...]
         "A股收盘后实时价可能停在收盘价，但历史K线仍应可获取；失败通常不是因为15:00后闭市。",
         "请检查打包程序是否能访问东方财富公共接口，以及系统代理、防火墙或证书设置。",
     )
+
+
+def _compact_failure_text(failures: tuple[str, ...]) -> str:
+    text = "；".join(failures)
+    if len(text) <= 96:
+        return text
+    return f"{text[:93]}..."
 
 
 __all__ = ["ApplicationViewModel", "CancellableQtTask", "build_demo_security_master"]

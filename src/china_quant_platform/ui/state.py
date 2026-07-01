@@ -302,12 +302,25 @@ class MarketIndexPanelState(DomainModel):
     source_time: str
 
     @classmethod
+    def placeholder(
+        cls, *, security_id: str, name: str, status: str = "等待行情"
+    ) -> MarketIndexPanelState:
+        return cls(
+            security_id=security_id,
+            name=name,
+            latest_value="--",
+            change_pct=status,
+            turnover="--",
+            source_time="--",
+        )
+
+    @classmethod
     def from_snapshot(cls, snapshot: IndexSnapshot) -> MarketIndexPanelState:
         return cls(
             security_id=snapshot.security_id,
             name=snapshot.name,
             latest_value=f"{snapshot.latest_value:.2f}",
-            change_pct=_format_percent(snapshot.change_pct),
+            change_pct=_format_signed_percent(snapshot.change_pct),
             turnover=_money_text(snapshot.turnover),
             source_time=snapshot.source_time.isoformat(),
         )
@@ -322,6 +335,32 @@ class MarketOverviewPanelState(DomainModel):
     trend_state: str = "--"
     data_health_text: str = "--"
     is_stale: bool = False
+
+    @classmethod
+    def placeholder(cls, *, status: str = "等待行情") -> MarketOverviewPanelState:
+        return cls(
+            indices=_default_market_index_states(status=status),
+            breadth_summary=status,
+            turnover_summary="--",
+            volatility_state="--",
+            trend_state="--",
+            data_health_text=status,
+        )
+
+    @classmethod
+    def loading(cls) -> MarketOverviewPanelState:
+        return cls.placeholder(status="刷新中")
+
+    @classmethod
+    def failed(cls, message: str) -> MarketOverviewPanelState:
+        return cls(
+            indices=_default_market_index_states(status="获取失败"),
+            breadth_summary="--",
+            turnover_summary="--",
+            volatility_state="--",
+            trend_state="--",
+            data_health_text=f"获取失败：{message}",
+        )
 
     @classmethod
     def from_overview(cls, overview: MarketOverview) -> MarketOverviewPanelState:
@@ -412,7 +451,9 @@ class AppUiState(DomainModel):
     task_status: UiTaskStatus = UiTaskStatus.IDLE
     active_task_name: str | None = None
     data_health: DataHealth | None = None
-    market_overview: MarketOverviewPanelState = Field(default_factory=MarketOverviewPanelState)
+    market_overview: MarketOverviewPanelState = Field(
+        default_factory=MarketOverviewPanelState.placeholder
+    )
     watchlist: WatchlistPanelState = Field(default_factory=WatchlistPanelState)
     recent_securities: tuple[RecentSecurityState, ...] = ()
     knowledge: KnowledgeCenterState = Field(default_factory=KnowledgeCenterState)
@@ -568,6 +609,10 @@ def _format_percent(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+def _format_signed_percent(value: float) -> str:
+    return f"{value * 100:+.2f}%"
+
+
 def _money_text(value: float) -> str:
     if value >= 100_000_000:
         return f"{value / 100_000_000:.2f}亿"
@@ -581,6 +626,21 @@ def _data_health_text(data_health: DataHealth) -> str:
     if issue_text:
         return f"{data_health.status.value}: {issue_text}"
     return data_health.status.value
+
+
+def _default_market_index_states(*, status: str) -> tuple[MarketIndexPanelState, ...]:
+    return (
+        MarketIndexPanelState.placeholder(
+            security_id="SSE:000001",
+            name="上证指数",
+            status=status,
+        ),
+        MarketIndexPanelState.placeholder(
+            security_id="SZSE:399001",
+            name="深证成指",
+            status=status,
+        ),
+    )
 
 
 def _knowledge_body(topic: HelpTopic) -> str:
