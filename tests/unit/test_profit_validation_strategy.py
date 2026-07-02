@@ -210,6 +210,29 @@ def test_downtrend_does_not_pass_profit_validation() -> None:
     assert result.trade_count == 0 or result.total_return <= 0
 
 
+def test_volume_confirmation_filter_blocks_unconfirmed_entries() -> None:
+    base_config = ProfitSeekingConfig(
+        horizon=HorizonPreset.ONE_MONTH,
+        max_trades_per_year=8,
+        minimum_oos_bars=80,
+        minimum_validation_bars=80,
+        minimum_trades_for_pass=1,
+    )
+    strict_volume_config = base_config.model_copy(update={"min_volume_confirmation": 1.20})
+    bars = make_daily_bars()
+
+    baseline = run_profit_strategy_backtest("SSE:513300", bars, config=base_config)
+    strict_volume = run_profit_strategy_backtest(
+        "SSE:513300",
+        bars,
+        config=strict_volume_config,
+    )
+
+    assert baseline.trade_count > 0
+    assert strict_volume.trade_count < baseline.trade_count
+    assert "成交量确认" in " ".join(strict_volume.notes)
+
+
 def test_backtest_panel_state_lists_trade_operations() -> None:
     config = ProfitSeekingConfig(
         horizon=HorizonPreset.ONE_MONTH,

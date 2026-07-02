@@ -272,3 +272,11 @@
 - 交付：新增 `china_quant_platform.integrations.ai_hedge_fund` 适配层、`python -m china_quant_platform.ai_hedge_fund` 与 `china-quant-ai-hedge-fund` 独立命令；支持 `--repo`/`CHINA_QUANT_AI_HEDGE_FUND_PATH`、`--python`、`--ticker`、日期、分析师、模型、Ollama、dry-run、API key预检查和子进程输出捕获；README、`.env.example`、策略规格和ADR记录接入边界。
 - 验收：入口必须以子进程调用外部checkout，不把外部依赖变成主包硬依赖；缺少repo或key时给出明确错误；dry-run能打印命令；不修改 `strategies.profit_validation` 主策略行为；外部输出不得直接提升真实下单候选等级。
 - 完成证据：2026-07-02 完成独立适配层和CLI入口；新增单元测试覆盖命令构造、repo路径解析、缺key诊断、Ollama预检查、dry-run和假外部仓库子进程调用；文档记录外部agent研究定位和API key要求。
+
+### [x] TASK-036——盈利验证策略量能确认优化
+- 依赖：TASK-027、TASK-034
+- 需求：FR-013至FR-015、FR-021、FR-022、EPV-001至EPV-006
+- 核心定位：继续优化本项目自己的策略算法，优先提升信号可信度和可解释性，而不是追求上帝视角最大利润。
+- 交付：`ProfitSignalFeatures` 新增成交量确认 `volume_ratio` 和流动性确认 `liquidity_score`；`ProfitSeekingConfig` 新增 `min_volume_confirmation`、`min_liquidity_confirmation`；入场过滤和综合评分纳入量能/流动性；结果说明明确策略同时检查动量、趋势、波动、回撤、成交量和流动性。
+- 验收：同一行情在正常量能门槛下可交易，在严格量能确认门槛下交易次数下降；策略说明不得暗示保证收益；不改变DecisionHub真实交易门禁。
+- 完成证据：2026-07-02 完成量能/流动性确认优化；新增 `test_volume_confirmation_filter_blocks_unconfirmed_entries` 覆盖量能门槛生效；策略规格和ADR记录优化边界。

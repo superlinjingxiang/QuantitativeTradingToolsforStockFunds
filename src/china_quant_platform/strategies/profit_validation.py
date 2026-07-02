@@ -151,6 +151,8 @@ class ProfitSeekingConfig(DomainModel):
     max_trades_per_year: int = Field(default=12, ge=1, le=252)
     round_trip_cost_bps: float = Field(default=15.0, ge=0)
     max_annual_volatility: float = Field(default=0.65, gt=0)
+    min_volume_confirmation: float = Field(default=0.80, ge=0)
+    min_liquidity_confirmation: float = Field(default=0.30, ge=0, le=1)
     stop_loss_pct: float = Field(default=0.12, gt=0, le=1)
     final_test_fraction: float = Field(default=0.25, gt=0, lt=1)
     validation_fraction: float = Field(default=0.25, gt=0, lt=1)
@@ -181,6 +183,8 @@ class ProfitSignalFeatures(DomainModel):
     trend_strength: float
     annualized_volatility: float = Field(ge=0)
     drawdown: float
+    volume_ratio: float = Field(ge=0)
+    liquidity_score: float = Field(ge=0, le=1)
 
 
 class ProfitBacktestTrade(DomainModel):
@@ -860,6 +864,8 @@ def _entry_signal_passes(
         and features.trend_strength > 0
         and features.annualized_volatility <= config.max_annual_volatility
         and features.drawdown >= -0.35
+        and features.volume_ratio >= config.min_volume_confirmation
+        and features.liquidity_score >= config.min_liquidity_confirmation
     )
 
 
@@ -886,6 +892,8 @@ def _signal_features(
     trend_strength = closes[index] / trend_average - 1.0 if trend_average > 0 else 0.0
     volatility_returns = _period_returns(closes[index - parameters.volatility_window : index + 1])
     annualized_volatility = _population_std(volatility_returns) * math.sqrt(252.0)
+    volume_ratio = _volume_ratio(index, bars=bars, window=parameters.volatility_window)
+    liquidity_score = _liquidity_score(index, bars=bars, window=parameters.volatility_window)
     drawdown_window_start = max(0, index - parameters.long_lookback + 1)
     peak = max(closes[drawdown_window_start : index + 1])
     drawdown = closes[index] / peak - 1.0 if peak > 0 else 0.0
@@ -893,6 +901,8 @@ def _signal_features(
         0.45 * _clamp(short_momentum / 0.12)
         + 0.30 * _clamp(long_momentum / 0.25)
         + 0.25 * _clamp(trend_strength / 0.08)
+        + 0.10 * _clamp((volume_ratio - 1.0) / 0.60)
+        + 0.08 * (liquidity_score * 2.0 - 1.0)
         - 0.20 * min(annualized_volatility / 0.65, 1.0)
         - 0.15 * min(abs(min(drawdown, 0.0)) / 0.25, 1.0)
     )
@@ -906,6 +916,8 @@ def _signal_features(
         trend_strength=trend_strength,
         annualized_volatility=annualized_volatility,
         drawdown=drawdown,
+        volume_ratio=volume_ratio,
+        liquidity_score=liquidity_score,
     )
 
 
@@ -1028,6 +1040,7 @@ def _result_notes(
     notes = [
         "收益为扣除简化往返成本后的历史样本外结果，不代表保证未来收益。",
         f"交易次数按每年最大{config.max_trades_per_year}次约束。",
+        "入场同时检查动量、趋势、波动、回撤、成交量确认和流动性，避免只凭价格追涨。",
     ]
     if status is ProfitValidationStatus.PASS:
         notes.append("样本外净收益、回撤和基准比较暂时通过。")
@@ -1199,6 +1212,32 @@ def _period_returns(values: Sequence[float]) -> tuple[float, ...]:
         for previous, current in zip(values, values[1:], strict=False)
         if previous > 0
     )
+
+
+def _volume_ratio(index: int, *, bars: Sequence[Bar], window: int) -> float:
+    if not bars or index <= 0:
+        return 1.0
+    start = max(0, index - window)
+    previous_volumes = tuple(max(bar.volume, 0.0) for bar in bars[start:index])
+    if not previous_volumes:
+        return 1.0
+    average_volume = sum(previous_volumes) / len(previous_volumes)
+    if average_volume <= 0:
+        return 1.0
+    return max(bars[index].volume, 0.0) / average_volume
+
+
+def _liquidity_score(index: int, *, bars: Sequence[Bar], window: int) -> float:
+    if not bars or index <= 0:
+        return 1.0
+    start = max(0, index - window)
+    previous_amounts = tuple(max(bar.amount, 0.0) for bar in bars[start:index])
+    if not previous_amounts:
+        return 1.0
+    average_amount = sum(previous_amounts) / len(previous_amounts)
+    if average_amount <= 0:
+        return 1.0
+    return max(0.0, min(max(bars[index].amount, 0.0) / average_amount / 2.0, 1.0))
 
 
 def _population_std(values: Sequence[float]) -> float:
