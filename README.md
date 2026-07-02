@@ -91,6 +91,14 @@ uv run python -m china_quant_platform --version
 uv run python -m china_quant_platform --gui
 ```
 
+启动 Electron 桌面外壳：
+
+```powershell
+.\start_electron.bat
+```
+
+Electron 只负责 UI 和交互；行情、策略、回测、决策门禁仍由本地 Python 后端计算。首次运行会通过 `npm.cmd install` 安装 Electron 依赖。
+
 ## 行情数据源
 
 GUI 默认使用多数据源路由：

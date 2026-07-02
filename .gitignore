@@ -6,6 +6,9 @@
 .pytest_cache/
 .pytest-cache/
 .pytest-tmp/
+node_modules/
+electron-dist/
+out/
 __pycache__/
 *.py[cod]
 *.pyo
