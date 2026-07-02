@@ -110,3 +110,41 @@ $env:CQP_THS_IFIND_REFRESH_TOKEN = "你的refresh_token"
 ```powershell
 $env:UV_CACHE_DIR = ".uv-cache"
 ```
+
+## ai-hedge-fund 独立研究入口
+
+本项目保留现有 `strategies.profit_validation` 盈利验证策略作为主策略链路。`virattt/ai-hedge-fund` 只作为可选研究代理入口接入，不覆盖主策略、不提升真实交易候选等级。
+
+先单独 clone 并安装外部项目：
+
+```powershell
+git clone https://github.com/virattt/ai-hedge-fund.git E:\股票基金量化工程\ai-hedge-fund
+cd E:\股票基金量化工程\ai-hedge-fund
+poetry install
+```
+
+配置路径和外部项目需要的 key：
+
+```powershell
+$env:CHINA_QUANT_AI_HEDGE_FUND_PATH = "E:\股票基金量化工程\ai-hedge-fund"
+$env:FINANCIAL_DATASETS_API_KEY = "你的Financial Datasets key"
+$env:OPENAI_API_KEY = "你的OpenAI或其他LLM key"
+```
+
+先 dry-run 检查命令，不实际调用外部代理：
+
+```powershell
+uv run python -m china_quant_platform.ai_hedge_fund --ticker AAPL --dry-run
+```
+
+真正运行时可指定外部仓库使用的 Python：
+
+```powershell
+uv run python -m china_quant_platform.ai_hedge_fund `
+  --ticker AAPL,MSFT `
+  --start-date 2026-01-01 `
+  --end-date 2026-03-01 `
+  --python "E:\股票基金量化工程\ai-hedge-fund\.venv\Scripts\python.exe"
+```
+
+该入口主要面向 `ai-hedge-fund` 支持的美股符号和它自己的数据源。A股/ETF主流程继续使用本项目行情、回测、盈利验证和DecisionHub门禁。

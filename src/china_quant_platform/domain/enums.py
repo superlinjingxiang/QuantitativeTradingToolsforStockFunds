@@ -16,12 +16,17 @@ class AssetType(StrEnum):
 class Exchange(StrEnum):
     SSE = "SSE"
     SZSE = "SZSE"
+    HKEX = "HKEX"
+    NASDAQ = "NASDAQ"
+    NYSE = "NYSE"
     FUND_COMPANY = "FUND_COMPANY"
     INDEX_PROVIDER = "INDEX_PROVIDER"
 
 
 class Currency(StrEnum):
     CNY = "CNY"
+    HKD = "HKD"
+    USD = "USD"
 
 
 class SecurityStatus(StrEnum):

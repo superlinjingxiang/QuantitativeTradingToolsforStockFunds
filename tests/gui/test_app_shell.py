@@ -33,6 +33,7 @@ from china_quant_platform.domain import (
     SecurityRef,
     SecurityStatus,
 )
+from china_quant_platform.strategies.profit_validation import HorizonPreset
 from china_quant_platform.ui import (
     ApplicationViewModel,
     ChartRangePreset,
@@ -301,6 +302,43 @@ def test_search_box_debounces_results_and_enter_confirms_selection(qtbot: Any) -
     assert search_results.count() == 0
 
 
+def test_search_box_enter_selects_us_symbol_fallback(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=aware_datetime)
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    search_input = window.findChild(QtWidgets.QLineEdit, "securitySearch")
+    search_results = window.findChild(QtWidgets.QListWidget, "securitySearchResults")
+    assert search_input is not None
+    assert search_results is not None
+
+    qtbot.keyClicks(search_input, "QQQ")
+    qtbot.keyClick(search_input, QtCore.Qt.Key.Key_Return)
+
+    assert view_model.state.selected_security_id == "NASDAQ:QQQ"
+    assert view_model.state.recent_securities[0].security_id == "NASDAQ:QQQ"
+    assert search_results.count() == 0
+
+
+def test_search_box_enter_selects_hk_symbol_fallback(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=aware_datetime)
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    search_input = window.findChild(QtWidgets.QLineEdit, "securitySearch")
+    search_results = window.findChild(QtWidgets.QListWidget, "securitySearchResults")
+    assert search_input is not None
+    assert search_results is not None
+
+    qtbot.keyClicks(search_input, "00700.HK")
+    qtbot.keyClick(search_input, QtCore.Qt.Key.Key_Return)
+
+    assert view_model.state.selected_security_id == "HKEX:00700"
+    assert view_model.state.recent_securities[0].security_id == "HKEX:00700"
+    assert view_model.state.recent_securities[0].exchange == Exchange.HKEX.value
+    assert search_results.count() == 0
+
+
 def test_search_box_arrow_keys_move_highlight(qtbot: Any) -> None:
     view_model = ApplicationViewModel(clock=aware_datetime)
     window = MainWindow(view_model)
@@ -357,6 +395,13 @@ def test_online_provider_searches_code_and_loads_chart(qtbot: Any) -> None:
     assert "2026-06-29" in window.market_time_label.text()
     assert provider.bar_requests[0].interval is BarInterval.DAILY
 
+    backtest_label = window.findChild(QtWidgets.QLabel, "backtestSummaryText")
+    metrics_label = window.findChild(QtWidgets.QLabel, "backtestMetricsText")
+    assert backtest_label is not None
+    assert metrics_label is not None
+    assert "历史样本不足" in backtest_label.text()
+    assert "标的：SSE:513300" in metrics_label.text()
+
 
 def test_enter_on_code_loads_chart_when_online_search_disconnects(qtbot: Any) -> None:
     provider = DisconnectingSearchProvider()
@@ -409,17 +454,108 @@ def test_chart_controls_reload_online_market_data(qtbot: Any) -> None:
         ),
         timeout=1000,
     )
-    assert provider.bar_requests[0].interval is BarInterval.ONE_MINUTE
+    assert any(request.interval is BarInterval.ONE_MINUTE for request in provider.bar_requests)
 
     provider.bar_requests.clear()
     view_model.set_chart_range(ChartRangePreset.THREE_MONTHS)
     qtbot.waitUntil(lambda: len(provider.bar_requests) >= 2, timeout=1000)
-    assert provider.bar_requests[0].start_time <= aware_datetime() - timedelta(days=100)
+    assert any(
+        request.interval is BarInterval.ONE_MINUTE
+        and request.start_time <= aware_datetime() - timedelta(days=100)
+        for request in provider.bar_requests
+    )
 
     provider.bar_requests.clear()
     view_model.set_chart_adjustment(AdjustmentMode.FORWARD)
     qtbot.waitUntil(lambda: len(provider.bar_requests) >= 2, timeout=1000)
-    assert provider.bar_requests[0].adjustment is AdjustmentMode.FORWARD
+    assert any(
+        request.interval is BarInterval.ONE_MINUTE and request.adjustment is AdjustmentMode.FORWARD
+        for request in provider.bar_requests
+    )
+
+
+def test_strategy_controls_update_view_model_and_theme(qtbot: Any, tmp_path: Path) -> None:
+    settings = QtCore.QSettings(
+        str(tmp_path / "strategy-controls.ini"),
+        QtCore.QSettings.Format.IniFormat,
+    )
+    view_model = ApplicationViewModel(clock=aware_datetime)
+    window = MainWindow(view_model, settings=settings)
+    qtbot.addWidget(window)
+
+    horizon_combo = window.findChild(QtWidgets.QComboBox, "strategyHorizon")
+    trade_spin = window.findChild(QtWidgets.QSpinBox, "strategyMaxTradesPerYear")
+    theme_combo = window.findChild(QtWidgets.QComboBox, "themeModeCombo")
+    chart_backtest_button = window.findChild(QtWidgets.QPushButton, "chartBacktestButton")
+    assert horizon_combo is not None
+    assert trade_spin is not None
+    assert theme_combo is not None
+    assert chart_backtest_button is not None
+
+    horizon_combo.setCurrentIndex(horizon_combo.findData(HorizonPreset.SIX_MONTHS.value))
+    trade_spin.setValue(4)
+    theme_combo.setCurrentIndex(theme_combo.findData(UiThemeMode.LIGHT.value))
+
+    assert view_model.state.strategy_controls.horizon is HorizonPreset.SIX_MONTHS
+    assert view_model.state.strategy_controls.max_trades_per_year == 4
+    assert view_model.state.backtest.summary == "策略参数已修改，等待重新回测。"
+    assert window.theme_mode is UiThemeMode.LIGHT
+    assert settings.value("appearance/theme") == UiThemeMode.LIGHT.value
+    assert trade_spin.suffix() == " 次"
+    assert "QSpinBox" in window.styleSheet()
+    assert "QPushButton" in window.styleSheet()
+    assert "selection-color" in window.styleSheet()
+
+
+def test_backtest_tab_run_button_requires_selected_security(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=aware_datetime)
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    run_button = window.findChild(QtWidgets.QPushButton, "runBacktestButton")
+    summary_label = window.findChild(QtWidgets.QLabel, "backtestSummaryText")
+    assert run_button is not None
+    assert summary_label is not None
+    assert run_button.isEnabled() is False
+
+    view_model.run_current_backtest()
+
+    assert view_model.state.backtest.summary == "请先选择一个标的。"
+
+
+def test_strategy_info_button_opens_dialog_with_code_path(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=aware_datetime)
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    backtest_tab_index = next(
+        index for index in range(window.tabs.count()) if window.tabs.tabText(index) == "回测"
+    )
+    window.tabs.setCurrentIndex(backtest_tab_index)
+    info_button = window.findChild(QtWidgets.QPushButton, "strategyInfoButton")
+    assert info_button is not None
+
+    qtbot.mouseClick(info_button, QtCore.Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(
+        lambda: window.findChild(QtWidgets.QDialog, "strategyInfoDialog") is not None,
+        timeout=1000,
+    )
+
+    dialog = window.findChild(QtWidgets.QDialog, "strategyInfoDialog")
+    title = window.findChild(QtWidgets.QLabel, "strategyInfoTitle")
+    text = window.findChild(QtWidgets.QTextBrowser, "strategyInfoText")
+    code_button = window.findChild(QtWidgets.QPushButton, "strategyInfoCodeButton")
+    assert dialog is not None
+    assert title is not None
+    assert text is not None
+    assert code_button is not None
+    assert title.text() == "盈利验证动量趋势策略"
+    assert "研究级盈利验证策略" in text.toPlainText()
+    assert str(code_button.property("sourcePath")).endswith(
+        "src\\china_quant_platform\\strategies\\profit_validation.py"
+    )
+    assert code_button.isEnabled() is True
+    dialog.close()
 
 
 def test_demo_task_can_be_cancelled_without_blocking_qt(qtbot: Any) -> None:

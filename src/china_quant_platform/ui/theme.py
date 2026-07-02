@@ -345,6 +345,44 @@ QComboBox::drop-down {{
     border: 0;
 }}
 
+QSpinBox {{
+    background: {colors.card};
+    border: 1px solid {colors.separator_soft};
+    border-radius: 8px;
+    padding: 5px 24px 5px 10px;
+    min-height: 26px;
+    color: {colors.text};
+    selection-background-color: {colors.blue};
+    selection-color: {colors.highlighted_text};
+}}
+
+QSpinBox:focus {{
+    border-color: {colors.blue};
+}}
+
+QSpinBox::up-button,
+QSpinBox::down-button {{
+    subcontrol-origin: border;
+    width: 18px;
+    border: 0;
+    background: {colors.card};
+}}
+
+QSpinBox::up-button {{
+    subcontrol-position: top right;
+    border-top-right-radius: 8px;
+}}
+
+QSpinBox::down-button {{
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 8px;
+}}
+
+QSpinBox::up-button:hover,
+QSpinBox::down-button:hover {{
+    background: {colors.hover};
+}}
+
 QCheckBox {{
     color: {colors.secondary_text};
     spacing: 6px;
@@ -380,6 +418,42 @@ QToolButton:hover {{
 
 QToolButton:pressed {{
     background: {colors.pressed};
+}}
+
+QPushButton {{
+    background: {colors.raised};
+    border: 1px solid {colors.separator_soft};
+    border-radius: 8px;
+    min-height: 28px;
+    padding: 5px 14px;
+    color: {colors.text};
+    font-weight: 600;
+}}
+
+QPushButton:hover {{
+    background: {colors.hover};
+    border-color: {colors.separator};
+}}
+
+QPushButton#chartBacktestButton[active="true"] {{
+    background: {colors.blue};
+    border-color: {colors.blue};
+    color: {colors.highlighted_text};
+}}
+
+QPushButton#chartBacktestButton[active="true"]:hover {{
+    background: {colors.blue_pressed};
+    border-color: {colors.blue_pressed};
+}}
+
+QPushButton:pressed {{
+    background: {colors.pressed};
+}}
+
+QPushButton:disabled {{
+    color: {colors.tertiary_text};
+    background: {colors.card_muted};
+    border-color: {colors.separator_soft};
 }}
 
 QSplitter::handle {{

@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from china_quant_platform.data import create_default_market_data_provider
 from china_quant_platform.domain import AdjustmentMode, BarInterval
+from china_quant_platform.strategies.profit_validation import HorizonPreset
 from china_quant_platform.ui.chart import PriceChartWidget
 from china_quant_platform.ui.state import (
     AppUiState,
@@ -50,6 +53,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._theme_actions: dict[UiThemeMode, QtGui.QAction] = {}
         self._last_health_popup_key: tuple[str, tuple[str, ...]] | None = None
         self._health_popups: list[QtWidgets.QMessageBox] = []
+        self._strategy_info_dialogs: list[QtWidgets.QDialog] = []
         self.setWindowTitle("中国股票与基金量化分析平台")
         self.resize(1440, 900)
         self.setObjectName("mainWindow")
@@ -95,6 +99,36 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings_button.setToolTip("设置")
         self.settings_button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
 
+        self.strategy_horizon_combo = QtWidgets.QComboBox()
+        self.strategy_horizon_combo.setObjectName("strategyHorizon")
+        for label, horizon in (
+            ("策略 1月", HorizonPreset.ONE_MONTH),
+            ("策略 3月", HorizonPreset.THREE_MONTHS),
+            ("策略 6月", HorizonPreset.SIX_MONTHS),
+            ("策略 1年", HorizonPreset.ONE_YEAR),
+        ):
+            self.strategy_horizon_combo.addItem(label, horizon.value)
+        self.strategy_horizon_combo.currentIndexChanged.connect(self._strategy_horizon_changed)
+
+        self.strategy_trade_spin = QtWidgets.QSpinBox()
+        self.strategy_trade_spin.setObjectName("strategyMaxTradesPerYear")
+        self.strategy_trade_spin.setRange(1, 60)
+        self.strategy_trade_spin.setSuffix(" 次")
+        self.strategy_trade_spin.setToolTip("当前策略/图表回测最多交易次数")
+        self.strategy_trade_spin.valueChanged.connect(self._strategy_trade_count_changed)
+
+        self.chart_backtest_button = QtWidgets.QPushButton("回测曲线")
+        self.chart_backtest_button.setObjectName("chartBacktestButton")
+        self.chart_backtest_button.setCheckable(True)
+        self.chart_backtest_button.setToolTip("按当前策略期限和交易上限寻找历史最大利润路径")
+        self.chart_backtest_button.clicked.connect(self.view_model.run_chart_profit_backtest)
+
+        self.theme_combo = QtWidgets.QComboBox()
+        self.theme_combo.setObjectName("themeModeCombo")
+        self.theme_combo.addItem("黑色主题", UiThemeMode.DARK.value)
+        self.theme_combo.addItem("白色主题", UiThemeMode.LIGHT.value)
+        self.theme_combo.currentIndexChanged.connect(self._theme_combo_changed)
+
         self.status_label = QtWidgets.QLabel()
         self.status_label.setObjectName("stateLabel")
 
@@ -112,10 +146,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.knowledge_detail.setObjectName("knowledgeDetail")
         self.knowledge_detail.setOpenExternalLinks(False)
 
+        self.backtest_summary_label = self._panel_label("backtestSummaryText")
+        self.backtest_metrics_label = self._panel_label("backtestMetricsText")
+        self.backtest_notes_label = self._panel_label("backtestNotesText")
+        self.strategy_info_button = QtWidgets.QPushButton("策略说明")
+        self.strategy_info_button.setObjectName("strategyInfoButton")
+        self.strategy_info_button.setToolTip("查看当前回测策略说明和代码位置")
+        self.strategy_info_button.clicked.connect(self._show_strategy_info_dialog)
+        self.run_backtest_button = QtWidgets.QPushButton("重新回测")
+        self.run_backtest_button.setObjectName("runBacktestButton")
+        self.run_backtest_button.clicked.connect(self.view_model.run_current_backtest)
+
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.setObjectName("workspaceTabs")
         for title in ("市场", "策略", "回测", "模拟账户", "风险", "知识中心"):
-            page = self._knowledge_page() if title == "知识中心" else self._placeholder_page(title)
+            if title == "知识中心":
+                page = self._knowledge_page()
+            elif title == "回测":
+                page = self._backtest_page()
+            else:
+                page = self._placeholder_page(title)
             self.tabs.addTab(page, title)
 
         self.watchlist = QtWidgets.QListWidget()
@@ -240,6 +290,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.price_chart.set_theme_mode(selected_mode)
         for mode, action in self._theme_actions.items():
             action.setChecked(mode is selected_mode)
+        self._set_combo_data(self.theme_combo, selected_mode.value)
         self.settings_button.setToolTip(f"设置：{_theme_label(selected_mode)}")
         if persist:
             self.settings.setValue(THEME_SETTINGS_KEY, selected_mode.value)
@@ -288,6 +339,7 @@ class MainWindow(QtWidgets.QMainWindow):
             }
         )
         self._sync_chart_controls(state)
+        self._sync_strategy_controls(state)
         self.price_chart.set_chart_state(state.chart)
         self.chart_summary_label.setText(
             f"周期：{state.chart.interval.value}｜复权：{state.chart.adjustment.value}｜"
@@ -300,6 +352,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.forecast_panel_label.setText(_forecast_panel_text(state))
         self.operation_panel_label.setText(_operation_panel_text(state))
         self.decision_panel_label.setText(_decision_panel_text(state))
+        self._sync_backtest_panel(state)
 
     def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if watched is self.search_input and event.type() == QtCore.QEvent.Type.KeyPress:
@@ -438,6 +491,74 @@ class MainWindow(QtWidgets.QMainWindow):
         if isinstance(value, str):
             self.view_model.set_chart_adjustment(AdjustmentMode(value))
 
+    @QtCore.Slot(int)
+    def _strategy_horizon_changed(self, _index: int) -> None:
+        value = self.strategy_horizon_combo.currentData()
+        if isinstance(value, str):
+            self.view_model.set_strategy_horizon(HorizonPreset(value))
+
+    @QtCore.Slot(int)
+    def _strategy_trade_count_changed(self, value: int) -> None:
+        self.view_model.set_strategy_max_trades_per_year(value)
+
+    @QtCore.Slot(int)
+    def _theme_combo_changed(self, _index: int) -> None:
+        value = self.theme_combo.currentData()
+        if isinstance(value, str):
+            self.set_theme_mode(value)
+
+    @QtCore.Slot()
+    def _show_strategy_info_dialog(self) -> None:
+        info = _strategy_info_for_state(self.view_model.state)
+        dialog = QtWidgets.QDialog(self)
+        dialog.setObjectName("strategyInfoDialog")
+        dialog.setWindowTitle("当前回测策略说明")
+        dialog.resize(620, 480)
+
+        layout = QtWidgets.QVBoxLayout(dialog)
+        layout.setSpacing(10)
+
+        title = QtWidgets.QLabel(info.title)
+        title.setObjectName("strategyInfoTitle")
+        title.setWordWrap(True)
+        layout.addWidget(title)
+
+        body = QtWidgets.QTextBrowser()
+        body.setObjectName("strategyInfoText")
+        body.setOpenExternalLinks(False)
+        body.setPlainText(
+            "\n\n".join(
+                (
+                    info.subtitle,
+                    info.body,
+                    f"代码位置：{info.code_path}",
+                )
+            )
+        )
+        layout.addWidget(body, stretch=1)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addStretch(1)
+        code_button = QtWidgets.QPushButton("打开代码")
+        code_button.setObjectName("strategyInfoCodeButton")
+        code_button.setProperty("sourcePath", str(info.code_path))
+        code_button.setEnabled(info.code_path.exists())
+        code_button.setToolTip(str(info.code_path))
+        code_button.clicked.connect(lambda _checked=False: _open_code_file(info.code_path))
+        buttons.addWidget(code_button)
+        close_button = QtWidgets.QPushButton("关闭")
+        close_button.clicked.connect(dialog.close)
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
+
+        dialog.finished.connect(lambda _result=0, item=dialog: self._forget_strategy_dialog(item))
+        self._strategy_info_dialogs.append(dialog)
+        dialog.show()
+
+    def _forget_strategy_dialog(self, dialog: QtWidgets.QDialog) -> None:
+        if dialog in self._strategy_info_dialogs:
+            self._strategy_info_dialogs.remove(dialog)
+
     def _overlay_checkbox(
         self,
         text: str,
@@ -495,6 +616,38 @@ class MainWindow(QtWidgets.QMainWindow):
             checkbox.blockSignals(True)
             checkbox.setChecked(overlay in state.chart.overlays)
             checkbox.blockSignals(False)
+
+    def _sync_strategy_controls(self, state: AppUiState) -> None:
+        controls = state.strategy_controls
+        self._set_combo_data(self.strategy_horizon_combo, controls.horizon.value)
+        self.strategy_trade_spin.blockSignals(True)
+        self.strategy_trade_spin.setValue(controls.max_trades_per_year)
+        self.strategy_trade_spin.blockSignals(False)
+
+    def _sync_backtest_panel(self, state: AppUiState) -> None:
+        backtest = state.backtest
+        self.backtest_summary_label.setText(backtest.summary)
+        self.backtest_metrics_label.setText(_backtest_metrics_text(state))
+        self.backtest_notes_label.setText(_backtest_notes_text(state))
+        self.run_backtest_button.setEnabled(state.selected_security_id is not None)
+        self.chart_backtest_button.setText(
+            "正常显示" if state.chart_backtest_active else "回测曲线"
+        )
+        self.chart_backtest_button.setToolTip(
+            "关闭回测买卖层，恢复当前正常图表"
+            if state.chart_backtest_active
+            else "按当前策略期限和交易上限寻找历史最大利润路径"
+        )
+        self.chart_backtest_button.blockSignals(True)
+        self.chart_backtest_button.setChecked(state.chart_backtest_active)
+        self.chart_backtest_button.blockSignals(False)
+        self.chart_backtest_button.setProperty("active", state.chart_backtest_active)
+        self.chart_backtest_button.style().unpolish(self.chart_backtest_button)
+        self.chart_backtest_button.style().polish(self.chart_backtest_button)
+        self.chart_backtest_button.setEnabled(
+            state.chart_backtest_active
+            or (state.selected_security_id is not None and state.chart.point_count >= 2)
+        )
 
     def _set_combo_data(self, combo: QtWidgets.QComboBox, value: str) -> None:
         index = combo.findData(value)
@@ -621,6 +774,7 @@ class MainWindow(QtWidgets.QMainWindow):
         top_bar = QtWidgets.QHBoxLayout()
         top_bar.setSpacing(10)
         top_bar.addWidget(search_box, stretch=2)
+        top_bar.addWidget(self._strategy_controls_bar(), stretch=2)
         top_bar.addWidget(self.health_banner, stretch=3)
         top_bar.addWidget(self.market_time_label, stretch=1)
         top_bar.addWidget(self.cancel_button)
@@ -692,6 +846,18 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addWidget(self.chart_summary_label)
         return panel
 
+    def _strategy_controls_bar(self) -> QtWidgets.QWidget:
+        panel = QtWidgets.QWidget()
+        panel.setObjectName("strategyControlBar")
+        layout = QtWidgets.QHBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self.strategy_horizon_combo)
+        layout.addWidget(self.strategy_trade_spin)
+        layout.addWidget(self.theme_combo)
+        layout.addWidget(self.chart_backtest_button)
+        return panel
+
     def _right_panel(self) -> QtWidgets.QWidget:
         panel = QtWidgets.QWidget()
         panel.setObjectName("rightPanel")
@@ -719,6 +885,35 @@ class MainWindow(QtWidgets.QMainWindow):
         label = QtWidgets.QLabel(title)
         label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
+        return page
+
+    def _backtest_page(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        header = QtWidgets.QHBoxLayout()
+        title = QtWidgets.QLabel("盈利验证回测")
+        title.setObjectName("backtestTitle")
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self.strategy_info_button)
+        header.addWidget(self.run_backtest_button)
+        layout.addLayout(header)
+
+        content = QtWidgets.QHBoxLayout()
+        content.setSpacing(12)
+        for title_text, label in (
+            ("摘要", self.backtest_summary_label),
+            ("指标", self.backtest_metrics_label),
+            ("证据", self.backtest_notes_label),
+        ):
+            group = QtWidgets.QGroupBox(title_text)
+            group_layout = QtWidgets.QVBoxLayout(group)
+            group_layout.addWidget(self._panel_scroll_area(label, f"{label.objectName()}Scroll"))
+            content.addWidget(group, stretch=1)
+        layout.addLayout(content, stretch=1)
         return page
 
     def _knowledge_page(self) -> QtWidgets.QWidget:
@@ -827,6 +1022,44 @@ def _decision_panel_text(state: AppUiState) -> str:
     return "\n".join(lines)
 
 
+def _backtest_metrics_text(state: AppUiState) -> str:
+    backtest = state.backtest
+    return "\n".join(
+        [
+            f"标的：{backtest.security_id}",
+            f"期限：{backtest.horizon_label}",
+            f"交易上限：{backtest.max_trades_per_year} 次",
+            f"阈值：{backtest.selected_threshold}",
+            f"净收益：{backtest.total_return}",
+            f"年化：{backtest.annualized_return}",
+            f"最大回撤：{backtest.max_drawdown}",
+            f"相对基准：{backtest.excess_return}",
+            f"胜率：{backtest.win_rate}",
+            f"交易次数：{backtest.trade_count}",
+            f"Brier：{backtest.brier_score}",
+            f"可靠性：{backtest.reliability_grade}",
+            f"状态：{backtest.status}",
+        ]
+    )
+
+
+def _backtest_notes_text(state: AppUiState) -> str:
+    backtest = state.backtest
+    lines: list[str] = []
+    if backtest.trades:
+        lines.append("交易流水：")
+        lines.extend(_wrap_panel_value(trade) for trade in backtest.trades[:12])
+        if len(backtest.trades) > 12:
+            lines.append(f"另有 {len(backtest.trades) - 12} 笔交易未显示。")
+    else:
+        lines.append("交易流水：暂无买卖操作。")
+    if backtest.notes:
+        lines.append("")
+        lines.append("验证说明：")
+        lines.extend(f"- {_wrap_panel_value(note)}" for note in backtest.notes)
+    return "\n".join(lines)
+
+
 def _health_banner_text(state: AppUiState) -> str:
     data_health = state.data_health
     if data_health is None or not data_health.issues:
@@ -869,6 +1102,71 @@ def _theme_label(theme_mode: UiThemeMode) -> str:
     if theme_mode is UiThemeMode.DARK:
         return "黑色主题"
     return "白色主题"
+
+
+@dataclass(frozen=True, slots=True)
+class _StrategyInfo:
+    title: str
+    subtitle: str
+    body: str
+    code_path: Path
+
+
+def _strategy_info_for_state(state: AppUiState) -> _StrategyInfo:
+    if state.chart_backtest_active or state.backtest.status == "OPTIMIZED":
+        return _StrategyInfo(
+            title="图表历史最大利润回测层",
+            subtitle=(
+                "当前图表显示的是历史最大利润路径：它会在已知完整历史价格之后，"
+                "反推最多 N 笔完整买卖能获得的最大收益。"
+            ),
+            body=(
+                "输入：当前标的、策略期限、最多交易次数和图表K线。\n"
+                "方法：动态规划比较每一天保持现金、买入持仓或卖出落袋后的资金，"
+                "最终选择净值最高的买卖组合。\n"
+                "用途：帮助复盘历史最佳买卖点，检查图表和交易流水是否可解释。\n"
+                "边界：这是上帝视角历史复盘，不是预测未来的生产策略，"
+                "也不会提升真实下单或API执行候选等级。"
+            ),
+            code_path=_source_file_path("china_quant_platform", "ui", "viewmodel.py"),
+        )
+
+    strategy = state.analysis.strategy
+    horizon = state.strategy_controls.horizon_label
+    max_trades = state.strategy_controls.max_trades_per_year
+    strategy_id = strategy.strategy_id if strategy.strategy_id != "--" else "尚未生成策略ID"
+    return _StrategyInfo(
+        title="盈利验证动量趋势策略",
+        subtitle=(
+            f"当前策略：{strategy.strategy_name}；ID：{strategy_id}；"
+            f"周期：{horizon}；交易上限：{max_trades} 次。"
+        ),
+        body=(
+            "这是一套研究级盈利验证策略，核心目标不是给出收益承诺，"
+            "而是检查当前标的在历史样本外是否具备扣除成本后的赚钱证据。\n"
+            "方法：结合短期动量、长期趋势、波动率、回撤和持有周期约束，"
+            "先在训练/验证区间选择参数阈值，再只在最终样本外区间评估结果。\n"
+            "输出：净收益、年化、最大回撤、相对基准、胜率、交易次数、"
+            "Brier分数和可靠性等级。\n"
+            "边界：缺少模拟盘验证、成本/容量压力或过拟合诊断时，"
+            "系统仍会保持 WATCH/RESEARCH_ONLY，不会直接变成真实交易指令。"
+        ),
+        code_path=_source_file_path("china_quant_platform", "strategies", "profit_validation.py"),
+    )
+
+
+def _source_file_path(*parts: str) -> Path:
+    return _project_root() / "src" / Path(*parts)
+
+
+def _project_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parents[1]
+    return Path(__file__).resolve().parents[3]
+
+
+def _open_code_file(path: Path) -> None:
+    QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path)))
 
 
 __all__ = ["MainWindow", "create_application", "run_gui"]

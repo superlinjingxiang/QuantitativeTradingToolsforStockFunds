@@ -17,7 +17,9 @@ from china_quant_platform.data import (
     SecurityMasterService,
     SecuritySearchResult,
 )
-from china_quant_platform.decision import DecisionReport, build_research_decision_from_market_data
+from china_quant_platform.decision import DecisionReport
+from china_quant_platform.decision.hub import DecisionHub
+from china_quant_platform.decision.models import DecisionRequest, ProfitabilityEvidence
 from china_quant_platform.domain import (
     AbstainReason,
     AdjustmentMode,
@@ -29,6 +31,7 @@ from china_quant_platform.domain import (
     DataHealth,
     DataHealthStatus,
     DataUnavailable,
+    DirectionProbabilities,
     DomainError,
     Exchange,
     FinalSignal,
@@ -38,12 +41,24 @@ from china_quant_platform.domain import (
 )
 from china_quant_platform.knowledge import KnowledgeCenter
 from china_quant_platform.market import MarketOverview, build_market_overview
+from china_quant_platform.strategies.profit_validation import (
+    HorizonPreset,
+    ProfitBacktestResult,
+    ProfitSeekingConfig,
+    ProfitValidationStatus,
+    horizon_parameters,
+    run_profit_strategy_backtest,
+)
 from china_quant_platform.ui.state import (
     AnalysisPanelState,
     AppUiState,
+    BacktestPanelState,
     ChartOverlay,
     ChartPointState,
     ChartRangePreset,
+    ChartSignalAction,
+    ChartSignalMarkerState,
+    ChartState,
     DecisionPanelState,
     KnowledgeCenterState,
     MarketOverviewPanelState,
@@ -147,6 +162,34 @@ class _OnlineMarketOverviewData:
     failures: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class _OptimalChartTrade:
+    entry_index: int
+    exit_index: int
+    entry_price: float
+    exit_price: float
+    net_return: float
+
+
+@dataclass(frozen=True, slots=True)
+class _OptimalChartBacktest:
+    points: tuple[ChartPointState, ...]
+    signals: tuple[ChartSignalMarkerState, ...]
+    panel: BacktestPanelState
+    range_preset: ChartRangePreset
+
+
+@dataclass(frozen=True, slots=True)
+class _ChartBacktestSnapshot:
+    security_id: str
+    chart: ChartState
+    backtest: BacktestPanelState
+    run_state: UiRunState
+    task_status: UiTaskStatus
+    active_task_name: str | None
+    latest_error: UiErrorState | None
+
+
 class ApplicationViewModel(QtCore.QObject):
     state_changed = QtCore.Signal(object)
 
@@ -173,6 +216,8 @@ class ApplicationViewModel(QtCore.QObject):
         self._search_token = 0
         self._security_data_token = 0
         self._market_overview_token = 0
+        self._latest_decision_bars_by_security: dict[str, tuple[Bar, ...]] = {}
+        self._chart_backtest_snapshot: _ChartBacktestSnapshot | None = None
         self._state = AppUiState(
             knowledge=KnowledgeCenterState.from_topics(self._knowledge_center.list_topics())
         )
@@ -212,7 +257,7 @@ class ApplicationViewModel(QtCore.QObject):
         candidates = tuple(SearchCandidateState.from_search_result(result) for result in results)
         search_date = as_of or self._clock().date()
         if not candidates:
-            fallback_security = _fallback_security_from_code(stripped_query, as_of=search_date)
+            fallback_security = _fallback_security_from_query(stripped_query, as_of=search_date)
             if fallback_security is not None:
                 self._security_master.upsert_security(fallback_security)
                 candidates = (
@@ -237,7 +282,7 @@ class ApplicationViewModel(QtCore.QObject):
             )
         )
         if self._market_data_provider is not None and (
-            not candidates or _looks_like_security_code(stripped_query)
+            not candidates or _looks_like_security_code_or_symbol(stripped_query)
         ):
             self._start_online_security_search(stripped_query, search_token)
 
@@ -314,6 +359,7 @@ class ApplicationViewModel(QtCore.QObject):
             selected_at=selected_at,
             as_of=selected_at.date(),
         )
+        self._chart_backtest_snapshot = None
         next_generation = self._state.selection_generation + 1
         self._set_state(
             self._state.model_copy(
@@ -327,12 +373,15 @@ class ApplicationViewModel(QtCore.QObject):
                     "chart": self._state.chart.model_copy(
                         update={
                             "points": (),
+                            "signals": (),
                             "update_count": self._state.chart.update_count + 1,
                             "realtime_update_count": 0,
                         }
                     ),
                     "analysis": AnalysisPanelState(),
                     "decision": DecisionPanelState(),
+                    "backtest": BacktestPanelState(),
+                    "chart_backtest_active": False,
                     "run_state": UiRunState.LOADING_CACHE_HISTORY,
                     "task_status": UiTaskStatus.IDLE,
                     "active_task_name": None,
@@ -344,6 +393,8 @@ class ApplicationViewModel(QtCore.QObject):
             self._start_online_security_data_load(security.security_id, next_generation)
 
     def set_chart_interval(self, interval: BarInterval) -> None:
+        if self._state.chart_backtest_active:
+            self._restore_chart_backtest_layer()
         if self._state.chart.interval == interval:
             return
         self._set_state(
@@ -354,6 +405,8 @@ class ApplicationViewModel(QtCore.QObject):
         self._reload_selected_security_data()
 
     def set_chart_adjustment(self, adjustment: AdjustmentMode) -> None:
+        if self._state.chart_backtest_active:
+            self._restore_chart_backtest_layer()
         if self._state.chart.adjustment == adjustment:
             return
         self._set_state(
@@ -364,6 +417,8 @@ class ApplicationViewModel(QtCore.QObject):
         self._reload_selected_security_data()
 
     def set_chart_range(self, range_preset: ChartRangePreset) -> None:
+        if self._state.chart_backtest_active:
+            self._restore_chart_backtest_layer()
         if self._state.chart.range_preset == range_preset:
             return
         self._set_state(
@@ -385,6 +440,156 @@ class ApplicationViewModel(QtCore.QObject):
             self._state.model_copy(
                 update={
                     "chart": self._state.chart.model_copy(update={"overlays": frozenset(overlays)})
+                }
+            )
+        )
+
+    def set_strategy_horizon(self, horizon: HorizonPreset) -> None:
+        if self._state.chart_backtest_active:
+            self._restore_chart_backtest_layer()
+        if self._state.strategy_controls.horizon == horizon:
+            return
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "strategy_controls": self._state.strategy_controls.model_copy(
+                        update={"horizon": horizon}
+                    ),
+                    "analysis": AnalysisPanelState(),
+                    "decision": DecisionPanelState(),
+                    "backtest": BacktestPanelState(summary="策略参数已修改，等待重新回测。"),
+                }
+            )
+        )
+        self._reload_selected_security_data()
+
+    def set_strategy_max_trades_per_year(self, max_trades_per_year: int) -> None:
+        if self._state.chart_backtest_active:
+            self._restore_chart_backtest_layer()
+        normalized = max(1, min(max_trades_per_year, 60))
+        if self._state.strategy_controls.max_trades_per_year == normalized:
+            return
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "strategy_controls": self._state.strategy_controls.model_copy(
+                        update={"max_trades_per_year": normalized}
+                    ),
+                    "analysis": AnalysisPanelState(),
+                    "decision": DecisionPanelState(),
+                    "backtest": BacktestPanelState(summary="策略参数已修改，等待重新回测。"),
+                }
+            )
+        )
+        self._reload_selected_security_data()
+
+    def run_current_backtest(self) -> None:
+        if self._state.selected_security_id is None:
+            self._set_state(
+                self._state.model_copy(
+                    update={"backtest": BacktestPanelState(summary="请先选择一个标的。")}
+                )
+            )
+            return
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "run_state": UiRunState.BACKTEST_RUNNING,
+                    "task_status": UiTaskStatus.RUNNING,
+                    "active_task_name": "策略回测",
+                    "backtest": BacktestPanelState(summary="正在运行策略回测..."),
+                }
+            )
+        )
+        self._reload_selected_security_data()
+
+    def run_chart_profit_backtest(self) -> None:
+        if self._state.chart_backtest_active:
+            self._restore_chart_backtest_layer()
+            return
+        security_id = self._state.selected_security_id
+        if security_id is None:
+            self._set_state(
+                self._state.model_copy(
+                    update={"backtest": BacktestPanelState(summary="请先选择一个标的。")}
+                )
+            )
+            return
+        source_bars = self._latest_decision_bars_by_security.get(security_id, ())
+        self._chart_backtest_snapshot = _ChartBacktestSnapshot(
+            security_id=security_id,
+            chart=self._state.chart,
+            backtest=self._state.backtest,
+            run_state=self._state.run_state,
+            task_status=self._state.task_status,
+            active_task_name=self._state.active_task_name,
+            latest_error=self._state.latest_error,
+        )
+        result = _run_optimal_chart_backtest(
+            security_id=security_id,
+            bars=source_bars,
+            fallback_points=self._state.chart.points,
+            horizon=self._state.strategy_controls.horizon,
+            max_trades=self._state.strategy_controls.max_trades_per_year,
+        )
+        if result is None:
+            self._chart_backtest_snapshot = None
+            self._set_state(
+                self._state.model_copy(
+                    update={
+                        "backtest": BacktestPanelState(
+                            summary="当前图表数据不足，至少需要两个价格点才能回测。"
+                        )
+                    }
+                )
+            )
+            return
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "run_state": UiRunState.BACKTEST_COMPLETED,
+                    "task_status": UiTaskStatus.COMPLETED,
+                    "active_task_name": "图表回测",
+                    "backtest": result.panel,
+                    "chart_backtest_active": True,
+                    "chart": self._state.chart.model_copy(
+                        update={
+                            "interval": BarInterval.DAILY
+                            if source_bars
+                            else self._state.chart.interval,
+                            "range_preset": result.range_preset,
+                            "points": result.points,
+                            "signals": result.signals,
+                            "overlays": frozenset(
+                                {
+                                    *self._state.chart.overlays,
+                                    ChartOverlay.SIGNALS,
+                                }
+                            ),
+                            "update_count": self._state.chart.update_count + 1,
+                        }
+                    ),
+                    "latest_error": None,
+                }
+            )
+        )
+
+    def _restore_chart_backtest_layer(self) -> None:
+        snapshot = self._chart_backtest_snapshot
+        self._chart_backtest_snapshot = None
+        if snapshot is None or snapshot.security_id != self._state.selected_security_id:
+            self._set_state(self._state.model_copy(update={"chart_backtest_active": False}))
+            return
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "chart": snapshot.chart,
+                    "backtest": snapshot.backtest,
+                    "run_state": snapshot.run_state,
+                    "task_status": snapshot.task_status,
+                    "active_task_name": snapshot.active_task_name,
+                    "latest_error": snapshot.latest_error,
+                    "chart_backtest_active": False,
                 }
             )
         )
@@ -820,7 +1025,10 @@ class ApplicationViewModel(QtCore.QObject):
         )
 
         async def load() -> _OnlineSecurityData:
-            decision_start_time = end_time - timedelta(days=420)
+            decision_start_time = _strategy_decision_start_time(
+                end_time,
+                self._state.strategy_controls.horizon,
+            )
             decision_request = BarsRequest(
                 security_id=security_id,
                 interval=BarInterval.DAILY,
@@ -942,6 +1150,9 @@ class ApplicationViewModel(QtCore.QObject):
         if result.security_id != self._state.selected_security_id:
             return
 
+        self._latest_decision_bars_by_security[result.security_id] = tuple(
+            sorted(result.decision_bars, key=lambda item: item.end_time)
+        )
         self.load_chart_bars(result.bars, generation=job.generation)
         self.apply_realtime_quote(result.quote, generation=job.generation)
         self.apply_data_health(result.data_health)
@@ -992,15 +1203,65 @@ class ApplicationViewModel(QtCore.QObject):
                 selected_at=selected_at,
                 as_of=selected_at.date(),
             )
-            decision = build_research_decision_from_market_data(
+            config = _profit_strategy_config(
+                self._state.strategy_controls.horizon,
+                self._state.strategy_controls.max_trades_per_year,
+            )
+            backtest = run_profit_strategy_backtest(
+                result.security_id,
+                result.decision_bars,
+                config=config,
+                include_walk_forward=True,
+            )
+            analysis = _analysis_report_from_profit_backtest(
                 security=security,
-                bars=result.decision_bars,
                 quote=result.quote,
                 data_health=result.data_health,
+                bars=result.decision_bars,
+                backtest=backtest,
+            )
+            request = DecisionRequest(
+                security_id=result.security_id,
+                as_of=analysis.as_of,
+                evidence_window=f"{backtest.horizon.value}/{len(result.decision_bars)} bars",
+                min_backtest_trades=max(1, min(3, config.max_trades_per_year)),
+                max_backtest_drawdown=0.35,
+                max_brier_score=0.35,
+                require_simulation_evidence=True,
+            )
+            decision = DecisionHub().build_report(
+                request=request,
+                analysis_report=analysis,
+                profitability=_profitability_evidence_from_backtest(backtest),
+                simulation=None,
+                out_of_sample_passed=backtest.status is ProfitValidationStatus.PASS,
+                cost_stress_passed=backtest.cost_drag is not None,
             )
         except Exception:  # noqa: BLE001 - decision output is optional for market rendering.
             return
         self.apply_decision_report(decision, generation=generation)
+        if not self._is_stale_generation(generation):
+            self._set_state(
+                self._state.model_copy(
+                    update={
+                        "backtest": BacktestPanelState.from_profit_result(backtest),
+                        "chart": self._state.chart.model_copy(
+                            update={
+                                "signals": _chart_signals_from_profit_backtest(backtest),
+                                "overlays": frozenset(
+                                    {
+                                        *self._state.chart.overlays,
+                                        ChartOverlay.SIGNALS,
+                                    }
+                                ),
+                                "update_count": self._state.chart.update_count + 1,
+                            }
+                        ),
+                        "task_status": UiTaskStatus.COMPLETED,
+                        "active_task_name": None,
+                    }
+                )
+            )
 
     def _handle_background_failure(self, job: _BackgroundJob, error: BaseException) -> None:
         if job.kind == "market_overview":
@@ -1301,6 +1562,512 @@ def _run_state_for_analysis_report(report: AnalysisReport) -> UiRunState:
     return UiRunState.REALTIME_RUNNING
 
 
+def _run_optimal_chart_backtest(
+    *,
+    security_id: str,
+    bars: tuple[Bar, ...],
+    fallback_points: tuple[ChartPointState, ...],
+    horizon: HorizonPreset,
+    max_trades: int,
+) -> _OptimalChartBacktest | None:
+    points = _chart_backtest_points(bars=bars, fallback_points=fallback_points, horizon=horizon)
+    if len(points) < 2:
+        return None
+    trades = _maximize_profit_trades(points, max_trades=max_trades)
+    total_return = _equity_total_return(points, trades)
+    equity_curve = _chart_equity_curve(points, trades)
+    max_drawdown = _max_drawdown_from_values(equity_curve)
+    benchmark_return = points[-1].close_price / points[0].close_price - 1.0
+    excess_return = total_return - benchmark_return
+    wins = sum(1 for trade in trades if trade.net_return > 0)
+    win_rate = 0.0 if not trades else wins / len(trades)
+    days = max((_chart_point_date(points[-1]) - _chart_point_date(points[0])).days, 1)
+    annualized_return = (1.0 + total_return) ** (365.0 / days) - 1.0
+    signals = _chart_signals_from_optimal_trades(points, trades)
+    trade_lines = _optimal_trade_lines(points, trades)
+    summary = (
+        f"图表利润最大化：净收益{_format_ui_percent(total_return)}，"
+        f"最大回撤{_format_ui_percent(max_drawdown)}，"
+        f"交易{len(trades)}/{max_trades}次。"
+    )
+    if not trades:
+        summary = f"图表利润最大化：未找到正收益买卖路径，交易0/{max_trades}次。"
+    panel = BacktestPanelState(
+        status="OPTIMIZED",
+        security_id=security_id,
+        horizon_label=_horizon_ui_label(horizon),
+        max_trades_per_year=str(max_trades),
+        selected_threshold="MAX_PROFIT",
+        total_return=_format_ui_percent(total_return),
+        annualized_return=_format_ui_percent(annualized_return),
+        max_drawdown=_format_ui_percent(max_drawdown),
+        excess_return=_format_ui_percent(excess_return),
+        win_rate=_format_ui_percent(win_rate),
+        trade_count=str(len(trades)),
+        brier_score="--",
+        reliability_grade="H",
+        summary=summary,
+        trades=trade_lines,
+        notes=(
+            "本回测为利润最大化历史路径，使用完整历史价格反推，属于上帝视角。",
+            "交易次数为当前窗口内最多完整买卖次数，可以少于上限但不能超过上限。",
+            "该结果用于观察历史最佳路径，不代表未来可预测或可实现。",
+        ),
+    )
+    return _OptimalChartBacktest(
+        points=points,
+        signals=signals,
+        panel=panel,
+        range_preset=_chart_range_for_horizon(horizon),
+    )
+
+
+def _chart_backtest_points(
+    *,
+    bars: tuple[Bar, ...],
+    fallback_points: tuple[ChartPointState, ...],
+    horizon: HorizonPreset,
+) -> tuple[ChartPointState, ...]:
+    if bars:
+        sorted_bars = tuple(sorted(bars, key=lambda item: item.end_time))
+        end_time = sorted_bars[-1].end_time
+        start_time = end_time - timedelta(days=_horizon_window_days(horizon))
+        selected = tuple(bar for bar in sorted_bars if bar.end_time >= start_time)
+        if len(selected) < 2:
+            selected = sorted_bars[-min(len(sorted_bars), 2) :]
+        return tuple(ChartPointState.from_bar(bar) for bar in selected)
+    return fallback_points
+
+
+def _maximize_profit_trades(
+    points: tuple[ChartPointState, ...],
+    *,
+    max_trades: int,
+) -> tuple[_OptimalChartTrade, ...]:
+    max_completed_trades = max(0, min(max_trades, (len(points) - 1) // 2 + 1))
+    if max_completed_trades <= 0:
+        return ()
+    prices = tuple(point.close_price for point in points)
+    cash: list[tuple[float, tuple[tuple[str, int, float], ...]]] = [
+        (1.0, ()),
+        *[(-1.0, ()) for _ in range(max_completed_trades)],
+    ]
+    hold: list[tuple[float, tuple[tuple[str, int, float], ...]]] = [
+        (-1.0, ()) for _ in range(max_completed_trades + 1)
+    ]
+    for index, price in enumerate(prices):
+        if price <= 0:
+            continue
+        previous_cash = cash.copy()
+        previous_hold = hold.copy()
+        for trade_count in range(max_completed_trades + 1):
+            cash_value, cash_path = previous_cash[trade_count]
+            if cash_value <= 0:
+                continue
+            candidate_shares = cash_value / price
+            if candidate_shares > hold[trade_count][0]:
+                hold[trade_count] = (
+                    candidate_shares,
+                    (*cash_path, ("BUY", index, price)),
+                )
+        for trade_count in range(max_completed_trades):
+            held_shares, hold_path = previous_hold[trade_count]
+            if held_shares <= 0:
+                continue
+            candidate_cash = held_shares * price
+            if candidate_cash > cash[trade_count + 1][0]:
+                cash[trade_count + 1] = (
+                    candidate_cash,
+                    (*hold_path, ("SELL", index, price)),
+                )
+    best_cash, best_path = max(cash, key=lambda item: item[0])
+    if best_cash <= 1.0 or not best_path:
+        return ()
+    return _events_to_optimal_trades(best_path)
+
+
+def _events_to_optimal_trades(
+    events: tuple[tuple[str, int, float], ...],
+) -> tuple[_OptimalChartTrade, ...]:
+    trades: list[_OptimalChartTrade] = []
+    pending_buy: tuple[int, float] | None = None
+    for action, index, price in events:
+        if action == "BUY":
+            pending_buy = (index, price)
+            continue
+        if action == "SELL" and pending_buy is not None and index > pending_buy[0]:
+            entry_index, entry_price = pending_buy
+            trades.append(
+                _OptimalChartTrade(
+                    entry_index=entry_index,
+                    exit_index=index,
+                    entry_price=entry_price,
+                    exit_price=price,
+                    net_return=price / entry_price - 1.0,
+                )
+            )
+            pending_buy = None
+    return tuple(trades)
+
+
+def _chart_signals_from_optimal_trades(
+    points: tuple[ChartPointState, ...],
+    trades: tuple[_OptimalChartTrade, ...],
+) -> tuple[ChartSignalMarkerState, ...]:
+    markers: list[ChartSignalMarkerState] = []
+    for trade in trades:
+        entry = points[trade.entry_index]
+        exit_point = points[trade.exit_index]
+        entry_date = _chart_point_date(entry)
+        exit_date = _chart_point_date(exit_point)
+        markers.append(
+            ChartSignalMarkerState(
+                trade_date=entry_date,
+                action=ChartSignalAction.BUY,
+                price=trade.entry_price,
+                label="B",
+                detail=f"最大利润买入 {entry_date.isoformat()} @ {trade.entry_price:.3f}",
+            )
+        )
+        markers.append(
+            ChartSignalMarkerState(
+                trade_date=exit_date,
+                action=ChartSignalAction.SELL,
+                price=trade.exit_price,
+                label="S",
+                detail=(
+                    f"最大利润卖出 {exit_date.isoformat()} "
+                    f"@ {trade.exit_price:.3f}；收益 {trade.net_return:.2%}"
+                ),
+            )
+        )
+    return tuple(markers)
+
+
+def _optimal_trade_lines(
+    points: tuple[ChartPointState, ...],
+    trades: tuple[_OptimalChartTrade, ...],
+) -> tuple[str, ...]:
+    values: list[str] = []
+    for index, trade in enumerate(trades, start=1):
+        entry_date = _chart_point_date(points[trade.entry_index]).isoformat()
+        exit_date = _chart_point_date(points[trade.exit_index]).isoformat()
+        values.append(
+            f"{index}. 买入 {entry_date} @ {trade.entry_price:.3f}；"
+            f"卖出 {exit_date} @ {trade.exit_price:.3f}；"
+            f"收益 {_format_ui_percent(trade.net_return)}；原因 max_profit"
+        )
+    return tuple(values)
+
+
+def _chart_equity_curve(
+    points: tuple[ChartPointState, ...],
+    trades: tuple[_OptimalChartTrade, ...],
+) -> tuple[float, ...]:
+    cash = 1.0
+    shares = 0.0
+    trade_by_entry = {trade.entry_index: trade for trade in trades}
+    trade_by_exit = {trade.exit_index: trade for trade in trades}
+    values: list[float] = []
+    for index, point in enumerate(points):
+        if index in trade_by_entry and cash > 0:
+            shares = cash / trade_by_entry[index].entry_price
+            cash = 0.0
+        value = cash if shares <= 0 else shares * point.close_price
+        values.append(value)
+        if index in trade_by_exit and shares > 0:
+            cash = shares * trade_by_exit[index].exit_price
+            shares = 0.0
+            values[-1] = cash
+    return tuple(values) or (1.0,)
+
+
+def _equity_total_return(
+    points: tuple[ChartPointState, ...],
+    trades: tuple[_OptimalChartTrade, ...],
+) -> float:
+    equity = _chart_equity_curve(points, trades)
+    return equity[-1] / equity[0] - 1.0
+
+
+def _max_drawdown_from_values(values: tuple[float, ...]) -> float:
+    peak = values[0] if values else 1.0
+    drawdown = 0.0
+    for value in values:
+        peak = max(peak, value)
+        drawdown = min(drawdown, value / peak - 1.0 if peak else 0.0)
+    return drawdown
+
+
+def _chart_point_date(point: ChartPointState) -> date:
+    try:
+        return datetime.fromisoformat(point.time_label).date()
+    except ValueError:
+        return date.min
+
+
+def _horizon_window_days(horizon: HorizonPreset) -> int:
+    match horizon:
+        case HorizonPreset.ONE_MONTH:
+            return 31
+        case HorizonPreset.THREE_MONTHS:
+            return 93
+        case HorizonPreset.SIX_MONTHS:
+            return 186
+        case HorizonPreset.ONE_YEAR:
+            return 366
+
+
+def _chart_range_for_horizon(horizon: HorizonPreset) -> ChartRangePreset:
+    match horizon:
+        case HorizonPreset.ONE_MONTH:
+            return ChartRangePreset.ONE_MONTH
+        case HorizonPreset.THREE_MONTHS:
+            return ChartRangePreset.THREE_MONTHS
+        case HorizonPreset.SIX_MONTHS:
+            return ChartRangePreset.SIX_MONTHS
+        case HorizonPreset.ONE_YEAR:
+            return ChartRangePreset.ONE_YEAR
+
+
+def _horizon_ui_label(horizon: HorizonPreset) -> str:
+    match horizon:
+        case HorizonPreset.ONE_MONTH:
+            return "1个月"
+        case HorizonPreset.THREE_MONTHS:
+            return "3个月"
+        case HorizonPreset.SIX_MONTHS:
+            return "6个月"
+        case HorizonPreset.ONE_YEAR:
+            return "1年"
+
+
+def _format_ui_percent(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def _profit_strategy_config(
+    horizon: HorizonPreset,
+    max_trades_per_year: int,
+) -> ProfitSeekingConfig:
+    parameters = horizon_parameters(horizon)
+    return ProfitSeekingConfig(
+        horizon=horizon,
+        max_trades_per_year=max_trades_per_year,
+        minimum_oos_bars=max(80, parameters.holding_days),
+        minimum_validation_bars=80,
+        minimum_trades_for_pass=max(1, min(3, max_trades_per_year)),
+    )
+
+
+def _strategy_decision_start_time(end_time: datetime, horizon: HorizonPreset) -> datetime:
+    parameters = horizon_parameters(horizon)
+    bars_required = parameters.warmup_bars + 80 + max(80, parameters.holding_days)
+    calendar_days = int(bars_required * 365 / 252) + 220
+    return end_time - timedelta(days=max(370 * 6, calendar_days))
+
+
+def _analysis_report_from_profit_backtest(
+    *,
+    security: SecurityRef,
+    quote: Quote,
+    data_health: DataHealth,
+    bars: tuple[Bar, ...],
+    backtest: ProfitBacktestResult,
+) -> AnalysisReport:
+    parameters = horizon_parameters(backtest.horizon)
+    final_signal = _profit_analysis_signal(backtest, data_health)
+    return AnalysisReport(
+        security_id=security.security_id,
+        as_of=quote.source_time,
+        data_health=data_health,
+        strategy_id="strategy.profit_validation_momentum",
+        strategy_version="profit-validation-ui-v1",
+        horizon=parameters.holding_days,
+        market_regime=_profit_market_regime(backtest),
+        direction_probabilities=_profit_direction_probabilities(backtest),
+        raw_signal=_profit_raw_signal(backtest),
+        final_signal=final_signal,
+        valid_until=quote.source_time + timedelta(days=1),
+        positive_drivers=_profit_positive_drivers(backtest),
+        negative_drivers=_profit_negative_drivers(backtest, data_health),
+        model_version="profit_validation.momentum_trend.v1",
+        rule_version="rules-profit-validation-v1",
+        data_snapshot_id=f"profit-validation:{len(bars)}-daily-bars",
+        expected_return_quantiles=_profit_expected_return_quantiles(backtest),
+        expected_drawdown=backtest.max_drawdown,
+        grade=backtest.reliability_grade.value,
+        target_position_limit=0.05 if backtest.status is ProfitValidationStatus.PASS else 0.0,
+        exit_or_invalidation_conditions=_profit_invalidation_conditions(backtest),
+        abstain_reason=_profit_abstain_reason(backtest, data_health),
+    )
+
+
+def _profitability_evidence_from_backtest(
+    backtest: ProfitBacktestResult,
+) -> ProfitabilityEvidence:
+    return ProfitabilityEvidence(
+        source="profit_validation_oos",
+        strategy_id="strategy.profit_validation_momentum",
+        strategy_version="profit-validation-ui-v1",
+        total_return=backtest.total_return,
+        annualized_return=backtest.annualized_return,
+        max_drawdown=backtest.max_drawdown,
+        benchmark_total_return=backtest.benchmark_total_return,
+        excess_return=backtest.excess_return,
+        trade_count=backtest.trade_count,
+        turnover=backtest.turnover,
+        cost_drag=backtest.cost_drag,
+        calibration_sample_count=backtest.calibration_sample_count,
+        brier_score=backtest.brier_score,
+        checksum=backtest.checksum,
+        notes=backtest.notes,
+    )
+
+
+def _chart_signals_from_profit_backtest(
+    backtest: ProfitBacktestResult,
+) -> tuple[ChartSignalMarkerState, ...]:
+    markers: list[ChartSignalMarkerState] = []
+    for trade in backtest.trades:
+        markers.append(
+            ChartSignalMarkerState(
+                trade_date=trade.entry_date,
+                action=ChartSignalAction.BUY,
+                price=trade.entry_price,
+                label="B",
+                detail=(
+                    f"买入 {trade.entry_date.isoformat()} @ {trade.entry_price:.3f}；"
+                    f"分数 {trade.signal_score:.2f}；预测胜率 {trade.predicted_probability:.1%}"
+                ),
+            )
+        )
+        markers.append(
+            ChartSignalMarkerState(
+                trade_date=trade.exit_date,
+                action=ChartSignalAction.SELL,
+                price=trade.exit_price,
+                label="S",
+                detail=(
+                    f"卖出 {trade.exit_date.isoformat()} @ {trade.exit_price:.3f}；"
+                    f"收益 {trade.net_return:.2%}；原因 {trade.exit_reason}"
+                ),
+            )
+        )
+    return tuple(markers)
+
+
+def _profit_analysis_signal(
+    backtest: ProfitBacktestResult,
+    data_health: DataHealth,
+) -> FinalSignal:
+    if data_health.block_signal or backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
+        return FinalSignal.ABSTAIN
+    if backtest.status is ProfitValidationStatus.FAIL:
+        return FinalSignal.ABSTAIN
+    return FinalSignal.WATCH
+
+
+def _profit_abstain_reason(
+    backtest: ProfitBacktestResult,
+    data_health: DataHealth,
+) -> AbstainReason | None:
+    if data_health.block_signal:
+        return AbstainReason.DATA
+    if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
+        return AbstainReason.INSUFFICIENT_HISTORY
+    if backtest.status is ProfitValidationStatus.FAIL:
+        return AbstainReason.EXPECTED_VALUE
+    return None
+
+
+def _profit_raw_signal(backtest: ProfitBacktestResult) -> str:
+    if backtest.status is ProfitValidationStatus.PASS:
+        return "BUY_BIAS_AFTER_PROFIT_VALIDATION"
+    if backtest.status is ProfitValidationStatus.WATCH:
+        return "WATCH_NEEDS_MORE_EVIDENCE"
+    if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
+        return "ABSTAIN_INSUFFICIENT_HISTORY"
+    return "ABSTAIN_PROFIT_VALIDATION_FAILED"
+
+
+def _profit_market_regime(backtest: ProfitBacktestResult) -> str:
+    if backtest.status is ProfitValidationStatus.PASS:
+        return "PROFIT_VALIDATED_RESEARCH"
+    if backtest.status is ProfitValidationStatus.WATCH:
+        return "WATCHLIST_RESEARCH"
+    if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
+        return "INSUFFICIENT_HISTORY"
+    return "NEGATIVE_EXPECTED_VALUE"
+
+
+def _profit_direction_probabilities(backtest: ProfitBacktestResult) -> DirectionProbabilities:
+    if backtest.status is ProfitValidationStatus.PASS:
+        return DirectionProbabilities(up=0.56, flat=0.29, down=0.15)
+    if backtest.status is ProfitValidationStatus.WATCH and backtest.total_return > 0:
+        return DirectionProbabilities(up=0.44, flat=0.39, down=0.17)
+    if backtest.status is ProfitValidationStatus.FAIL:
+        return DirectionProbabilities(up=0.20, flat=0.35, down=0.45)
+    return DirectionProbabilities(up=0.25, flat=0.50, down=0.25)
+
+
+def _profit_expected_return_quantiles(backtest: ProfitBacktestResult) -> dict[str, float]:
+    lower = min(backtest.max_drawdown, backtest.total_return, backtest.excess_return)
+    middle = backtest.total_return
+    upper = max(backtest.total_return, backtest.benchmark_total_return, backtest.excess_return)
+    return {"p05": lower, "p50": middle, "p95": upper}
+
+
+def _profit_positive_drivers(backtest: ProfitBacktestResult) -> tuple[str, ...]:
+    values: list[str] = []
+    if backtest.total_return > 0:
+        values.append(f"样本外扣费净收益 {backtest.total_return:.2%}。")
+    if backtest.excess_return > 0:
+        values.append(f"相对买入持有超额 {backtest.excess_return:.2%}。")
+    if backtest.trade_count > 0:
+        values.append(f"样本外成交 {backtest.trade_count} 次，胜率 {backtest.win_rate:.1%}。")
+    if backtest.status is ProfitValidationStatus.PASS:
+        values.append("盈利、回撤、基准比较三项暂时通过。")
+    return tuple(values) or ("暂无足够正向赚钱证据。",)
+
+
+def _profit_negative_drivers(
+    backtest: ProfitBacktestResult,
+    data_health: DataHealth,
+) -> tuple[str, ...]:
+    values: list[str] = []
+    if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
+        values.extend(backtest.notes)
+    values.extend(
+        [
+            f"最大回撤 {backtest.max_drawdown:.2%}。",
+            f"策略状态 {backtest.status.value}。",
+        ]
+    )
+    if backtest.status is not ProfitValidationStatus.INSUFFICIENT_HISTORY:
+        values.extend(backtest.notes)
+    if backtest.excess_return <= 0:
+        values.append(f"相对基准超额未为正：{backtest.excess_return:.2%}。")
+    if backtest.trade_count <= 0:
+        values.append("样本外没有形成足够交易，不能证明可赚钱。")
+    if backtest.brier_score is None:
+        values.append("概率校准样本缺失，无法证明预测概率可靠。")
+    if data_health.block_signal:
+        values.extend(f"数据健康阻断：{issue}" for issue in data_health.issues)
+    return tuple(dict.fromkeys(values))
+
+
+def _profit_invalidation_conditions(backtest: ProfitBacktestResult) -> tuple[str, ...]:
+    values = [
+        "模拟盘成交与偏差证据未通过前，不允许进入真实API下单候选。",
+        "若后续回测扣费净收益转负或相对基准超额转负，策略失效。",
+        "若最大回撤超过35%，需要降低仓位或暂停。",
+    ]
+    if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
+        values.append("补足长期日线历史后重新验证。")
+    return tuple(values)
+
+
 def _watchlist_panel_from_items(items: tuple[WatchlistItemState, ...]) -> WatchlistPanelState:
     groups: dict[str, list[WatchlistItemState]] = {}
     for item in items:
@@ -1376,26 +2143,37 @@ def _quote_change_pct(quote: Quote) -> float | None:
     return (quote.latest_price - quote.previous_close) / quote.previous_close
 
 
-def _looks_like_security_code(query: str) -> bool:
+def _looks_like_security_code_or_symbol(query: str) -> bool:
     normalized = query.strip().upper()
     if normalized.isdigit() and len(normalized) == 6:
+        return True
+    if _hk_code_from_query(normalized) is not None:
+        return True
+    if _looks_like_us_symbol(normalized):
         return True
     if "." in normalized:
         market, _, code = normalized.partition(".")
         return market in {"0", "1"} and code.isdigit() and len(code) == 6
     if ":" in normalized:
         exchange, _, code = normalized.partition(":")
-        return exchange in {"SSE", "SH", "SZSE", "SZ"} and code.isdigit() and len(code) == 6
+        if exchange in {"SSE", "SH", "SZSE", "SZ"} and code.isdigit() and len(code) == 6:
+            return True
+        if exchange in _HK_EXCHANGE_ALIASES and _canonical_hk_code(code) is not None:
+            return True
+        return exchange in {"NASDAQ", "NYSE", "US"} and _looks_like_us_symbol(code)
     return False
 
 
-def _fallback_security_from_code(query: str, *, as_of: date) -> SecurityRef | None:
+def _fallback_security_from_query(query: str, *, as_of: date) -> SecurityRef | None:
     normalized = query.strip().upper()
     exchange: Exchange
     symbol: str
+    hk_code = _hk_code_from_query(normalized)
     if normalized.isdigit() and len(normalized) == 6:
         symbol = normalized
         exchange = Exchange.SSE if symbol[0] in {"5", "6", "9"} else Exchange.SZSE
+    elif hk_code is not None:
+        return _fallback_hk_security(symbol=hk_code, as_of=as_of)
     elif "." in normalized:
         market, _, code = normalized.partition(".")
         if market not in {"0", "1"} or not (code.isdigit() and len(code) == 6):
@@ -1404,15 +2182,30 @@ def _fallback_security_from_code(query: str, *, as_of: date) -> SecurityRef | No
         exchange = Exchange.SSE if market == "1" else Exchange.SZSE
     elif ":" in normalized:
         exchange_text, _, code = normalized.partition(":")
-        if not (code.isdigit() and len(code) == 6):
+        if code.isdigit() and len(code) == 6:
+            if exchange_text in {"SSE", "SH"}:
+                exchange = Exchange.SSE
+            elif exchange_text in {"SZSE", "SZ"}:
+                exchange = Exchange.SZSE
+            else:
+                return None
+            symbol = code
+        elif _looks_like_us_symbol(code):
+            if exchange_text in {"NASDAQ", "US"}:
+                return _fallback_us_security(
+                    symbol=code,
+                    exchange=Exchange.NASDAQ,
+                    as_of=as_of,
+                )
+            if exchange_text == "NYSE":
+                return _fallback_us_security(symbol=code, exchange=Exchange.NYSE, as_of=as_of)
             return None
-        if exchange_text in {"SSE", "SH"}:
-            exchange = Exchange.SSE
-        elif exchange_text in {"SZSE", "SZ"}:
-            exchange = Exchange.SZSE
         else:
             return None
-        symbol = code
+    elif _looks_like_us_symbol(normalized):
+        symbol = normalized
+        exchange = Exchange.NASDAQ
+        return _fallback_us_security(symbol=symbol, exchange=exchange, as_of=as_of)
     else:
         return None
     return SecurityRef(
@@ -1429,12 +2222,88 @@ def _fallback_security_from_code(query: str, *, as_of: date) -> SecurityRef | No
     )
 
 
+def _fallback_us_security(*, symbol: str, exchange: Exchange, as_of: date) -> SecurityRef:
+    return SecurityRef(
+        security_id=f"{exchange.value}:{symbol}",
+        symbol=symbol,
+        name=f"{symbol}（美股代码兜底）",
+        asset_type=_fallback_us_asset_type(symbol),
+        exchange=exchange,
+        currency=Currency.USD,
+        listed_date=date(1990, 1, 1),
+        status_date=as_of,
+        status=SecurityStatus.ACTIVE,
+        aliases=("us-code-fallback", "yahoo-symbol"),
+    )
+
+
+_HK_EXCHANGE_ALIASES = frozenset({"HK", "HKEX", "HKG", "SEHK"})
+
+
+def _fallback_hk_security(*, symbol: str, as_of: date) -> SecurityRef:
+    return SecurityRef(
+        security_id=f"{Exchange.HKEX.value}:{symbol}",
+        symbol=symbol,
+        name=f"{symbol}（港股代码兜底）",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.HKEX,
+        currency=Currency.HKD,
+        listed_date=date(1990, 1, 1),
+        status_date=as_of,
+        status=SecurityStatus.ACTIVE,
+        aliases=("hk-code-fallback", "yahoo-hk-symbol", _hk_yahoo_symbol(symbol)),
+    )
+
+
+def _hk_code_from_query(value: str) -> str | None:
+    normalized = value.strip().upper()
+    code: str | None = None
+    if ":" in normalized:
+        exchange, _, raw_code = normalized.partition(":")
+        if exchange in _HK_EXCHANGE_ALIASES:
+            code = raw_code
+    elif normalized.endswith(".HK"):
+        code = normalized.removesuffix(".HK")
+    elif normalized.isdigit() and 4 <= len(normalized) <= 5:
+        code = normalized
+    if code is None:
+        return None
+    return _canonical_hk_code(code)
+
+
+def _canonical_hk_code(code: str) -> str | None:
+    normalized = code.strip().upper()
+    if not normalized.isdigit() or not (1 <= len(normalized) <= 5):
+        return None
+    return (normalized.lstrip("0") or "0").zfill(5)
+
+
+def _hk_yahoo_symbol(code: str) -> str:
+    canonical = _canonical_hk_code(code) or code
+    stripped = canonical.lstrip("0") or "0"
+    yahoo_code = stripped.zfill(4) if len(stripped) <= 4 else stripped
+    return f"{yahoo_code}.HK"
+
+
 def _fallback_asset_type(symbol: str) -> AssetType:
     if symbol.startswith(("5", "15", "16", "18")):
         return AssetType.ETF
     if symbol.startswith(("0", "3", "6", "8", "9")):
         return AssetType.STOCK
     return AssetType.STOCK
+
+
+def _fallback_us_asset_type(symbol: str) -> AssetType:
+    if symbol in {"DIA", "IWM", "QQQ", "SPY", "VOO", "VTI"}:
+        return AssetType.ETF
+    return AssetType.STOCK
+
+
+def _looks_like_us_symbol(value: str) -> bool:
+    symbol = value.strip().upper()
+    if not (1 <= len(symbol) <= 8):
+        return False
+    return all(character.isalpha() or character in {".", "-"} for character in symbol)
 
 
 def _range_start(end_time: datetime, range_preset: ChartRangePreset) -> datetime:

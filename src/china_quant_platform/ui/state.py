@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from enum import StrEnum
 
 from pydantic import Field
@@ -23,6 +24,11 @@ from china_quant_platform.domain import (
 from china_quant_platform.domain.base import DomainModel
 from china_quant_platform.knowledge import HelpTopic
 from china_quant_platform.market import IndexSnapshot, MarketOverview
+from china_quant_platform.strategies.profit_validation import (
+    HorizonPreset,
+    ProfitBacktestResult,
+    ProfitValidationStatus,
+)
 
 
 class UiRunState(StrEnum):
@@ -72,6 +78,61 @@ class ChartOverlay(StrEnum):
     FORECAST = "FORECAST"
 
 
+class ChartSignalAction(StrEnum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class StrategyControlState(DomainModel):
+    horizon: HorizonPreset = HorizonPreset.ONE_MONTH
+    max_trades_per_year: int = Field(default=6, ge=1, le=60)
+    algorithm_name: str = "ETF盈利验证"
+
+    @property
+    def horizon_label(self) -> str:
+        return _horizon_label(self.horizon)
+
+
+class BacktestPanelState(DomainModel):
+    status: str = "--"
+    security_id: str = "--"
+    horizon_label: str = "--"
+    max_trades_per_year: str = "--"
+    selected_threshold: str = "--"
+    total_return: str = "--"
+    annualized_return: str = "--"
+    max_drawdown: str = "--"
+    excess_return: str = "--"
+    win_rate: str = "--"
+    trade_count: str = "--"
+    brier_score: str = "--"
+    reliability_grade: str = "--"
+    summary: str = "暂无回测结果"
+    notes: tuple[str, ...] = ()
+    trades: tuple[str, ...] = ()
+
+    @classmethod
+    def from_profit_result(cls, result: ProfitBacktestResult) -> BacktestPanelState:
+        return cls(
+            status=result.status.value,
+            security_id=result.security_id,
+            horizon_label=_horizon_label(result.horizon),
+            max_trades_per_year=str(result.max_trades_per_year),
+            selected_threshold=f"{result.selected_threshold:.2f}",
+            total_return=_format_percent(result.total_return),
+            annualized_return=_format_percent(result.annualized_return),
+            max_drawdown=_format_percent(result.max_drawdown),
+            excess_return=_format_percent(result.excess_return),
+            win_rate=_format_percent(result.win_rate),
+            trade_count=str(result.trade_count),
+            brier_score="--" if result.brier_score is None else f"{result.brier_score:.4f}",
+            reliability_grade=result.reliability_grade.value,
+            summary=_backtest_summary(result),
+            notes=tuple(result.notes),
+            trades=_profit_trade_summaries(result),
+        )
+
+
 class ChartPointState(DomainModel):
     time_label: str
     open_price: float
@@ -110,12 +171,21 @@ class ChartPointState(DomainModel):
         )
 
 
+class ChartSignalMarkerState(DomainModel):
+    trade_date: date
+    action: ChartSignalAction
+    price: float
+    label: str
+    detail: str
+
+
 class ChartState(DomainModel):
     interval: BarInterval = BarInterval.DAILY
     adjustment: AdjustmentMode = AdjustmentMode.NONE
     range_preset: ChartRangePreset = ChartRangePreset.ONE_MONTH
     overlays: frozenset[ChartOverlay] = frozenset({ChartOverlay.VOLUME})
     points: tuple[ChartPointState, ...] = ()
+    signals: tuple[ChartSignalMarkerState, ...] = ()
     update_count: int = 0
     realtime_update_count: int = 0
 
@@ -451,6 +521,7 @@ class AppUiState(DomainModel):
     task_status: UiTaskStatus = UiTaskStatus.IDLE
     active_task_name: str | None = None
     data_health: DataHealth | None = None
+    strategy_controls: StrategyControlState = Field(default_factory=StrategyControlState)
     market_overview: MarketOverviewPanelState = Field(
         default_factory=MarketOverviewPanelState.placeholder
     )
@@ -460,6 +531,8 @@ class AppUiState(DomainModel):
     chart: ChartState = Field(default_factory=ChartState)
     analysis: AnalysisPanelState = Field(default_factory=AnalysisPanelState)
     decision: DecisionPanelState = Field(default_factory=DecisionPanelState)
+    backtest: BacktestPanelState = Field(default_factory=BacktestPanelState)
+    chart_backtest_active: bool = False
     latest_error: UiErrorState | None = None
 
     @property
@@ -609,6 +682,46 @@ def _format_percent(value: float) -> str:
     return f"{value * 100:.1f}%"
 
 
+def _horizon_label(horizon: HorizonPreset) -> str:
+    match horizon:
+        case HorizonPreset.ONE_MONTH:
+            return "1个月"
+        case HorizonPreset.THREE_MONTHS:
+            return "3个月"
+        case HorizonPreset.SIX_MONTHS:
+            return "6个月"
+        case HorizonPreset.ONE_YEAR:
+            return "1年"
+
+
+def _backtest_summary(result: ProfitBacktestResult) -> str:
+    if result.status is ProfitValidationStatus.PASS:
+        prefix = "样本外验证通过"
+    elif result.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
+        prefix = "历史样本不足"
+    elif result.status is ProfitValidationStatus.WATCH:
+        prefix = "研究观察"
+    else:
+        prefix = "验证未通过"
+    return (
+        f"{prefix}：净收益{_format_percent(result.total_return)}，"
+        f"最大回撤{_format_percent(result.max_drawdown)}，"
+        f"超额{_format_percent(result.excess_return)}，"
+        f"交易{result.trade_count}次。"
+    )
+
+
+def _profit_trade_summaries(result: ProfitBacktestResult) -> tuple[str, ...]:
+    values: list[str] = []
+    for index, trade in enumerate(result.trades, start=1):
+        values.append(
+            f"{index}. 买入 {trade.entry_date.isoformat()} @ {trade.entry_price:.3f}；"
+            f"卖出 {trade.exit_date.isoformat()} @ {trade.exit_price:.3f}；"
+            f"收益 {_format_percent(trade.net_return)}；原因 {trade.exit_reason}"
+        )
+    return tuple(values)
+
+
 def _format_signed_percent(value: float) -> str:
     return f"{value * 100:+.2f}%"
 
@@ -667,8 +780,11 @@ def _fallback_applicable_conditions(report: AnalysisReport) -> tuple[str, ...]:
 __all__ = [
     "AnalysisPanelState",
     "AppUiState",
+    "BacktestPanelState",
     "ChartOverlay",
     "ChartPointState",
+    "ChartSignalAction",
+    "ChartSignalMarkerState",
     "ChartRangePreset",
     "ChartState",
     "DecisionPanelState",
@@ -680,6 +796,7 @@ __all__ = [
     "OperationPanelState",
     "RecentSecurityState",
     "SearchCandidateState",
+    "StrategyControlState",
     "StrategyPanelState",
     "UiErrorState",
     "UiRunState",

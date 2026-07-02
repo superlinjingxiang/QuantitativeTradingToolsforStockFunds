@@ -17,7 +17,11 @@ from china_quant_platform.domain import (
 from china_quant_platform.ui import (
     ApplicationViewModel,
     ChartOverlay,
+    ChartPointState,
     ChartRangePreset,
+    ChartSignalAction,
+    ChartSignalMarkerState,
+    ChartState,
     MainWindow,
     PriceChartWidget,
 )
@@ -168,6 +172,7 @@ def test_chart_hover_shows_price_and_change_pct(qtbot: Any) -> None:
     qtbot.addWidget(window)
     window.resize(1000, 680)
     window.show()
+    qtbot.waitExposed(window)
 
     view_model.select_security("SSE:600519")
     view_model.load_chart_bars(
@@ -181,8 +186,11 @@ def test_chart_hover_shows_price_and_change_pct(qtbot: Any) -> None:
     chart = window.findChild(PriceChartWidget, "priceChart")
     assert chart is not None
     chart.repaint()
+    chart.grab()
+    hover_x = round(chart._last_data_x_rect.right()) - 1
+    hover_y = round(chart._last_data_x_rect.center().y())
 
-    qtbot.mouseMove(chart, QtCore.QPoint(chart.width() - 110, chart.height() // 2))
+    qtbot.mouseMove(chart, QtCore.QPoint(hover_x, hover_y))
 
     assert chart.hover_index is not None
     assert "收盘/最新" in chart.toolTip()
@@ -190,3 +198,101 @@ def test_chart_hover_shows_price_and_change_pct(qtbot: Any) -> None:
     assert "%" in chart.toolTip()
     assert "+4.000" in chart.toolTip()
     assert "+4.00%" in chart.toolTip()
+
+
+def test_chart_hover_includes_backtest_trade_signal(qtbot: Any) -> None:
+    chart = PriceChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(720, 420)
+    chart.show()
+
+    points = tuple(
+        ChartPointState.from_bar(bar)
+        for bar in (make_bar(26, 101), make_bar(27, 102), make_bar(29, 103))
+    )
+    chart.set_chart_state(
+        ChartState(
+            points=points,
+            overlays=frozenset({ChartOverlay.SIGNALS}),
+            signals=(
+                ChartSignalMarkerState(
+                    trade_date=date(2026, 6, 29),
+                    action=ChartSignalAction.BUY,
+                    price=103,
+                    label="B",
+                    detail="买入 2026-06-29 @ 103.000",
+                ),
+            ),
+        )
+    )
+    chart.repaint()
+
+    qtbot.mouseMove(chart, QtCore.QPoint(chart.width() - 96, chart.height() // 2))
+
+    assert chart.hover_index == 2
+    assert "买入" in chart.toolTip()
+    assert "103.000" in chart.toolTip()
+
+
+def test_chart_backtest_button_draws_max_profit_trade_layer(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=lambda: aware_datetime())
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+
+    button = window.findChild(QtWidgets.QPushButton, "chartBacktestButton")
+    assert button is not None
+    assert button.isEnabled() is False
+
+    view_model.select_security("SSE:600519")
+    view_model.set_strategy_max_trades_per_year(2)
+    view_model.load_chart_bars(
+        (
+            make_bar(20, 10),
+            make_bar(21, 12),
+            make_bar(22, 8),
+            make_bar(23, 14),
+            make_bar(24, 7),
+            make_bar(25, 16),
+        ),
+        generation=view_model.state.selection_generation,
+    )
+    normal_points = view_model.state.chart.points
+    normal_overlays = view_model.state.chart.overlays
+    normal_summary = view_model.state.backtest.summary
+
+    assert button.isEnabled() is True
+    assert button.text() == "回测曲线"
+    assert button.isChecked() is False
+
+    qtbot.mouseClick(button, QtCore.Qt.MouseButton.LeftButton)
+
+    state = view_model.state
+    assert state.chart_backtest_active is True
+    assert state.backtest.status == "OPTIMIZED"
+    assert state.backtest.trade_count == "2"
+    assert "图表利润最大化" in state.backtest.summary
+    assert "交易2/2次" in state.backtest.summary
+    assert len(state.backtest.trades) == 2
+    assert state.backtest.trades[0].startswith("1. 买入 2026-06-22 @ 8.000")
+    assert state.backtest.trades[1].startswith("2. 买入 2026-06-24 @ 7.000")
+    assert ChartOverlay.SIGNALS in state.chart.overlays
+    assert tuple(signal.label for signal in state.chart.signals) == ("B", "S", "B", "S")
+    assert (
+        len([signal for signal in state.chart.signals if signal.action is ChartSignalAction.BUY])
+        == 2
+    )
+    assert button.text() == "正常显示"
+    assert button.isChecked() is True
+    assert button.property("active") is True
+
+    qtbot.mouseClick(button, QtCore.Qt.MouseButton.LeftButton)
+
+    state = view_model.state
+    assert state.chart_backtest_active is False
+    assert state.chart.points == normal_points
+    assert state.chart.overlays == normal_overlays
+    assert state.chart.signals == ()
+    assert state.backtest.summary == normal_summary
+    assert button.text() == "回测曲线"
+    assert button.isChecked() is False
+    assert button.property("active") is False

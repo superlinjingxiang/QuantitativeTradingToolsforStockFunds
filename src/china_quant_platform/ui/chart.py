@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from china_quant_platform.ui.state import ChartOverlay, ChartPointState, ChartState
+from china_quant_platform.ui.state import (
+    ChartOverlay,
+    ChartPointState,
+    ChartSignalAction,
+    ChartSignalMarkerState,
+    ChartState,
+)
 from china_quant_platform.ui.theme import (
     DEFAULT_THEME_MODE,
     ThemeColors,
@@ -77,7 +83,12 @@ class PriceChartWidget(QtWidgets.QWidget):
         if index != self._hover_index:
             self._hover_index = index
             self.update()
-        tooltip = _hover_text(self._chart_state.points, index, self._chart_state.interval.value)
+        tooltip = _hover_text(
+            self._chart_state.points,
+            index,
+            self._chart_state.interval.value,
+            _signals_for_point(self._chart_state.points[index], self._chart_state.signals),
+        )
         self.setToolTip(tooltip)
         QtWidgets.QToolTip.showText(
             event.globalPosition().toPoint(),
@@ -260,7 +271,7 @@ class PriceChartWidget(QtWidgets.QWidget):
         painter.drawText(
             QtCore.QRectF(card_rect.left() + 8, price_rect.top() - 18, 88, 16),
             QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter,
-            "价格(CNY)",
+            "价格",
         )
         painter.drawText(
             QtCore.QRectF(data_rect.right() - 44, card_rect.bottom() - 24, 58, 18),
@@ -443,6 +454,11 @@ class PriceChartWidget(QtWidgets.QWidget):
         )
 
         bar_width = max(2, data_rect.width() / max(len(points), 1) * 0.62)
+        label_step = 1 if bar_width >= 18 else max(1, round(28 / max(bar_width, 1)))
+        original_font = QtGui.QFont(painter.font())
+        label_font = QtGui.QFont(painter.font())
+        label_font.setPointSize(7)
+        painter.setFont(label_font)
         for index, change in enumerate(changes):
             x = _scaled_x(index, len(points), data_rect) - bar_width / 2
             normalized = min(1.0, abs(change) / max_abs_change)
@@ -456,6 +472,31 @@ class PriceChartWidget(QtWidgets.QWidget):
             painter.setPen(QtCore.Qt.PenStyle.NoPen)
             painter.setBrush(QtGui.QColor(color))
             painter.drawRect(QtCore.QRectF(x, y, bar_width, height))
+            if index % label_step == 0 or index == len(points) - 1:
+                label = f"{change * 100:+.1f}%"
+                label_width = max(38.0, bar_width + 20)
+                if change >= 0:
+                    label_y = y - 13
+                    if label_y < axis_rect.top():
+                        label_y = y + 1
+                else:
+                    label_y = y + height + 1
+                    if label_y + 12 > axis_rect.bottom():
+                        label_y = y + height - 13
+                label_rect = QtCore.QRectF(
+                    x - (label_width - bar_width) / 2,
+                    label_y,
+                    label_width,
+                    12,
+                )
+                painter.setPen(QtGui.QColor(colors.secondary_text))
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawText(
+                    label_rect,
+                    QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                    label,
+                )
+        painter.setFont(original_font)
 
     def _draw_latest_summary(
         self,
@@ -509,7 +550,12 @@ class PriceChartWidget(QtWidgets.QWidget):
         painter.setBrush(QtGui.QColor(colors.card))
         painter.drawEllipse(QtCore.QPointF(x, y), 4, 4)
 
-        text = _hover_text(points, index, self._chart_state.interval.value)
+        text = _hover_text(
+            points,
+            index,
+            self._chart_state.interval.value,
+            _signals_for_point(points[index], self._chart_state.signals),
+        )
         font = QtGui.QFont(self.font())
         font.setPointSize(8)
         painter.setFont(font)
@@ -544,19 +590,22 @@ class PriceChartWidget(QtWidgets.QWidget):
         max_price: float,
     ) -> None:
         points = self._chart_state.points
-        if len(points) < 3:
+        if not points:
             return
 
         colors = get_theme_colors(self._theme_mode)
-        markers = _turning_point_markers(points)[-8:]
+        explicit_markers = _trade_signal_markers(points, self._chart_state.signals)
+        if not explicit_markers and len(points) < 3:
+            return
+        markers = explicit_markers or _turning_point_markers(points)[-8:]
         font = QtGui.QFont(self.font())
         font.setPointSize(7)
         font.setBold(True)
         painter.setFont(font)
-        for index, label in markers:
+        for index, label, price, detail in markers:
             point = points[index]
             x = _scaled_x(index, len(points), rect)
-            y = _scaled_y(point.close_price, min_price, max_price, rect)
+            y = _scaled_y(price if price > 0 else point.close_price, min_price, max_price, rect)
             color = colors.green if label == "B" else colors.red
             painter.setPen(QtCore.Qt.PenStyle.NoPen)
             painter.setBrush(QtGui.QColor(color))
@@ -567,6 +616,13 @@ class PriceChartWidget(QtWidgets.QWidget):
                 QtCore.Qt.AlignmentFlag.AlignCenter,
                 label,
             )
+            if detail:
+                painter.setPen(QtGui.QColor(colors.secondary_text))
+                painter.drawText(
+                    QtCore.QRectF(x - 28, y - 24 if label == "S" else y + 8, 56, 16),
+                    QtCore.Qt.AlignmentFlag.AlignCenter,
+                    "买入" if label == "B" else "卖出",
+                )
 
     def _draw_forecast(
         self,
@@ -629,17 +685,50 @@ def _volume_color(point: ChartPointState, colors: ThemeColors) -> QtGui.QColor:
     return QtGui.QColor(color)
 
 
-def _turning_point_markers(points: tuple[ChartPointState, ...]) -> list[tuple[int, str]]:
-    markers: list[tuple[int, str]] = []
+def _turning_point_markers(
+    points: tuple[ChartPointState, ...],
+) -> list[tuple[int, str, float, str]]:
+    markers: list[tuple[int, str, float, str]] = []
     for index in range(1, len(points) - 1):
         previous_close = points[index - 1].close_price
         close_price = points[index].close_price
         next_close = points[index + 1].close_price
         if close_price <= previous_close and close_price < next_close:
-            markers.append((index, "B"))
+            markers.append((index, "B", close_price, ""))
         elif close_price >= previous_close and close_price > next_close:
-            markers.append((index, "S"))
+            markers.append((index, "S", close_price, ""))
     return markers
+
+
+def _trade_signal_markers(
+    points: tuple[ChartPointState, ...],
+    signals: tuple[ChartSignalMarkerState, ...],
+) -> list[tuple[int, str, float, str]]:
+    if not signals:
+        return []
+    index_by_date = {_point_date(point): index for index, point in enumerate(points)}
+    markers: list[tuple[int, str, float, str]] = []
+    for signal in signals:
+        index = index_by_date.get(signal.trade_date)
+        if index is None:
+            continue
+        markers.append((index, signal.label, signal.price, signal.detail))
+    return markers
+
+
+def _signals_for_point(
+    point: ChartPointState,
+    signals: tuple[ChartSignalMarkerState, ...],
+) -> tuple[ChartSignalMarkerState, ...]:
+    point_date = _point_date(point)
+    return tuple(signal for signal in signals if signal.trade_date == point_date)
+
+
+def _point_date(point: ChartPointState) -> date:
+    try:
+        return datetime.fromisoformat(point.time_label).date()
+    except ValueError:
+        return datetime.min.date()
 
 
 def _average_abs_move(points: tuple[ChartPointState, ...]) -> float:
@@ -681,19 +770,26 @@ def _nearest_index_for_x(x: float, count: int, rect: QtCore.QRectF) -> int:
     return max(0, min(count - 1, round(ratio * (count - 1))))
 
 
-def _hover_text(points: tuple[ChartPointState, ...], index: int, interval: str) -> str:
+def _hover_text(
+    points: tuple[ChartPointState, ...],
+    index: int,
+    interval: str,
+    signals: tuple[ChartSignalMarkerState, ...] = (),
+) -> str:
     point = points[index]
     change = _point_change(points, index)
     pct = _point_change_pct(points, index)
-    return "\n".join(
-        (
-            _time_axis_label(point.time_label, interval),
-            f"收盘/最新: {point.close_price:.3f}",
-            f"涨跌: {change:+.3f} ({pct * 100:+.2f}%)",
-            f"高/低: {point.high_price:.3f} / {point.low_price:.3f}",
-            f"量: {_compact_number(point.volume)}",
-        )
-    )
+    lines = [
+        _time_axis_label(point.time_label, interval),
+        f"收盘/最新: {point.close_price:.3f}",
+        f"涨跌: {change:+.3f} ({pct * 100:+.2f}%)",
+        f"高/低: {point.high_price:.3f} / {point.low_price:.3f}",
+        f"量: {_compact_number(point.volume)}",
+    ]
+    for signal in signals:
+        action = "买入" if signal.action is ChartSignalAction.BUY else "卖出"
+        lines.append(f"{action}: {signal.price:.3f}")
+    return "\n".join(lines)
 
 
 def _scaled_x(index: int, count: int, rect: QtCore.QRectF) -> float:

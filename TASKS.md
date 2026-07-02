@@ -197,13 +197,15 @@
 
 ## 阶段7——策略盈利证据与可信验证闭环
 
-### [ ] TASK-027——策略盈利证据、可信回测与模拟盘验证
+### [-] TASK-027——策略盈利证据、可信回测与模拟盘验证
 - 依赖：TASK-013至TASK-022、TASK-026
 - 需求：US-09、FR-013至FR-015、FR-020至FR-022、AC-07至AC-12、EPV-001至EPV-006
 - 核心定位：下一阶段优先证明“策略到底能不能赚钱、回测是否可信、模拟盘是否能验证”。Electron或前端重构只作为体验优化，不得优先于策略盈利证据、样本外回测、过拟合检查和模拟盘偏差验证。
 - 交付：策略验证实验室；固定样本外/滚动前推回测流水线；成本、滑点、涨跌停、停牌和容量压力测试；过拟合与多重检验诊断；策略排行榜/模型卡；模拟盘信号跟踪、成交偏差、漏单/重复信号和稳定性报告；DecisionHub接入真实验证证据。
 - 验收：通过EPV-001至EPV-006；任何策略若缺少最终样本外、成本压力、概率校准、风险约束或模拟盘证据，必须保持研究状态或输出ABSTAIN；不得因界面展示好看而提升执行候选等级。
 - 测试计划：样本外切分和无泄漏测试、滚动前推回归测试、成本/容量压力测试、参数敏感性测试、模拟盘偏差测试、策略模型卡快照测试、DecisionHub证据门禁集成测试。
+- 阶段性证据：2026-07-01 完成 `strategies.profit_validation`，提供ETF优先的盈利验证算法、`1m/3m/6m/1y`周期参数、每年最大交易次数约束、阈值验证集选择、最终样本外回测、滚动前推折、十标的ETF默认验证池、收益/回撤/胜率/交易次数/Brier分数输出和 `ProfitabilityEvidence` 转换。新增 `tests/unit/test_profit_validation_strategy.py` 覆盖交易次数上限、样本外阈值不泄漏、十标的聚合证据和下跌市场不通过；修复Yahoo日K兜底OHLC/received_at清洗，新增Eastmoney provider回归测试。真实联网十ETF诊断可拉取1306至1452根日K；当前算法平均样本外净收益8.14%，但0/10标的通过完整门槛，整体状态为FAIL，说明仍不能宣称具备通用赚钱证据。
+- 剩余工作：模拟盘信号跟踪、成交偏差/漏单/重复信号报告、容量/涨跌停/停牌压力、参数敏感性/过拟合模型卡和DecisionHub EPV完整门禁仍需后续补齐，因此TASK-027保持进行中。
 
 ## 阶段8——GUI可用性与联网可诊断性
 
@@ -254,3 +256,19 @@
 - 交付：默认指数占位；启动时自动刷新上证指数与深证成指；指数quote失败时使用最近日K合成点位和涨跌幅；指数面板刷新按钮；两行式指数列表；点击指数可切换到对应图表标的。
 - 验收：启动GUI后指数面板不为空；联网成功时显示市场状态、市场广度、成交额、波动、数据健康、上证指数和深证成指点位/涨跌幅；quote接口临时失败时日K兜底仍能显示指数；不得引入新的付费账号依赖。
 - 完成证据：2026-07-01 完成 `refresh_market_overview()` 自动后台刷新、`MarketOverviewPanelState` 默认/加载/失败占位、指数日K兜底合成quote和左侧刷新按钮；新增GUI测试覆盖默认占位、自动刷新、quote失败日K兜底和指数点击切换。真实GUI截图 `reports/gui_market_indices_overview_final.png` 验证约0.5秒显示上证指数 `4073.90 +1.16%`、深证成指 `15812.87 +0.19%`、数据 `HEALTHY`。`ruff format --check .`、`ruff check .`、`mypy src tests`、`pytest` 208项、`python -m china_quant_platform.release.audit`、PyInstaller打包、exe版本和GUI启动烟雾均通过。
+
+### [x] TASK-034——盈利验证GUI联动、回测页与QQQ兜底
+- 依赖：TASK-027、TASK-029、TASK-032、TASK-033
+- 需求：FR-001、FR-003、FR-013至FR-015、FR-021、FR-022、EPV-001至EPV-006
+- 核心定位：让当前GUI围绕“策略是否有赚钱证据”工作，而不是只展示旧的研究文本；同时减少用户输入海外ETF代码时无法进入行情链路的问题。
+- 交付：顶部策略期限 `1m/3m/6m/1y` 与最大交易次数控件；主题切换入口前置；联网行情加载后使用 `strategies.profit_validation` 生成 `ProfitBacktestResult`、`ProfitabilityEvidence` 和 `DecisionReport`；右侧四个面板展示盈利验证策略、样本外收益/回撤/超额、模拟盘缺口和执行门槛；底部“回测”页展示净收益、年化、最大回撤、基准超额、胜率、交易次数、Brier和可靠性等级；顶部新增“回测曲线/正常显示”双态按钮，可按当前策略期限和交易上限在图表窗口内展示历史最大利润买卖层，并可一键恢复正常图表；`QQQ`、`NASDAQ:QQQ` 等美股代码兜底为Yahoo可识别标的；新增缓存与Electron分层演进设计文档。
+- 验收：修改策略期限或交易次数会重新触发当前标的验证；点击“回测曲线”后折线图显示 B/S 买卖标记，底部回测页显示交易流水，完整买卖次数可以少于但不得超过输入上限；按钮变为“正常显示”，再次点击后恢复点击前的正常图表、叠加层和回测面板；回测页不再是占位；输入 `QQQ` 回车能选择 `NASDAQ:QQQ`；历史数据不足时右侧原因优先显示；缺少模拟盘证据时最终执行候选不得升级为真实API下单；Electron只能作为后续壳层，不得重写策略算法。
+- 完成证据：2026-07-01 完成 `ApplicationViewModel` 盈利验证接入、`BacktestPanelState` 渲染、顶部策略控件、图表历史最大利润层两态切换、底部回测页、QQQ/美股符号兜底、Yahoo native security id直连和 `docs/design/CACHE_AND_ELECTRON_TRANSITION.md`。新增/更新GUI和provider测试覆盖QQQ回车选择、策略控件同步、回测曲线 B/S 标记、正常显示恢复正常图表、回测页展示、无标的回测提示、Yahoo直连美股代码和并发请求断言；`ruff format --check .`、`ruff check .`、`mypy src tests` 和 `pytest` 通过。
+
+### [x] TASK-035——ai-hedge-fund独立研究入口
+- 依赖：TASK-027、TASK-034
+- 需求：FR-013至FR-015、FR-021、FR-022、EPV-001至EPV-006
+- 核心定位：参考用户提供的金融指标文档和外部 `virattt/ai-hedge-fund` 多agent项目，但不覆盖本项目现有盈利验证策略；外部agent只作为研究入口。
+- 交付：新增 `china_quant_platform.integrations.ai_hedge_fund` 适配层、`python -m china_quant_platform.ai_hedge_fund` 与 `china-quant-ai-hedge-fund` 独立命令；支持 `--repo`/`CHINA_QUANT_AI_HEDGE_FUND_PATH`、`--python`、`--ticker`、日期、分析师、模型、Ollama、dry-run、API key预检查和子进程输出捕获；README、`.env.example`、策略规格和ADR记录接入边界。
+- 验收：入口必须以子进程调用外部checkout，不把外部依赖变成主包硬依赖；缺少repo或key时给出明确错误；dry-run能打印命令；不修改 `strategies.profit_validation` 主策略行为；外部输出不得直接提升真实下单候选等级。
+- 完成证据：2026-07-02 完成独立适配层和CLI入口；新增单元测试覆盖命令构造、repo路径解析、缺key诊断、Ollama预检查、dry-run和假外部仓库子进程调用；文档记录外部agent研究定位和API key要求。

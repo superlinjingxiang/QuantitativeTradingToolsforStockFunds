@@ -130,6 +130,59 @@ def test_eastmoney_daily_klines_fall_back_to_yahoo(monkeypatch: MonkeyPatch) -> 
     assert bars[0].volume == 1_676_431
 
 
+def test_yahoo_daily_fallback_normalizes_ohlc_and_received_time(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    provider = EastmoneyMarketDataProvider()
+    future_timestamp = int(datetime(2030, 1, 2, 7, 0, tzinfo=UTC).timestamp())
+
+    def fake_get_json(
+        url: str,
+        _params: Mapping[str, object],
+        **_kwargs: object,
+    ) -> Mapping[str, Any]:
+        if "eastmoney.com" in url:
+            raise DataUnavailable("remote disconnected")
+        return {
+            "chart": {
+                "result": [
+                    {
+                        "timestamp": [future_timestamp],
+                        "indicators": {
+                            "quote": [
+                                {
+                                    "open": [2.80],
+                                    "high": [2.60],
+                                    "low": [2.90],
+                                    "close": [2.70],
+                                    "volume": [1_000],
+                                }
+                            ],
+                            "adjclose": [{"adjclose": [2.70]}],
+                        },
+                    }
+                ],
+                "error": None,
+            }
+        }
+
+    monkeypatch.setattr(provider, "_get_json", fake_get_json)
+    request = BarsRequest(
+        security_id="SSE:513300",
+        interval=BarInterval.DAILY,
+        start_time=datetime(2030, 1, 1, tzinfo=UTC),
+        end_time=datetime(2030, 1, 3, tzinfo=UTC),
+        adjustment=AdjustmentMode.NONE,
+    )
+
+    bars = asyncio.run(provider.get_bars(request))
+
+    assert len(bars) == 1
+    assert bars[0].high_price == 2.80
+    assert bars[0].low_price == 2.70
+    assert bars[0].received_at >= bars[0].source_time
+
+
 def test_eastmoney_minute_klines_fall_back_to_yahoo(monkeypatch: MonkeyPatch) -> None:
     provider = EastmoneyMarketDataProvider()
     yahoo_intervals: list[object] = []
@@ -204,6 +257,68 @@ def test_eastmoney_quote_falls_back_to_yahoo(monkeypatch: MonkeyPatch) -> None:
     assert quote.latest_price == 2.704
     assert quote.previous_close == 2.668
     assert quote.amount == 1_676_431 * 2.704
+
+
+def test_us_symbol_uses_yahoo_directly_for_quote_and_bars(monkeypatch: MonkeyPatch) -> None:
+    provider = EastmoneyMarketDataProvider()
+    requested_urls: list[str] = []
+
+    def fake_get_json(
+        url: str,
+        _params: Mapping[str, object],
+        **_kwargs: object,
+    ) -> Mapping[str, Any]:
+        requested_urls.append(url)
+        return _yahoo_chart_payload()
+
+    monkeypatch.setattr(provider, "_get_json", fake_get_json)
+    request = BarsRequest(
+        security_id="NASDAQ:QQQ",
+        interval=BarInterval.DAILY,
+        start_time=datetime(2026, 6, 1, tzinfo=UTC),
+        end_time=datetime(2026, 7, 1, tzinfo=UTC),
+        adjustment=AdjustmentMode.NONE,
+    )
+
+    quote = asyncio.run(provider.get_quote("NASDAQ:QQQ"))
+    bars = asyncio.run(provider.get_bars(request))
+
+    assert quote.security_id == "NASDAQ:QQQ"
+    assert bars[0].security_id == "NASDAQ:QQQ"
+    assert bars[0].provider == "yahoo"
+    assert requested_urls
+    assert all("finance.yahoo.com" in url for url in requested_urls)
+
+
+def test_hk_symbol_uses_yahoo_hk_symbol_for_quote_and_bars(monkeypatch: MonkeyPatch) -> None:
+    provider = EastmoneyMarketDataProvider()
+    requested_urls: list[str] = []
+
+    def fake_get_json(
+        url: str,
+        _params: Mapping[str, object],
+        **_kwargs: object,
+    ) -> Mapping[str, Any]:
+        requested_urls.append(url)
+        return _yahoo_chart_payload()
+
+    monkeypatch.setattr(provider, "_get_json", fake_get_json)
+    request = BarsRequest(
+        security_id="HKEX:00700",
+        interval=BarInterval.DAILY,
+        start_time=datetime(2026, 6, 1, tzinfo=UTC),
+        end_time=datetime(2026, 7, 1, tzinfo=UTC),
+        adjustment=AdjustmentMode.NONE,
+    )
+
+    quote = asyncio.run(provider.get_quote("HKEX:00700"))
+    bars = asyncio.run(provider.get_bars(request))
+
+    assert quote.security_id == "HKEX:00700"
+    assert bars[0].security_id == "HKEX:00700"
+    assert bars[0].provider == "yahoo"
+    assert requested_urls
+    assert all("0700.HK" in url for url in requested_urls)
 
 
 def _quote_payload() -> dict[str, object]:

@@ -130,6 +130,8 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
 
     async def get_quote(self, security_id: str) -> Quote:
         self.capabilities.require(ProviderCapability.REALTIME_QUOTE)
+        if _is_yahoo_native_security_id(security_id):
+            return self._get_yahoo_quote(_normalize_yahoo_native_security_id(security_id))
         secid = _security_id_to_secid(security_id)
         try:
             payload = self._quote_data(secid)
@@ -145,6 +147,11 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
         self.capabilities.require(ProviderCapability.HISTORICAL_BARS)
         if request.interval is not BarInterval.DAILY:
             self.capabilities.require(ProviderCapability.MINUTE_BARS)
+        if _is_yahoo_native_security_id(request.security_id):
+            normalized_request = request.model_copy(
+                update={"security_id": _normalize_yahoo_native_security_id(request.security_id)}
+            )
+            return self._get_yahoo_bars(normalized_request)
 
         secid = _security_id_to_secid(request.security_id)
         try:
@@ -345,6 +352,13 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
                 source_time,
                 request.interval,
             )
+            adjusted_open = open_price * ratio
+            adjusted_close = close_price * ratio
+            adjusted_high = max(high_price * ratio, adjusted_open, adjusted_close)
+            adjusted_low = min(low_price * ratio, adjusted_open, adjusted_close)
+            received_at = datetime.now(tz=CHINA_TZ)
+            if received_at < bar_end_time:
+                received_at = bar_end_time
             bars.append(
                 Bar(
                     security_id=request.security_id,
@@ -352,18 +366,18 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
                     start_time=bar_start_time,
                     end_time=bar_end_time,
                     trade_date=trade_date,
-                    open_price=open_price * ratio,
-                    high_price=high_price * ratio,
-                    low_price=low_price * ratio,
-                    close_price=close_price * ratio,
+                    open_price=adjusted_open,
+                    high_price=adjusted_high,
+                    low_price=adjusted_low,
+                    close_price=adjusted_close,
                     volume=volume or 0.0,
-                    amount=(volume or 0.0) * close_price,
+                    amount=(volume or 0.0) * adjusted_close,
                     adjustment=request.adjustment,
                     provider="yahoo",
                     schema_version="yahoo.chart.v8.fallback",
                     source_time=bar_end_time,
                     observed_at=bar_end_time,
-                    received_at=datetime.now(tz=CHINA_TZ),
+                    received_at=received_at,
                     quality_status=RecordQualityStatus.OK,
                 )
             )
@@ -420,6 +434,9 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
         ):
             raise DataUnavailable(f"Yahoo returned incomplete quote data for {symbol}")
         source_time = datetime.fromtimestamp(timestamps[latest_index], tz=CHINA_TZ)
+        received_at = datetime.now(tz=CHINA_TZ)
+        if received_at < source_time:
+            received_at = source_time
         return Quote(
             security_id=security_id,
             latest_price=latest_price,
@@ -433,7 +450,7 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
             schema_version="yahoo.chart.v8.fallback",
             source_time=source_time,
             observed_at=source_time,
-            received_at=datetime.now(tz=CHINA_TZ),
+            received_at=received_at,
             quality_status=RecordQualityStatus.OK,
         )
 
@@ -484,6 +501,12 @@ def _security_id_to_secid(security_id: str) -> str:
 
 
 def _security_id_to_yahoo_symbol(security_id: str) -> str:
+    if _is_yahoo_native_security_id(security_id):
+        normalized = _normalize_yahoo_native_security_id(security_id)
+        exchange, _, symbol = normalized.partition(":")
+        if exchange == "HKEX":
+            return _hk_yahoo_symbol(symbol)
+        return symbol
     secid = _security_id_to_secid(security_id)
     market, code = secid.split(".", maxsplit=1)
     if market == "1":
@@ -491,6 +514,68 @@ def _security_id_to_yahoo_symbol(security_id: str) -> str:
     if market == "0":
         return f"{code}.SZ"
     raise DataUnavailable(f"Cannot convert security_id {security_id!r} to Yahoo symbol")
+
+
+def _is_yahoo_native_security_id(security_id: str) -> bool:
+    return _try_normalize_yahoo_native_security_id(security_id) is not None
+
+
+def _try_normalize_yahoo_native_security_id(security_id: str) -> str | None:
+    value = security_id.strip().upper()
+    if ":" in value:
+        exchange, _, symbol = value.partition(":")
+        if exchange in _HK_EXCHANGE_ALIASES:
+            hk_code = _canonical_hk_code(symbol)
+            return None if hk_code is None else f"HKEX:{hk_code}"
+        if exchange in {"NASDAQ", "NYSE", "US"} and _looks_like_yahoo_symbol(symbol):
+            return f"{exchange}:{symbol}"
+        return None
+    hk_code = _hk_code_from_yahoo_symbol(value)
+    if hk_code is not None:
+        return f"HKEX:{hk_code}"
+    if _looks_like_yahoo_symbol(value):
+        return f"NASDAQ:{value}"
+    return None
+
+
+def _normalize_yahoo_native_security_id(security_id: str) -> str:
+    normalized = _try_normalize_yahoo_native_security_id(security_id)
+    if normalized is not None:
+        return normalized
+    raise DataUnavailable(f"Cannot convert security_id {security_id!r} to Yahoo symbol")
+
+
+_HK_EXCHANGE_ALIASES = frozenset({"HK", "HKEX", "HKG", "SEHK"})
+
+
+def _hk_code_from_yahoo_symbol(symbol: str) -> str | None:
+    value = symbol.strip().upper()
+    if value.endswith(".HK"):
+        return _canonical_hk_code(value.removesuffix(".HK"))
+    return None
+
+
+def _canonical_hk_code(code: str) -> str | None:
+    value = code.strip().upper()
+    if not value.isdigit() or not (1 <= len(value) <= 5):
+        return None
+    return (value.lstrip("0") or "0").zfill(5)
+
+
+def _hk_yahoo_symbol(code: str) -> str:
+    canonical = _canonical_hk_code(code) or code
+    stripped = canonical.lstrip("0") or "0"
+    yahoo_code = stripped.zfill(4) if len(stripped) <= 4 else stripped
+    return f"{yahoo_code}.HK"
+
+
+def _looks_like_yahoo_symbol(symbol: str) -> bool:
+    value = symbol.strip().upper()
+    if not 1 <= len(value) <= 10:
+        return False
+    return all(character.isalnum() or character in {".", "-"} for character in value) and any(
+        character.isalpha() for character in value
+    )
 
 
 def _yahoo_period_start(request: BarsRequest) -> datetime:

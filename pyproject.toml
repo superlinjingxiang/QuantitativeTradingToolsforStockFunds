@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 china-quant-platform = "china_quant_platform.__main__:main"
+china-quant-ai-hedge-fund = "china_quant_platform.ai_hedge_fund:main"
 
 [dependency-groups]
 dev = [
