@@ -87,7 +87,13 @@ class PriceChartWidget(QtWidgets.QWidget):
             self._chart_state.points,
             index,
             self._chart_state.interval.value,
-            _signals_for_point(self._chart_state.points[index], self._chart_state.signals),
+            _signals_for_point(
+                self._chart_state.points[index],
+                _visible_complete_trade_signals(
+                    self._chart_state.points,
+                    self._chart_state.signals,
+                ),
+            ),
         )
         self.setToolTip(tooltip)
         QtWidgets.QToolTip.showText(
@@ -554,7 +560,10 @@ class PriceChartWidget(QtWidgets.QWidget):
             points,
             index,
             self._chart_state.interval.value,
-            _signals_for_point(points[index], self._chart_state.signals),
+            _signals_for_point(
+                points[index],
+                _visible_complete_trade_signals(points, self._chart_state.signals),
+            ),
         )
         font = QtGui.QFont(self.font())
         font.setPointSize(8)
@@ -706,6 +715,7 @@ def _trade_signal_markers(
 ) -> list[tuple[int, str, float, str]]:
     if not signals:
         return []
+    signals = _visible_complete_trade_signals(points, signals)
     index_by_date = {_point_date(point): index for index, point in enumerate(points)}
     markers: list[tuple[int, str, float, str]] = []
     for signal in signals:
@@ -714,6 +724,31 @@ def _trade_signal_markers(
             continue
         markers.append((index, signal.label, signal.price, signal.detail))
     return markers
+
+
+def _visible_complete_trade_signals(
+    points: tuple[ChartPointState, ...],
+    signals: tuple[ChartSignalMarkerState, ...],
+) -> tuple[ChartSignalMarkerState, ...]:
+    if not signals:
+        return ()
+    has_buy = any(signal.action is ChartSignalAction.BUY for signal in signals)
+    has_sell = any(signal.action is ChartSignalAction.SELL for signal in signals)
+    if not has_buy or not has_sell:
+        return signals
+    visible_dates = {_point_date(point) for point in points}
+    visible: list[ChartSignalMarkerState] = []
+    pending_buy: ChartSignalMarkerState | None = None
+    for signal in sorted(signals, key=lambda item: (item.trade_date, item.action.value)):
+        if signal.trade_date not in visible_dates:
+            continue
+        if signal.action is ChartSignalAction.BUY:
+            pending_buy = signal
+            continue
+        if signal.action is ChartSignalAction.SELL and pending_buy is not None:
+            visible.extend((pending_buy, signal))
+            pending_buy = None
+    return tuple(visible)
 
 
 def _signals_for_point(

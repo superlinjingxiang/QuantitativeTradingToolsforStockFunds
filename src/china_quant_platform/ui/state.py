@@ -83,14 +83,44 @@ class ChartSignalAction(StrEnum):
     SELL = "SELL"
 
 
+class StrategyMode(StrEnum):
+    SHORT_TERM = "short_term"
+    LONG_TERM = "long_term"
+
+
 class StrategyControlState(DomainModel):
+    mode: StrategyMode = StrategyMode.SHORT_TERM
     horizon: HorizonPreset = HorizonPreset.ONE_MONTH
-    max_trades_per_year: int = Field(default=6, ge=1, le=60)
-    algorithm_name: str = "ETF盈利验证"
+    max_trades_per_year: int = Field(default=12, ge=1, le=60)
+    algorithm_name: str = "短线盈利验证"
+
+    @classmethod
+    def for_mode(cls, mode: StrategyMode) -> StrategyControlState:
+        if mode is StrategyMode.LONG_TERM:
+            return cls(
+                mode=mode,
+                horizon=HorizonPreset.SIX_MONTHS,
+                max_trades_per_year=4,
+                algorithm_name="长线趋势验证",
+            )
+        return cls(
+            mode=mode,
+            horizon=HorizonPreset.ONE_MONTH,
+            max_trades_per_year=12,
+            algorithm_name="短线盈利验证",
+        )
 
     @property
     def horizon_label(self) -> str:
         return _horizon_label(self.horizon)
+
+    @property
+    def mode_label(self) -> str:
+        return _strategy_mode_label(self.mode)
+
+    @property
+    def mode_description(self) -> str:
+        return _strategy_mode_description(self.mode)
 
 
 class BacktestPanelState(DomainModel):
@@ -249,9 +279,13 @@ class StrategyPanelState(DomainModel):
     strategy_name: str = "--"
     strategy_id: str = "--"
     strategy_version: str = "--"
+    mode_label: str = "--"
+    asset_scope: str = "--"
     horizon_label: str = "--"
     market_regime: str = "--"
     raw_signal: str = "--"
+    core_indicators: tuple[str, ...] = ()
+    sample_count: str = "--"
     applicable_conditions: tuple[str, ...] = ()
     invalidation_conditions: tuple[str, ...] = ()
     model_version: str = "--"
@@ -264,6 +298,7 @@ class ForecastPanelState(DomainModel):
     probability_summary: str = "--"
     expected_return_range: str = "--"
     expected_drawdown: str = "--"
+    validation_metrics: str = "--"
     confidence_note: str = "--"
     model_version: str = "--"
     is_abstain: bool = False
@@ -272,6 +307,7 @@ class ForecastPanelState(DomainModel):
 class OperationPanelState(DomainModel):
     final_signal: str = "--"
     grade: str = "--"
+    grade_description: str = "--"
     valid_until: str = "--"
     target_position_limit: str = "--"
     positive_drivers: tuple[str, ...] = ()
@@ -289,6 +325,7 @@ class DecisionPanelState(DomainModel):
     profitability_summary: str = "--"
     simulation_summary: str = "--"
     gate_summary: str = "--"
+    gate_details: tuple[str, ...] = ()
     blocking_reasons: tuple[str, ...] = ()
     caveats: tuple[str, ...] = ()
     no_profit_guarantee: str = "--"
@@ -304,6 +341,7 @@ class DecisionPanelState(DomainModel):
             profitability_summary=_profitability_summary(report),
             simulation_summary=_simulation_summary(report),
             gate_summary=_gate_summary(report),
+            gate_details=_gate_details(report),
             blocking_reasons=tuple(report.negative_evidence),
             caveats=tuple(report.caveats),
             no_profit_guarantee=report.no_profit_guarantee,
@@ -330,9 +368,13 @@ class AnalysisPanelState(DomainModel):
             strategy_name=strategy_name or report.strategy_id,
             strategy_id=report.strategy_id,
             strategy_version=report.strategy_version,
+            mode_label=_mode_label_from_strategy(report),
+            asset_scope=_asset_scope_from_strategy(report),
             horizon_label=f"{report.horizon} bars",
             market_regime=report.market_regime,
             raw_signal=report.raw_signal,
+            core_indicators=_core_indicators_from_strategy(report),
+            sample_count=_sample_count_from_report(report),
             applicable_conditions=applicable_conditions or _fallback_applicable_conditions(report),
             invalidation_conditions=invalidation_conditions,
             model_version=report.model_version,
@@ -344,6 +386,7 @@ class AnalysisPanelState(DomainModel):
             probability_summary=_probability_summary(report),
             expected_return_range=_return_range(report),
             expected_drawdown=_drawdown_text(report.expected_drawdown),
+            validation_metrics=_validation_metrics_from_report(report),
             confidence_note=_confidence_note(strategy_summary),
             model_version=report.model_version,
             is_abstain=report.final_signal is FinalSignal.ABSTAIN,
@@ -351,6 +394,7 @@ class AnalysisPanelState(DomainModel):
         operation = OperationPanelState(
             final_signal=report.final_signal.value,
             grade=report.grade or "--",
+            grade_description=_grade_description(report.grade),
             valid_until=report.valid_until.isoformat(),
             target_position_limit=_position_limit_text(report.target_position_limit),
             positive_drivers=tuple(report.positive_drivers),
@@ -678,6 +722,85 @@ def _gate_summary(report: DecisionReport) -> str:
     return "；".join(f"{gate.name}:{gate.status.value}" for gate in blocked)
 
 
+def _gate_details(report: DecisionReport) -> tuple[str, ...]:
+    values: list[str] = []
+    for gate in report.gates:
+        reasons = "；".join(gate.reasons[:2]) if gate.reasons else "无补充说明"
+        values.append(f"{gate.name}: {gate.status.value} - {reasons}")
+    return tuple(values)
+
+
+def _strategy_mode_label(mode: StrategyMode) -> str:
+    if mode is StrategyMode.LONG_TERM:
+        return "长线策略"
+    return "短线策略"
+
+
+def _strategy_mode_description(mode: StrategyMode) -> str:
+    if mode is StrategyMode.LONG_TERM:
+        return "63-252个交易日，低频，重点看趋势、相对强弱、回撤和波动稳定性。"
+    return "5-21个交易日，较高频，重点看短期动量、成交量确认和回撤风险。"
+
+
+def _mode_label_from_strategy(report: AnalysisReport) -> str:
+    if "long_term" in report.strategy_id or "long" in report.strategy_version:
+        return "长线策略"
+    if "short_term" in report.strategy_id or "short" in report.strategy_version:
+        return "短线策略"
+    return "--"
+
+
+def _asset_scope_from_strategy(report: AnalysisReport) -> str:
+    if "long_term" in report.strategy_id:
+        return "A股、ETF、指数、黄金/债券/海外ETF；优先长期日线样本。"
+    if "short_term" in report.strategy_id:
+        return "A股、ETF、指数、行业主题、黄金/债券/海外ETF；优先高流动性标的。"
+    return "A股、ETF、指数、基金等可取得K线/净值的标的。"
+
+
+def _core_indicators_from_strategy(report: AnalysisReport) -> tuple[str, ...]:
+    if "long_term" in report.strategy_id:
+        return ("中长期趋势", "相对强弱", "回撤", "波动稳定性", "滚动校准")
+    if "short_term" in report.strategy_id:
+        return ("短中期动量", "成交量确认", "波动/回撤", "相似区间预测", "样本外回测")
+    return ("动量", "趋势", "波动", "回撤", "样本外回测")
+
+
+def _sample_count_from_report(report: AnalysisReport) -> str:
+    snapshot = report.data_snapshot_id
+    if ":" in snapshot:
+        _, _, rest = snapshot.partition(":")
+        bars, _, _suffix = rest.partition("-")
+        if bars.isdigit():
+            return f"{bars} bars"
+    return "--"
+
+
+def _validation_metrics_from_report(report: AnalysisReport) -> str:
+    hints = [
+        value
+        for value in (*report.positive_drivers, *report.negative_drivers)
+        if value.startswith("滚动校准") or "Brier" in value or "覆盖率" in value
+    ]
+    if hints:
+        return "；".join(hints[:2])
+    return "校准样本不足或暂未生成。"
+
+
+def _grade_description(grade: str | None) -> str:
+    match grade:
+        case "A":
+            return "A：预测、回测、校准、风险门槛均较强。"
+        case "B":
+            return "B：预测和历史证据可研究使用，但仍需模拟盘确认。"
+        case "C":
+            return "C：证据偏弱，只能观察。"
+        case "N":
+            return "N：不交易或样本不足。"
+        case _:
+            return "--"
+
+
 def _format_percent(value: float) -> str:
     return f"{value * 100:.1f}%"
 
@@ -797,6 +920,7 @@ __all__ = [
     "RecentSecurityState",
     "SearchCandidateState",
     "StrategyControlState",
+    "StrategyMode",
     "StrategyPanelState",
     "UiErrorState",
     "UiRunState",

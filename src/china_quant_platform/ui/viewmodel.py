@@ -39,6 +39,7 @@ from china_quant_platform.domain import (
     SecurityRef,
     SecurityStatus,
 )
+from china_quant_platform.forecasting import IntervalForecastResult, forecast_interval_from_bars
 from china_quant_platform.knowledge import KnowledgeCenter
 from china_quant_platform.market import MarketOverview, build_market_overview
 from china_quant_platform.strategies.profit_validation import (
@@ -64,6 +65,8 @@ from china_quant_platform.ui.state import (
     MarketOverviewPanelState,
     RecentSecurityState,
     SearchCandidateState,
+    StrategyControlState,
+    StrategyMode,
     UiErrorState,
     UiRunState,
     UiTaskStatus,
@@ -176,7 +179,6 @@ class _OptimalChartBacktest:
     points: tuple[ChartPointState, ...]
     signals: tuple[ChartSignalMarkerState, ...]
     panel: BacktestPanelState
-    range_preset: ChartRangePreset
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,6 +433,13 @@ class ApplicationViewModel(QtCore.QObject):
         self._reload_selected_security_data()
 
     def set_chart_overlay_enabled(self, overlay: ChartOverlay, enabled: bool) -> None:
+        if overlay is ChartOverlay.SIGNALS:
+            if enabled and not self._state.chart_backtest_active:
+                self.run_chart_profit_backtest()
+                return
+            if not enabled and self._state.chart_backtest_active:
+                self._restore_chart_backtest_layer()
+                return
         overlays = set(self._state.chart.overlays)
         if enabled:
             overlays.add(overlay)
@@ -458,6 +467,24 @@ class ApplicationViewModel(QtCore.QObject):
                     "analysis": AnalysisPanelState(),
                     "decision": DecisionPanelState(),
                     "backtest": BacktestPanelState(summary="策略参数已修改，等待重新回测。"),
+                }
+            )
+        )
+        self._reload_selected_security_data()
+
+    def set_strategy_mode(self, mode: StrategyMode) -> None:
+        if self._state.chart_backtest_active:
+            self._restore_chart_backtest_layer()
+        controls = StrategyControlState.for_mode(mode)
+        if self._state.strategy_controls == controls:
+            return
+        self._set_state(
+            self._state.model_copy(
+                update={
+                    "strategy_controls": controls,
+                    "analysis": AnalysisPanelState(),
+                    "decision": DecisionPanelState(),
+                    "backtest": BacktestPanelState(summary="策略模式已修改，等待重新回测。"),
                 }
             )
         )
@@ -554,11 +581,6 @@ class ApplicationViewModel(QtCore.QObject):
                     "chart_backtest_active": True,
                     "chart": self._state.chart.model_copy(
                         update={
-                            "interval": BarInterval.DAILY
-                            if source_bars
-                            else self._state.chart.interval,
-                            "range_preset": result.range_preset,
-                            "points": result.points,
                             "signals": result.signals,
                             "overlays": frozenset(
                                 {
@@ -1204,6 +1226,7 @@ class ApplicationViewModel(QtCore.QObject):
                 as_of=selected_at.date(),
             )
             config = _profit_strategy_config(
+                self._state.strategy_controls.mode,
                 self._state.strategy_controls.horizon,
                 self._state.strategy_controls.max_trades_per_year,
             )
@@ -1219,6 +1242,7 @@ class ApplicationViewModel(QtCore.QObject):
                 data_health=result.data_health,
                 bars=result.decision_bars,
                 backtest=backtest,
+                mode=self._state.strategy_controls.mode,
             )
             request = DecisionRequest(
                 security_id=result.security_id,
@@ -1245,18 +1269,6 @@ class ApplicationViewModel(QtCore.QObject):
                 self._state.model_copy(
                     update={
                         "backtest": BacktestPanelState.from_profit_result(backtest),
-                        "chart": self._state.chart.model_copy(
-                            update={
-                                "signals": _chart_signals_from_profit_backtest(backtest),
-                                "overlays": frozenset(
-                                    {
-                                        *self._state.chart.overlays,
-                                        ChartOverlay.SIGNALS,
-                                    }
-                                ),
-                                "update_count": self._state.chart.update_count + 1,
-                            }
-                        ),
                         "task_status": UiTaskStatus.COMPLETED,
                         "active_task_name": None,
                     }
@@ -1609,8 +1621,9 @@ def _run_optimal_chart_backtest(
         summary=summary,
         trades=trade_lines,
         notes=(
-            "本回测为利润最大化历史路径，使用完整历史价格反推，属于上帝视角。",
-            "交易次数为当前窗口内最多完整买卖次数，可以少于上限但不能超过上限。",
+            "本回测为当前可见图表窗口内的利润最大化历史路径，属于上帝视角。",
+            "横轴、周期、复权和日期范围与当前图表一致，只叠加买卖标记。",
+            "交易次数为当前图表窗口内最多完整买卖次数，可以少于上限但不能超过上限。",
             "该结果用于观察历史最佳路径，不代表未来可预测或可实现。",
         ),
     )
@@ -1618,7 +1631,6 @@ def _run_optimal_chart_backtest(
         points=points,
         signals=signals,
         panel=panel,
-        range_preset=_chart_range_for_horizon(horizon),
     )
 
 
@@ -1628,6 +1640,8 @@ def _chart_backtest_points(
     fallback_points: tuple[ChartPointState, ...],
     horizon: HorizonPreset,
 ) -> tuple[ChartPointState, ...]:
+    if len(fallback_points) >= 2:
+        return fallback_points
     if bars:
         sorted_bars = tuple(sorted(bars, key=lambda item: item.end_time))
         end_time = sorted_bars[-1].end_time
@@ -1847,16 +1861,35 @@ def _format_ui_percent(value: float) -> str:
 
 
 def _profit_strategy_config(
+    mode: StrategyMode,
     horizon: HorizonPreset,
     max_trades_per_year: int,
 ) -> ProfitSeekingConfig:
     parameters = horizon_parameters(horizon)
+    if mode is StrategyMode.LONG_TERM:
+        return ProfitSeekingConfig(
+            horizon=horizon,
+            max_trades_per_year=max_trades_per_year,
+            max_annual_volatility=0.58,
+            stop_loss_pct=0.18,
+            minimum_oos_bars=max(120, parameters.holding_days),
+            minimum_validation_bars=120,
+            minimum_trades_for_pass=max(1, min(2, max_trades_per_year)),
+            threshold_candidates=(0.20, 0.28, 0.36, 0.45, 0.55),
+            strategy_id="strategy.profit_validation_long_term",
+            strategy_version="profit-validation-long-v1",
+        )
     return ProfitSeekingConfig(
         horizon=horizon,
         max_trades_per_year=max_trades_per_year,
+        max_annual_volatility=0.78,
+        stop_loss_pct=0.10,
         minimum_oos_bars=max(80, parameters.holding_days),
         minimum_validation_bars=80,
         minimum_trades_for_pass=max(1, min(3, max_trades_per_year)),
+        threshold_candidates=(0.10, 0.14, 0.18, 0.25, 0.32, 0.40),
+        strategy_id="strategy.profit_validation_short_term",
+        strategy_version="profit-validation-short-v1",
     )
 
 
@@ -1874,32 +1907,50 @@ def _analysis_report_from_profit_backtest(
     data_health: DataHealth,
     bars: tuple[Bar, ...],
     backtest: ProfitBacktestResult,
+    mode: StrategyMode,
 ) -> AnalysisReport:
     parameters = horizon_parameters(backtest.horizon)
-    final_signal = _profit_analysis_signal(backtest, data_health)
+    forecast = forecast_interval_from_bars(
+        bars,
+        horizon_days=parameters.holding_days,
+        round_trip_cost_bps=15.0,
+    )
+    final_signal = _profit_analysis_signal(backtest, data_health, forecast, mode)
+    strategy_id = (
+        "strategy.profit_validation_long_term"
+        if mode is StrategyMode.LONG_TERM
+        else "strategy.profit_validation_short_term"
+    )
+    strategy_version = (
+        "profit-validation-long-v1"
+        if mode is StrategyMode.LONG_TERM
+        else "profit-validation-short-v1"
+    )
     return AnalysisReport(
         security_id=security.security_id,
         as_of=quote.source_time,
         data_health=data_health,
-        strategy_id="strategy.profit_validation_momentum",
-        strategy_version="profit-validation-ui-v1",
+        strategy_id=strategy_id,
+        strategy_version=strategy_version,
         horizon=parameters.holding_days,
-        market_regime=_profit_market_regime(backtest),
-        direction_probabilities=_profit_direction_probabilities(backtest),
-        raw_signal=_profit_raw_signal(backtest),
+        market_regime=_profit_market_regime(backtest, forecast),
+        direction_probabilities=_profit_direction_probabilities(backtest, forecast),
+        raw_signal=_profit_raw_signal(backtest, forecast, mode),
         final_signal=final_signal,
         valid_until=quote.source_time + timedelta(days=1),
-        positive_drivers=_profit_positive_drivers(backtest),
-        negative_drivers=_profit_negative_drivers(backtest, data_health),
-        model_version="profit_validation.momentum_trend.v1",
-        rule_version="rules-profit-validation-v1",
+        positive_drivers=_profit_positive_drivers(backtest, forecast, mode),
+        negative_drivers=_profit_negative_drivers(backtest, data_health, forecast),
+        model_version=forecast.model_version,
+        rule_version="rules-profit-validation-short-v1"
+        if mode is StrategyMode.SHORT_TERM
+        else "rules-profit-validation-long-v1",
         data_snapshot_id=f"profit-validation:{len(bars)}-daily-bars",
-        expected_return_quantiles=_profit_expected_return_quantiles(backtest),
-        expected_drawdown=backtest.max_drawdown,
+        expected_return_quantiles=_profit_expected_return_quantiles(backtest, forecast),
+        expected_drawdown=forecast.expected_drawdown,
         grade=backtest.reliability_grade.value,
-        target_position_limit=0.05 if backtest.status is ProfitValidationStatus.PASS else 0.0,
-        exit_or_invalidation_conditions=_profit_invalidation_conditions(backtest),
-        abstain_reason=_profit_abstain_reason(backtest, data_health),
+        target_position_limit=_target_position_limit(final_signal, backtest, forecast, mode),
+        exit_or_invalidation_conditions=_profit_invalidation_conditions(backtest, mode),
+        abstain_reason=_profit_abstain_reason(backtest, data_health, forecast),
     )
 
 
@@ -1908,8 +1959,8 @@ def _profitability_evidence_from_backtest(
 ) -> ProfitabilityEvidence:
     return ProfitabilityEvidence(
         source="profit_validation_oos",
-        strategy_id="strategy.profit_validation_momentum",
-        strategy_version="profit-validation-ui-v1",
+        strategy_id=_strategy_id_for_horizon(backtest.horizon),
+        strategy_version=_strategy_version_for_horizon(backtest.horizon),
         total_return=backtest.total_return,
         annualized_return=backtest.annualized_return,
         max_drawdown=backtest.max_drawdown,
@@ -1925,73 +1976,91 @@ def _profitability_evidence_from_backtest(
     )
 
 
-def _chart_signals_from_profit_backtest(
-    backtest: ProfitBacktestResult,
-) -> tuple[ChartSignalMarkerState, ...]:
-    markers: list[ChartSignalMarkerState] = []
-    for trade in backtest.trades:
-        markers.append(
-            ChartSignalMarkerState(
-                trade_date=trade.entry_date,
-                action=ChartSignalAction.BUY,
-                price=trade.entry_price,
-                label="B",
-                detail=(
-                    f"买入 {trade.entry_date.isoformat()} @ {trade.entry_price:.3f}；"
-                    f"分数 {trade.signal_score:.2f}；预测胜率 {trade.predicted_probability:.1%}"
-                ),
-            )
-        )
-        markers.append(
-            ChartSignalMarkerState(
-                trade_date=trade.exit_date,
-                action=ChartSignalAction.SELL,
-                price=trade.exit_price,
-                label="S",
-                detail=(
-                    f"卖出 {trade.exit_date.isoformat()} @ {trade.exit_price:.3f}；"
-                    f"收益 {trade.net_return:.2%}；原因 {trade.exit_reason}"
-                ),
-            )
-        )
-    return tuple(markers)
+def _strategy_id_for_horizon(horizon: HorizonPreset) -> str:
+    if horizon in {HorizonPreset.SIX_MONTHS, HorizonPreset.ONE_YEAR}:
+        return "strategy.profit_validation_long_term"
+    return "strategy.profit_validation_short_term"
+
+
+def _strategy_version_for_horizon(horizon: HorizonPreset) -> str:
+    if horizon in {HorizonPreset.SIX_MONTHS, HorizonPreset.ONE_YEAR}:
+        return "profit-validation-long-v1"
+    return "profit-validation-short-v1"
 
 
 def _profit_analysis_signal(
     backtest: ProfitBacktestResult,
     data_health: DataHealth,
+    forecast: IntervalForecastResult,
+    mode: StrategyMode,
 ) -> FinalSignal:
     if data_health.block_signal or backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
         return FinalSignal.ABSTAIN
-    if backtest.status is ProfitValidationStatus.FAIL:
+    if backtest.status is ProfitValidationStatus.FAIL and backtest.excess_return <= 0:
         return FinalSignal.ABSTAIN
+    probabilities = forecast.direction_probabilities
+    p50 = forecast.expected_return_quantiles.get("p50", 0.0)
+    p05 = forecast.expected_return_quantiles.get("p05", -1.0)
+    pass_like = backtest.status is ProfitValidationStatus.PASS
+    enough_forecast = forecast.similar_sample_count >= 25 and forecast.confidence >= 0.28
+    if probabilities.down >= 0.58 and p50 <= 0:
+        return FinalSignal.SELL
+    if probabilities.down >= 0.48 and p50 <= 0:
+        return FinalSignal.REDUCE
+    if pass_like and enough_forecast and probabilities.up >= 0.48 and p50 > 0:
+        return FinalSignal.BUY_CANDIDATE
+    if pass_like and p50 > 0 and p05 > -0.12:
+        return FinalSignal.HOLD if mode is StrategyMode.LONG_TERM else FinalSignal.WATCH
+    if backtest.total_return > 0 and probabilities.up > probabilities.down:
+        return FinalSignal.HOLD
     return FinalSignal.WATCH
 
 
 def _profit_abstain_reason(
     backtest: ProfitBacktestResult,
     data_health: DataHealth,
+    forecast: IntervalForecastResult,
 ) -> AbstainReason | None:
     if data_health.block_signal:
         return AbstainReason.DATA
     if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
         return AbstainReason.INSUFFICIENT_HISTORY
-    if backtest.status is ProfitValidationStatus.FAIL:
+    if forecast.similar_sample_count <= 0:
+        return AbstainReason.MODEL_UNCERTAINTY
+    if backtest.status is ProfitValidationStatus.FAIL and backtest.excess_return <= 0:
         return AbstainReason.EXPECTED_VALUE
     return None
 
 
-def _profit_raw_signal(backtest: ProfitBacktestResult) -> str:
+def _profit_raw_signal(
+    backtest: ProfitBacktestResult,
+    forecast: IntervalForecastResult,
+    mode: StrategyMode,
+) -> str:
+    probabilities = forecast.direction_probabilities
+    mode_prefix = "SHORT_TERM" if mode is StrategyMode.SHORT_TERM else "LONG_TERM"
+    if probabilities.down >= 0.50:
+        return f"{mode_prefix}_SELL_OR_REDUCE_BIAS"
+    if probabilities.up >= 0.50 and backtest.status is ProfitValidationStatus.PASS:
+        return f"{mode_prefix}_BUY_CANDIDATE_BIAS"
     if backtest.status is ProfitValidationStatus.PASS:
-        return "BUY_BIAS_AFTER_PROFIT_VALIDATION"
+        return f"{mode_prefix}_HOLD_OR_WATCH_AFTER_PROFIT_VALIDATION"
     if backtest.status is ProfitValidationStatus.WATCH:
-        return "WATCH_NEEDS_MORE_EVIDENCE"
+        return f"{mode_prefix}_WATCH_NEEDS_MORE_EVIDENCE"
     if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
         return "ABSTAIN_INSUFFICIENT_HISTORY"
     return "ABSTAIN_PROFIT_VALIDATION_FAILED"
 
 
-def _profit_market_regime(backtest: ProfitBacktestResult) -> str:
+def _profit_market_regime(
+    backtest: ProfitBacktestResult,
+    forecast: IntervalForecastResult,
+) -> str:
+    probabilities = forecast.direction_probabilities
+    if probabilities.down >= 0.55:
+        return "RISK_OFF_DOWNSIDE_DOMINANT"
+    if probabilities.up >= 0.55:
+        return "RISK_ON_UPSIDE_DOMINANT"
     if backtest.status is ProfitValidationStatus.PASS:
         return "PROFIT_VALIDATED_RESEARCH"
     if backtest.status is ProfitValidationStatus.WATCH:
@@ -2001,7 +2070,12 @@ def _profit_market_regime(backtest: ProfitBacktestResult) -> str:
     return "NEGATIVE_EXPECTED_VALUE"
 
 
-def _profit_direction_probabilities(backtest: ProfitBacktestResult) -> DirectionProbabilities:
+def _profit_direction_probabilities(
+    backtest: ProfitBacktestResult,
+    forecast: IntervalForecastResult,
+) -> DirectionProbabilities:
+    if forecast.similar_sample_count > 0:
+        return forecast.direction_probabilities
     if backtest.status is ProfitValidationStatus.PASS:
         return DirectionProbabilities(up=0.56, flat=0.29, down=0.15)
     if backtest.status is ProfitValidationStatus.WATCH and backtest.total_return > 0:
@@ -2011,15 +2085,27 @@ def _profit_direction_probabilities(backtest: ProfitBacktestResult) -> Direction
     return DirectionProbabilities(up=0.25, flat=0.50, down=0.25)
 
 
-def _profit_expected_return_quantiles(backtest: ProfitBacktestResult) -> dict[str, float]:
-    lower = min(backtest.max_drawdown, backtest.total_return, backtest.excess_return)
-    middle = backtest.total_return
-    upper = max(backtest.total_return, backtest.benchmark_total_return, backtest.excess_return)
-    return {"p05": lower, "p50": middle, "p95": upper}
+def _profit_expected_return_quantiles(
+    backtest: ProfitBacktestResult,
+    forecast: IntervalForecastResult,
+) -> dict[str, float]:
+    if forecast.expected_return_quantiles:
+        return forecast.expected_return_quantiles
+    return {}
 
 
-def _profit_positive_drivers(backtest: ProfitBacktestResult) -> tuple[str, ...]:
+def _profit_positive_drivers(
+    backtest: ProfitBacktestResult,
+    forecast: IntervalForecastResult,
+    mode: StrategyMode,
+) -> tuple[str, ...]:
     values: list[str] = []
+    values.append(
+        "短线模式：偏重5-21日动量、量能确认和回撤控制。"
+        if mode is StrategyMode.SHORT_TERM
+        else "长线模式：偏重63-252日趋势、相对强弱和波动稳定性。"
+    )
+    values.extend(forecast.notes[:2])
     if backtest.total_return > 0:
         values.append(f"样本外扣费净收益 {backtest.total_return:.2%}。")
     if backtest.excess_return > 0:
@@ -2031,11 +2117,55 @@ def _profit_positive_drivers(backtest: ProfitBacktestResult) -> tuple[str, ...]:
     return tuple(values) or ("暂无足够正向赚钱证据。",)
 
 
+def _target_position_limit(
+    final_signal: FinalSignal,
+    backtest: ProfitBacktestResult,
+    forecast: IntervalForecastResult,
+    mode: StrategyMode,
+) -> float:
+    if final_signal is FinalSignal.BUY_CANDIDATE:
+        base = 0.08 if mode is StrategyMode.SHORT_TERM else 0.12
+    elif final_signal is FinalSignal.HOLD:
+        base = 0.05 if mode is StrategyMode.SHORT_TERM else 0.10
+    else:
+        return 0.0
+    if backtest.reliability_grade.value == "A":
+        multiplier = 1.0
+    elif backtest.reliability_grade.value == "B":
+        multiplier = 0.70
+    else:
+        multiplier = 0.35
+    if forecast.confidence < 0.40:
+        multiplier *= 0.60
+    if abs(backtest.max_drawdown) > 0.25:
+        multiplier *= 0.50
+    return round(base * multiplier, 4)
+
+
 def _profit_negative_drivers(
     backtest: ProfitBacktestResult,
     data_health: DataHealth,
+    forecast: IntervalForecastResult,
 ) -> tuple[str, ...]:
     values: list[str] = []
+    if forecast.confidence < 0.45:
+        values.append(f"预测置信度偏低：{forecast.confidence:.0%}，需要更多相似样本验证。")
+    if len(forecast.notes) >= 3:
+        values.append(forecast.notes[2])
+    if forecast.validation is None:
+        values.append("预测区间缺少滚动校准证据，暂不宜作为单独操作依据。")
+    elif forecast.validation.interval_coverage is not None:
+        if forecast.validation.interval_coverage < 0.70:
+            values.append(
+                f"预测区间历史覆盖率偏低：{forecast.validation.interval_coverage:.0%}。"
+            )
+        if (
+            forecast.validation.direction_brier_score is not None
+            and forecast.validation.direction_brier_score > 0.30
+        ):
+            values.append(
+                f"方向概率历史Brier偏高：{forecast.validation.direction_brier_score:.3f}。"
+            )
     if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
         values.extend(backtest.notes)
     values.extend(
@@ -2057,11 +2187,16 @@ def _profit_negative_drivers(
     return tuple(dict.fromkeys(values))
 
 
-def _profit_invalidation_conditions(backtest: ProfitBacktestResult) -> tuple[str, ...]:
+def _profit_invalidation_conditions(
+    backtest: ProfitBacktestResult,
+    mode: StrategyMode,
+) -> tuple[str, ...]:
     values = [
         "模拟盘成交与偏差证据未通过前，不允许进入真实API下单候选。",
         "若后续回测扣费净收益转负或相对基准超额转负，策略失效。",
-        "若最大回撤超过35%，需要降低仓位或暂停。",
+        "短线若跌破止损或量价背离需要退出。"
+        if mode is StrategyMode.SHORT_TERM
+        else "长线若中长期趋势跌破或最大回撤扩大需要降仓。",
     ]
     if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
         values.append("补足长期日线历史后重新验证。")

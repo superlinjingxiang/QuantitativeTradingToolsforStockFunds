@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -12,13 +13,14 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from china_quant_platform.data import create_default_market_data_provider
 from china_quant_platform.domain import AdjustmentMode, BarInterval
-from china_quant_platform.strategies.profit_validation import HorizonPreset
 from china_quant_platform.ui.chart import PriceChartWidget
 from china_quant_platform.ui.state import (
     AppUiState,
     ChartOverlay,
     ChartRangePreset,
     MarketIndexPanelState,
+    MarketOverviewPanelState,
+    StrategyMode,
     UiTaskStatus,
 )
 from china_quant_platform.ui.theme import (
@@ -62,6 +64,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.search_input.setObjectName("securitySearch")
         self.search_input.setPlaceholderText("代码 / 名称")
         self.search_input.installEventFilter(self)
+        self.search_input.returnPressed.connect(self._submit_search)
 
         self.search_results = QtWidgets.QListWidget()
         self.search_results.setObjectName("securitySearchResults")
@@ -101,13 +104,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.strategy_horizon_combo = QtWidgets.QComboBox()
         self.strategy_horizon_combo.setObjectName("strategyHorizon")
-        for label, horizon in (
-            ("策略 1月", HorizonPreset.ONE_MONTH),
-            ("策略 3月", HorizonPreset.THREE_MONTHS),
-            ("策略 6月", HorizonPreset.SIX_MONTHS),
-            ("策略 1年", HorizonPreset.ONE_YEAR),
+        self.strategy_horizon_combo.setToolTip("选择短线或长线预测策略，系统会自动匹配预测窗口和回测参数")
+        for label, mode in (
+            ("短线策略", StrategyMode.SHORT_TERM),
+            ("长线策略", StrategyMode.LONG_TERM),
         ):
-            self.strategy_horizon_combo.addItem(label, horizon.value)
+            self.strategy_horizon_combo.addItem(label, mode.value)
         self.strategy_horizon_combo.currentIndexChanged.connect(self._strategy_horizon_changed)
 
         self.strategy_trade_spin = QtWidgets.QSpinBox()
@@ -205,6 +207,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.market_overview_summary = QtWidgets.QLabel()
         self.market_overview_summary.setObjectName("marketOverviewSummary")
         self.market_overview_summary.setWordWrap(True)
+        self.market_overview_summary.setTextFormat(QtCore.Qt.TextFormat.RichText)
 
         self.recent_securities = QtWidgets.QListWidget()
         self.recent_securities.setObjectName("recentSecurityItems")
@@ -254,7 +257,14 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.volume_overlay = self._overlay_checkbox("成交量", "overlayVolume", ChartOverlay.VOLUME)
         self.ma_overlay = self._overlay_checkbox("MA", "overlayMA", ChartOverlay.MOVING_AVERAGE)
-        self.signal_overlay = self._overlay_checkbox("信号", "overlaySignals", ChartOverlay.SIGNALS)
+        self.signal_overlay = self._overlay_checkbox(
+            "回测信号",
+            "overlaySignals",
+            ChartOverlay.SIGNALS,
+        )
+        self.signal_overlay.setToolTip(
+            "显示当前策略回测产生的完整买卖点；回测曲线模式下显示当前图表最大利润买卖点"
+        )
         self.forecast_overlay = self._overlay_checkbox(
             "预测区间",
             "overlayForecast",
@@ -364,11 +374,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.view_model.move_search_highlight(-1)
                 return True
             if key in {QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter}:
-                self.search_timer.stop()
-                query = self.search_input.text().strip()
-                if query and query != self.view_model.state.search_query:
-                    self.view_model.search_securities(query)
-                self.view_model.confirm_highlighted_search()
+                self._submit_search()
                 return True
         return super().eventFilter(watched, event)
 
@@ -399,6 +405,15 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot()
     def _run_search(self) -> None:
         self.view_model.search_securities(self.search_input.text())
+
+    @QtCore.Slot()
+    def _submit_search(self) -> None:
+        self.search_timer.stop()
+        query = self.search_input.text().strip()
+        if not query:
+            return
+        self.view_model.search_securities(query)
+        self.view_model.confirm_highlighted_search()
 
     @QtCore.Slot(QtWidgets.QListWidgetItem)
     def _activate_search_item(self, item: QtWidgets.QListWidgetItem) -> None:
@@ -495,7 +510,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _strategy_horizon_changed(self, _index: int) -> None:
         value = self.strategy_horizon_combo.currentData()
         if isinstance(value, str):
-            self.view_model.set_strategy_horizon(HorizonPreset(value))
+            self.view_model.set_strategy_mode(StrategyMode(value))
 
     @QtCore.Slot(int)
     def _strategy_trade_count_changed(self, value: int) -> None:
@@ -579,11 +594,12 @@ class MainWindow(QtWidgets.QMainWindow):
         label = QtWidgets.QLabel()
         label.setObjectName(object_name)
         label.setWordWrap(True)
+        label.setTextFormat(QtCore.Qt.TextFormat.RichText)
         label.setMinimumHeight(0)
         label.setContentsMargins(0, 0, 4, 0)
         label.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
-            QtWidgets.QSizePolicy.Policy.MinimumExpanding,
+            QtWidgets.QSizePolicy.Policy.Minimum,
         )
         label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
         label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
@@ -619,7 +635,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _sync_strategy_controls(self, state: AppUiState) -> None:
         controls = state.strategy_controls
-        self._set_combo_data(self.strategy_horizon_combo, controls.horizon.value)
+        self._set_combo_data(self.strategy_horizon_combo, controls.mode.value)
         self.strategy_trade_spin.blockSignals(True)
         self.strategy_trade_spin.setValue(controls.max_trades_per_year)
         self.strategy_trade_spin.blockSignals(False)
@@ -659,24 +675,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _sync_market_and_watchlist(self, state: AppUiState) -> None:
         overview = state.market_overview
-        self.market_overview_summary.setText(
-            "\n".join(
-                [
-                    f"市场状态：{overview.trend_state}",
-                    f"市场广度：{overview.breadth_summary}",
-                    f"成交额：{overview.turnover_summary}",
-                    f"波动：{overview.volatility_state}",
-                    f"数据：{overview.data_health_text}",
-                ]
-            )
-        )
+        self.market_overview_summary.setText(_market_overview_summary_html(overview))
         self.market_overview_summary.setProperty("stale", overview.is_stale)
-        self._set_list_items(
-            self.market_indices,
-            tuple(
-                (index.security_id, _market_index_item_text(index)) for index in overview.indices
-            ),
-        )
+        self._set_market_index_items(self.market_indices, overview.indices)
         self._select_list_item(self.market_indices, state.selected_security_id)
         self._set_list_items(
             self.watchlist,
@@ -725,6 +726,22 @@ class MainWindow(QtWidgets.QMainWindow):
             if "\n" in text:
                 item.setSizeHint(QtCore.QSize(0, 48))
             widget.addItem(item)
+        widget.blockSignals(False)
+
+    def _set_market_index_items(
+        self,
+        widget: QtWidgets.QListWidget,
+        indices: Sequence[MarketIndexPanelState],
+    ) -> None:
+        widget.blockSignals(True)
+        widget.clear()
+        for index in indices:
+            item = QtWidgets.QListWidgetItem()
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, index.security_id)
+            item.setToolTip(_market_index_item_text(index).replace("\n", "  "))
+            item.setSizeHint(QtCore.QSize(0, 62))
+            widget.addItem(item)
+            widget.setItemWidget(item, _market_index_item_widget(index))
         widget.blockSignals(False)
 
     def _select_list_item(self, widget: QtWidgets.QListWidget, security_id: str | None) -> None:
@@ -872,10 +889,13 @@ class MainWindow(QtWidgets.QMainWindow):
             ("决策证据", self.decision_panel_label),
         ):
             group = QtWidgets.QGroupBox(title)
-            group.setMinimumHeight(160)
+            group.setMinimumHeight(118)
+            group.setMaximumHeight(210)
             group_layout = QtWidgets.QVBoxLayout(group)
+            group_layout.setContentsMargins(10, 14, 10, 10)
             group_layout.addWidget(self._panel_scroll_area(label, f"{label.objectName()}Scroll"))
-            layout.addWidget(group, stretch=1)
+            layout.addWidget(group)
+        layout.addStretch(1)
         return panel
 
     def _placeholder_page(self, title: str) -> QtWidgets.QWidget:
@@ -953,20 +973,24 @@ def run_gui(argv: Sequence[str] | None = None) -> int:
 
 def _strategy_panel_text(state: AppUiState) -> str:
     strategy = state.analysis.strategy
-    lines = [
-        f"策略：{strategy.strategy_name}",
-        f"ID：{_wrap_panel_value(strategy.strategy_id)}",
-        f"版本：{_wrap_panel_value(strategy.strategy_version)}",
-        f"周期：{strategy.horizon_label}",
-        f"市场状态：{strategy.market_regime}",
-        f"原始信号：{strategy.raw_signal}",
-        f"模型：{_wrap_panel_value(strategy.model_version)}",
-        f"规则：{_wrap_panel_value(strategy.rule_version)}",
-        f"快照：{_wrap_panel_value(strategy.data_snapshot_id)}",
-        _list_text("适用条件", strategy.applicable_conditions),
-        _list_text("失效条件", strategy.invalidation_conditions),
-    ]
-    return "\n".join(lines)
+    return _panel_html(
+        [
+            _field_html("模式", strategy.mode_label, color="#58a6ff"),
+            _field_html("策略", strategy.strategy_name, strong=True),
+            _field_html("规则", strategy.rule_version),
+            _field_html("窗口", strategy.horizon_label),
+            _field_html("资产", strategy.asset_scope),
+            _field_html("样本", strategy.sample_count),
+            _field_html(
+                "市场状态",
+                strategy.market_regime,
+                color=_risk_color(strategy.market_regime),
+            ),
+            _field_html("原始信号", strategy.raw_signal),
+            _chips_html("核心指标", strategy.core_indicators),
+            _field_html("模型", strategy.model_version),
+        ]
+    )
 
 
 def _market_index_item_text(index: MarketIndexPanelState) -> str:
@@ -975,16 +999,86 @@ def _market_index_item_text(index: MarketIndexPanelState) -> str:
     return f"{index.name}\n{index.latest_value}  {index.change_pct}"
 
 
+def _market_index_item_widget(index: MarketIndexPanelState) -> QtWidgets.QWidget:
+    color = _change_text_color(index.change_pct)
+    widget = QtWidgets.QWidget()
+    widget.setObjectName("marketIndexItem")
+    layout = QtWidgets.QVBoxLayout(widget)
+    layout.setContentsMargins(10, 6, 10, 6)
+    layout.setSpacing(2)
+
+    name = QtWidgets.QLabel(html.escape(index.name))
+    name.setTextFormat(QtCore.Qt.TextFormat.RichText)
+    name.setStyleSheet("background: transparent; color: #dce6f5; font-weight: 700;")
+
+    value = QtWidgets.QLabel(
+        f"<span style='color:{color}; font-size:16px; font-weight:800;'>"
+        f"{html.escape(index.latest_value)}</span>"
+        f"<span style='color:{color}; font-weight:800;'>  "
+        f"{html.escape(index.change_pct)}</span>"
+    )
+    value.setTextFormat(QtCore.Qt.TextFormat.RichText)
+    value.setStyleSheet("background: transparent;")
+
+    layout.addWidget(name)
+    layout.addWidget(value)
+    return widget
+
+
+def _market_overview_summary_html(overview: MarketOverviewPanelState) -> str:
+    rows = [
+        ("市场状态", _highlight_value(overview.trend_state, "#f6c453")),
+        ("市场广度", _colored_breadth_summary(overview.breadth_summary)),
+        ("成交额", _highlight_value(overview.turnover_summary, "#f6c453")),
+        ("波动", _highlight_value(overview.volatility_state, "#dce6f5")),
+        ("数据", _highlight_value(overview.data_health_text, "#7ee787")),
+    ]
+    return "<br>".join(
+        f"<span style='color:#94a3b8;'>{label}：</span>{value}" for label, value in rows
+    )
+
+
+def _colored_breadth_summary(summary: str) -> str:
+    parts = summary.split(" / ")
+    if len(parts) != 3:
+        return _highlight_value(summary, "#dce6f5")
+    up, down, flat = (html.escape(part) for part in parts)
+    return (
+        f"<span style='color:#ff4d45; font-weight:800;'>{up}</span>"
+        " / "
+        f"<span style='color:#2fd66f; font-weight:800;'>{down}</span>"
+        " / "
+        f"<span style='color:#aab4c2; font-weight:700;'>{flat}</span>"
+    )
+
+
+def _highlight_value(value: str, color: str) -> str:
+    return f"<span style='color:{color}; font-weight:800;'>{html.escape(value)}</span>"
+
+
+def _change_text_color(change_text: str) -> str:
+    stripped = change_text.strip()
+    if stripped.startswith("+"):
+        return "#ff4d45"
+    if stripped.startswith("-"):
+        return "#2fd66f"
+    return "#dce6f5"
+
+
 def _forecast_panel_text(state: AppUiState) -> str:
     forecast = state.analysis.forecast
-    return "\n".join(
+    return _panel_html(
         [
-            f"方向：{forecast.direction_label}",
-            f"概率：{forecast.probability_summary}",
-            f"收益区间：{forecast.expected_return_range}",
-            f"预期回撤：{forecast.expected_drawdown}",
-            f"校准/说明：{forecast.confidence_note}",
-            f"模型：{_wrap_panel_value(forecast.model_version)}",
+            _field_html(
+                "方向",
+                forecast.direction_label,
+                color=_direction_color(forecast.direction_label),
+            ),
+            _field_html("概率", forecast.probability_summary),
+            _field_html("收益区间", forecast.expected_return_range),
+            _field_html("预期回撤", forecast.expected_drawdown, color="#f6c453"),
+            _field_html("校准", forecast.validation_metrics),
+            _field_html("说明", forecast.confidence_note),
         ]
     )
 
@@ -992,34 +1086,59 @@ def _forecast_panel_text(state: AppUiState) -> str:
 def _operation_panel_text(state: AppUiState) -> str:
     operation = state.analysis.operation
     abstain_text = operation.abstain_reason or "--"
-    lines = [
-        f"最终操作：{operation.final_signal}",
-        f"等级：{operation.grade}",
-        f"有效期：{operation.valid_until}",
-        f"仓位上限：{operation.target_position_limit}",
-        f"不交易原因：{abstain_text}",
-        _list_text("支持因素", operation.positive_drivers),
-        _list_text("反对/风险", operation.negative_drivers),
-        _list_text("退出/失效", operation.exit_or_invalidation_conditions),
-    ]
-    return "\n".join(lines)
+    return _panel_html(
+        [
+            _field_html(
+                "策略建议",
+                operation.final_signal,
+                color=_signal_color(operation.final_signal),
+                badge=True,
+            ),
+            _field_html(
+                "等级",
+                f"{operation.grade}  {operation.grade_description}",
+                color=_grade_color(operation.grade),
+            ),
+            _field_html("仓位上限", operation.target_position_limit, color="#f6c453"),
+            _field_html("有效期", operation.valid_until),
+            _field_html(
+                "不交易原因",
+                abstain_text,
+                color="#f6c453" if abstain_text != "--" else None,
+            ),
+            _brief_list_html("支持因素", operation.positive_drivers, limit=3),
+            _brief_list_html("反对/风险", operation.negative_drivers, limit=3),
+            _brief_list_html("退出/失效", operation.exit_or_invalidation_conditions, limit=2),
+        ]
+    )
 
 
 def _decision_panel_text(state: AppUiState) -> str:
     decision = state.decision
-    lines = [
-        f"最终建议：{decision.final_signal}",
-        f"执行候选：{decision.readiness}",
-        f"置信度：{decision.confidence}",
-        f"仓位上限：{decision.target_position_limit}",
-        f"历史证据：{decision.profitability_summary}",
-        f"模拟证据：{decision.simulation_summary}",
-        f"门槛：{decision.gate_summary}",
-        _brief_list_text("原因", decision.blocking_reasons, limit=3),
-        _brief_list_text("边界", decision.caveats, limit=2),
-        f"说明：{decision.no_profit_guarantee}",
-    ]
-    return "\n".join(lines)
+    return _panel_html(
+        [
+            _field_html(
+                "执行状态",
+                decision.readiness,
+                color=_readiness_color(decision.readiness),
+                badge=True,
+            ),
+            _field_html(
+                "门禁后信号",
+                decision.final_signal,
+                color=_signal_color(decision.final_signal),
+            ),
+            _field_html("置信度", decision.confidence),
+            _field_html("仓位上限", decision.target_position_limit),
+            _field_html("历史证据", decision.profitability_summary),
+            _field_html("模拟证据", decision.simulation_summary),
+            _field_html("门槛", decision.gate_summary, color=_risk_color(decision.gate_summary)),
+            _brief_list_html("门槛明细", decision.gate_details, limit=4),
+            _brief_list_html("原因", decision.blocking_reasons, limit=3),
+            _brief_list_html("边界", decision.caveats, limit=2),
+            _field_html("说明", decision.no_profit_guarantee),
+        ]
+    )
 
 
 def _backtest_metrics_text(state: AppUiState) -> str:
@@ -1071,6 +1190,116 @@ def _health_banner_text(state: AppUiState) -> str:
 
 def _has_online_failure_issue(issues: tuple[str, ...]) -> bool:
     return any(issue.startswith(("联网搜索失败", "联网行情失败")) for issue in issues)
+
+
+def _panel_html(rows: Sequence[str]) -> str:
+    body = "".join(f"<div style='margin:0 0 5px 0;'>{row}</div>" for row in rows if row)
+    return (
+        "<div style='line-height:1.28; font-size:13px; color:#dce6f5; "
+        "white-space:normal;'>"
+        f"{body}"
+        "</div>"
+    )
+
+
+def _field_html(
+    label: str,
+    value: str,
+    *,
+    color: str | None = None,
+    strong: bool = False,
+    badge: bool = False,
+) -> str:
+    escaped_label = html.escape(label)
+    escaped_value = _escape_panel_text(value)
+    weight = "800" if strong or badge else "650"
+    value_color = color or "#dce6f5"
+    if badge:
+        value_html = (
+            f"<span style='display:inline-block; padding:2px 7px; border-radius:6px; "
+            f"background:{value_color}; color:#071018; font-weight:900;'>{escaped_value}</span>"
+        )
+    else:
+        value_html = (
+            f"<span style='color:{value_color}; font-weight:{weight};'>{escaped_value}</span>"
+        )
+    return f"<span style='color:#8ea0b8;'>{escaped_label}：</span>{value_html}"
+
+
+def _chips_html(label: str, values: tuple[str, ...]) -> str:
+    if not values:
+        return _field_html(label, "--")
+    chips = " ".join(
+        "<span style='display:inline-block; margin:0 3px 3px 0; padding:1px 6px; "
+        "border:1px solid #2d3748; border-radius:5px; color:#c9d6e8;'>"
+        f"{html.escape(value)}</span>"
+        for value in values
+    )
+    return f"<span style='color:#8ea0b8;'>{html.escape(label)}：</span>{chips}"
+
+
+def _brief_list_html(title: str, values: tuple[str, ...], *, limit: int) -> str:
+    if not values:
+        return _field_html(title, "--")
+    selected = values[:limit]
+    suffix = "" if len(values) <= limit else f"；另{len(values) - limit}项"
+    joined = "<br>".join(f"- {_escape_panel_text(value)}" for value in selected)
+    if suffix:
+        joined = f"{joined}<br><span style='color:#8ea0b8;'>{html.escape(suffix)}</span>"
+    return f"<span style='color:#8ea0b8;'>{html.escape(title)}：</span><br>{joined}"
+
+
+def _escape_panel_text(value: str) -> str:
+    return html.escape(_wrap_panel_value(value, width=44)).replace("\n", "<br>")
+
+
+def _signal_color(signal: str) -> str:
+    if signal in {"BUY_CANDIDATE", "ADD_CANDIDATE"}:
+        return "#ff4d45"
+    if signal in {"SELL", "REDUCE"}:
+        return "#2fd66f"
+    if signal in {"ABSTAIN", "NOT_ELIGIBLE"}:
+        return "#ff7b72"
+    if signal in {"WATCH", "RESEARCH_ONLY"}:
+        return "#f6c453"
+    return "#58a6ff"
+
+
+def _direction_color(text: str) -> str:
+    if "上涨" in text:
+        return "#ff4d45"
+    if "下跌" in text:
+        return "#2fd66f"
+    if "不交易" in text or "不明确" in text:
+        return "#f6c453"
+    return "#58a6ff"
+
+
+def _risk_color(text: str) -> str:
+    if any(token in text for token in ("FAIL", "MISSING", "NEGATIVE", "RISK", "阻断")):
+        return "#ff7b72"
+    if any(token in text for token in ("WARN", "WATCH", "INSUFFICIENT")):
+        return "#f6c453"
+    if any(token in text for token in ("PASS", "HEALTHY", "VALIDATED", "全部")):
+        return "#7ee787"
+    return "#dce6f5"
+
+
+def _grade_color(grade: str) -> str:
+    return {"A": "#7ee787", "B": "#58a6ff", "C": "#f6c453", "N": "#ff7b72"}.get(
+        grade,
+        "#dce6f5",
+    )
+
+
+def _readiness_color(readiness: str) -> str:
+    if readiness == "API_CANDIDATE":
+        return "#ff4d45"
+    if readiness == "PAPER_READY":
+        return "#58a6ff"
+    if readiness == "RESEARCH_ONLY":
+        return "#f6c453"
+    return "#ff7b72"
 
 
 def _brief_list_text(title: str, values: tuple[str, ...], *, limit: int) -> str:

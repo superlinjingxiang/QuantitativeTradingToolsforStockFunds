@@ -38,6 +38,7 @@ from china_quant_platform.ui import (
     ApplicationViewModel,
     ChartRangePreset,
     MainWindow,
+    StrategyMode,
     UiRunState,
     UiTaskStatus,
     UiThemeMode,
@@ -492,13 +493,17 @@ def test_strategy_controls_update_view_model_and_theme(qtbot: Any, tmp_path: Pat
     assert theme_combo is not None
     assert chart_backtest_button is not None
 
-    horizon_combo.setCurrentIndex(horizon_combo.findData(HorizonPreset.SIX_MONTHS.value))
+    horizon_combo.setCurrentIndex(horizon_combo.findData(StrategyMode.LONG_TERM.value))
     trade_spin.setValue(4)
     theme_combo.setCurrentIndex(theme_combo.findData(UiThemeMode.LIGHT.value))
 
+    assert view_model.state.strategy_controls.mode is StrategyMode.LONG_TERM
     assert view_model.state.strategy_controls.horizon is HorizonPreset.SIX_MONTHS
     assert view_model.state.strategy_controls.max_trades_per_year == 4
-    assert view_model.state.backtest.summary == "策略参数已修改，等待重新回测。"
+    assert view_model.state.backtest.summary in {
+        "策略模式已修改，等待重新回测。",
+        "策略参数已修改，等待重新回测。",
+    }
     assert window.theme_mode is UiThemeMode.LIGHT
     assert settings.value("appearance/theme") == UiThemeMode.LIGHT.value
     assert trade_spin.suffix() == " 次"

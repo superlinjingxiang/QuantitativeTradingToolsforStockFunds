@@ -234,6 +234,62 @@ def test_chart_hover_includes_backtest_trade_signal(qtbot: Any) -> None:
     assert "103.000" in chart.toolTip()
 
 
+def test_chart_signal_overlay_hides_incomplete_visible_trade_pairs(qtbot: Any) -> None:
+    chart = PriceChartWidget()
+    qtbot.addWidget(chart)
+    chart.resize(720, 420)
+    chart.show()
+    points = tuple(
+        ChartPointState.from_bar(bar)
+        for bar in (make_bar(20, 10), make_bar(21, 12), make_bar(22, 11))
+    )
+    chart.set_chart_state(
+        ChartState(
+            points=points,
+            overlays=frozenset({ChartOverlay.SIGNALS}),
+            signals=(
+                ChartSignalMarkerState(
+                    trade_date=date(2026, 6, 19),
+                    action=ChartSignalAction.BUY,
+                    price=9,
+                    label="B",
+                    detail="窗口外买入",
+                ),
+                ChartSignalMarkerState(
+                    trade_date=date(2026, 6, 20),
+                    action=ChartSignalAction.SELL,
+                    price=10,
+                    label="S",
+                    detail="孤立卖出",
+                ),
+                ChartSignalMarkerState(
+                    trade_date=date(2026, 6, 21),
+                    action=ChartSignalAction.BUY,
+                    price=12,
+                    label="B",
+                    detail="窗口内买入",
+                ),
+                ChartSignalMarkerState(
+                    trade_date=date(2026, 6, 22),
+                    action=ChartSignalAction.SELL,
+                    price=11,
+                    label="S",
+                    detail="窗口内卖出",
+                ),
+            ),
+        )
+    )
+    chart.repaint()
+
+    qtbot.mouseMove(chart, QtCore.QPoint(92, chart.height() // 2))
+
+    assert "卖出: 10.000" not in chart.toolTip()
+
+    qtbot.mouseMove(chart, QtCore.QPoint(chart.width() - 96, chart.height() // 2))
+
+    assert "卖出: 11.000" in chart.toolTip()
+
+
 def test_chart_backtest_button_draws_max_profit_trade_layer(qtbot: Any) -> None:
     view_model = ApplicationViewModel(clock=lambda: aware_datetime())
     window = MainWindow(view_model)
@@ -258,7 +314,19 @@ def test_chart_backtest_button_draws_max_profit_trade_layer(qtbot: Any) -> None:
     )
     normal_points = view_model.state.chart.points
     normal_overlays = view_model.state.chart.overlays
+    normal_interval = view_model.state.chart.interval
+    normal_range = view_model.state.chart.range_preset
     normal_summary = view_model.state.backtest.summary
+    view_model._latest_decision_bars_by_security["SSE:600519"] = (
+        make_bar(1, 100),
+        make_bar(2, 101),
+        make_bar(3, 102),
+        make_bar(4, 103),
+        make_bar(5, 104),
+        make_bar(6, 105),
+        make_bar(7, 106),
+        make_bar(8, 107),
+    )
 
     assert button.isEnabled() is True
     assert button.text() == "回测曲线"
@@ -275,6 +343,9 @@ def test_chart_backtest_button_draws_max_profit_trade_layer(qtbot: Any) -> None:
     assert len(state.backtest.trades) == 2
     assert state.backtest.trades[0].startswith("1. 买入 2026-06-22 @ 8.000")
     assert state.backtest.trades[1].startswith("2. 买入 2026-06-24 @ 7.000")
+    assert state.chart.points == normal_points
+    assert state.chart.interval is normal_interval
+    assert state.chart.range_preset is normal_range
     assert ChartOverlay.SIGNALS in state.chart.overlays
     assert tuple(signal.label for signal in state.chart.signals) == ("B", "S", "B", "S")
     assert (
@@ -296,3 +367,49 @@ def test_chart_backtest_button_draws_max_profit_trade_layer(qtbot: Any) -> None:
     assert button.text() == "回测曲线"
     assert button.isChecked() is False
     assert button.property("active") is False
+
+
+def test_signal_overlay_first_click_runs_current_chart_backtest(qtbot: Any) -> None:
+    view_model = ApplicationViewModel(clock=lambda: aware_datetime())
+    window = MainWindow(view_model)
+    qtbot.addWidget(window)
+    window.resize(1000, 680)
+    window.show()
+    qtbot.waitExposed(window)
+
+    signal_toggle = window.findChild(QtWidgets.QCheckBox, "overlaySignals")
+    assert signal_toggle is not None
+
+    view_model.select_security("SSE:600519")
+    view_model.set_strategy_max_trades_per_year(2)
+    view_model.load_chart_bars(
+        (
+            make_bar(20, 10),
+            make_bar(21, 12),
+            make_bar(22, 8),
+            make_bar(23, 14),
+        ),
+        generation=view_model.state.selection_generation,
+    )
+    normal_points = view_model.state.chart.points
+    view_model._latest_decision_bars_by_security["SSE:600519"] = (
+        make_bar(1, 100),
+        make_bar(2, 101),
+        make_bar(3, 102),
+        make_bar(4, 103),
+    )
+
+    qtbot.mouseClick(signal_toggle, QtCore.Qt.MouseButton.LeftButton)
+
+    state = view_model.state
+    assert state.chart_backtest_active is True
+    assert state.chart.points == normal_points
+    assert tuple(signal.label for signal in state.chart.signals) == ("B", "S", "B", "S")
+    assert state.backtest.status == "OPTIMIZED"
+    assert signal_toggle.isChecked() is True
+
+    qtbot.mouseClick(signal_toggle, QtCore.Qt.MouseButton.LeftButton)
+
+    assert view_model.state.chart_backtest_active is False
+    assert view_model.state.chart.signals == ()
+    assert signal_toggle.isChecked() is False
