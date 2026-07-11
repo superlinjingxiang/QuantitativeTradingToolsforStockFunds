@@ -2156,9 +2156,7 @@ def _profit_negative_drivers(
         values.append("预测区间缺少滚动校准证据，暂不宜作为单独操作依据。")
     elif forecast.validation.interval_coverage is not None:
         if forecast.validation.interval_coverage < 0.70:
-            values.append(
-                f"预测区间历史覆盖率偏低：{forecast.validation.interval_coverage:.0%}。"
-            )
+            values.append(f"预测区间历史覆盖率偏低：{forecast.validation.interval_coverage:.0%}。")
         if (
             forecast.validation.direction_brier_score is not None
             and forecast.validation.direction_brier_score > 0.30

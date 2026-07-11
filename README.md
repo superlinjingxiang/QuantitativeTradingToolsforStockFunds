@@ -50,6 +50,8 @@
 
 最新工程进度快照见：`docs/PROJECT_STATUS_2026-07-02.md`。
 
+2026年7月11日已完成 FastAPI + Vue + Redis 兼容迁移：Vue 成为 Electron 默认前端，FastAPI 复用现有 Python 业务服务，Redis 不可用时自动降级到内存缓存。近期改动、验证结果、运行边界和后续风险见：`docs/CHANGELOG_2026-07-11.md`。
+
 TASK-001 至 TASK-025 已完成：当前仓库包含可复现 Python 工程骨架、`src/` 包结构、测试目录、配置/日志启动骨架、CI 骨架、`.gitignore`、`uv.lock`、标准领域模型、类型化错误、数据供应商协议、确定性假供应商、证券主数据、本地搜索索引、历史K线Parquet缓存、增量补缺网关、实时订阅状态、数据质量门禁、按生效日期解析的中国市场规则引擎、PySide6应用外壳、GUI搜索/原子化证券切换、实时/历史图表工作区、确定性指标/因子注册表、策略接口/解释模型、事件驱动回测内核、执行/成本/流动性/公司行为模型、组合/风险引擎、回测报告/固定回归夹具、ETF中期轮动研究基准策略、A股多因子趋势研究基准策略、经过校准的概率预测/不交易引擎、`AnalysisReport` 合成和GUI策略/预期走势/操作风险面板、市场概览/指数/自选列表状态、无真实下单路径的模拟经纪与可恢复账户状态、场外基金正式净值确认和风险比较分析、区分国际理论和中国市场规则的知识中心/上下文帮助，以及Windows PyInstaller打包入口、发布清单、恢复/迁移/观测审计和嵌入式凭据扫描。
 
 ## 开发环境
@@ -98,6 +100,28 @@ uv run python -m china_quant_platform --gui
 ```
 
 Electron 只负责 UI 和交互；行情、策略、回测、决策门禁仍由本地 Python 后端计算。首次运行会通过 `npm.cmd install` 安装 Electron 依赖。
+
+当前现代化入口使用 Vue 3/Vite 前端和 FastAPI 后端：
+
+```powershell
+npm.cmd install
+npm.cmd run build
+.\start_electron.bat
+```
+
+开发时可使用：
+
+```powershell
+npm.cmd run electron:dev
+```
+
+FastAPI本地接口默认监听随机本地端口（Electron启动时注入），直接调试后端可运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m china_quant_platform.api --host 127.0.0.1 --port 8765
+```
+
+接口文档位于 `/docs`。Redis通过 `CQP_REDIS_URL` 配置；Redis未启动时自动使用内存缓存，历史K线仍使用项目内Parquet缓存。旧版原生Electron界面可用 `CQP_FRONTEND=legacy` 回退，PySide6入口继续由 `start_gui.bat` 提供。
 
 ## 行情数据源
 

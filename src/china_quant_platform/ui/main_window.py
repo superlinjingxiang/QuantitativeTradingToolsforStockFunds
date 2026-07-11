@@ -104,7 +104,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.strategy_horizon_combo = QtWidgets.QComboBox()
         self.strategy_horizon_combo.setObjectName("strategyHorizon")
-        self.strategy_horizon_combo.setToolTip("选择短线或长线预测策略，系统会自动匹配预测窗口和回测参数")
+        self.strategy_horizon_combo.setToolTip(
+            "选择短线或长线预测策略，系统会自动匹配预测窗口和回测参数"
+        )
         for label, mode in (
             ("短线策略", StrategyMode.SHORT_TERM),
             ("长线策略", StrategyMode.LONG_TERM),
@@ -736,7 +738,9 @@ class MainWindow(QtWidgets.QMainWindow):
         widget.blockSignals(True)
         widget.clear()
         for index in indices:
-            item = QtWidgets.QListWidgetItem()
+            # Keep an accessible/plain-text representation even when the row
+            # uses a custom rich widget for the visible colored values.
+            item = QtWidgets.QListWidgetItem(_market_index_item_text(index))
             item.setData(QtCore.Qt.ItemDataRole.UserRole, index.security_id)
             item.setToolTip(_market_index_item_text(index).replace("\n", "  "))
             item.setSizeHint(QtCore.QSize(0, 62))

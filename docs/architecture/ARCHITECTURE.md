@@ -16,6 +16,20 @@ PySide6 视图 / ViewModel
 供应商API / WebSocket / Parquet / DuckDB / SQLite / 文件
 ```
 
+## 当前桌面运行形态
+
+```text
+Vue 3 / Vite / Pinia / ECharts
+        ↓ localhost JSON API
+FastAPI / uvicorn
+        ↓
+现有 Application Service、策略、预测、回测、DecisionHub、账户评估
+        ↓
+Redis 热缓存（可选） + Parquet 历史缓存 + 多数据源Provider
+```
+
+Electron只负责启动本地FastAPI子进程、加载Vue资源和提供桌面窗口。旧原生renderer与PySide6入口保留为回退和回归验证路径。前端不得直接访问行情供应商，FastAPI不得复制策略算法。
+
 ## 依赖方向
 
 外层可以依赖内层抽象，内层不得导入GUI或具体供应商模块。

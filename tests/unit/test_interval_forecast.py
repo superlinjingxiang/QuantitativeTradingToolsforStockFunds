@@ -90,7 +90,7 @@ def test_provider_backed_interval_forecast_lab_reports_failures() -> None:
 
     report = asyncio.run(
         validate_default_interval_forecast_universe(
-            provider,
+            provider,  # type: ignore[arg-type]
             security_ids=("SSE:510300", "SSE:513300", "SSE:BAD"),
             horizon_days=21,
             history_years=2,

@@ -36,10 +36,20 @@ from china_quant_platform.domain import (
     RecordQualityStatus,
     SecurityRef,
 )
+from china_quant_platform.manual_account import (
+    evaluate_manual_account,
+    manual_account_from_payload,
+)
 from china_quant_platform.market import build_market_overview
 from china_quant_platform.strategies.profit_validation import (
     ProfitValidationStatus,
     run_profit_strategy_backtest,
+)
+from china_quant_platform.strategies.short_candidate_recommendation import (
+    DEFAULT_RECOMMENDATION_UNIVERSE,
+    CandidateInput,
+    RecommendationUniverseMember,
+    build_recommendation_report,
 )
 from china_quant_platform.ui.state import (
     AnalysisPanelState,
@@ -88,6 +98,14 @@ class ElectronBackendService:
             "time": datetime.now(tz=UTC).isoformat(),
         }
 
+    def market_overview(self) -> dict[str, Any]:
+        now = datetime.now(tz=UTC)
+        overview = self._market_overview(now)
+        return {
+            "ok": True,
+            "marketOverview": overview.to_contract_dict(),
+        }
+
     def search(self, query: str) -> dict[str, Any]:
         resolved = self._resolve_security(query, allow_online=True)
         return {
@@ -110,6 +128,7 @@ class ElectronBackendService:
         adjustment = _adjustment_from_payload(payload.get("adjustment"))
         overlays = _overlays_from_payload(payload.get("overlays"))
         chart_backtest_active = bool(payload.get("chartBacktestActive"))
+        manual_account = manual_account_from_payload(payload.get("accountContext"))
 
         visible_start = _range_start(now, range_preset)
         decision_start = now - timedelta(days=370 * 6)
@@ -237,6 +256,14 @@ class ElectronBackendService:
                 chart_signals = chart_result.signals
                 backtest = chart_result.panel
 
+        account_assessment = evaluate_manual_account(
+            account=manual_account,
+            latest_price=quote.latest_price,
+            final_signal=analysis.operation.final_signal,
+            grade=analysis.operation.grade,
+            target_position_limit=analysis.operation.target_position_limit,
+            expected_drawdown=analysis.forecast.expected_drawdown,
+        )
         market_overview = self._market_overview(now)
         latest_change = _quote_change_pct(quote)
         return {
@@ -262,8 +289,80 @@ class ElectronBackendService:
             "analysis": analysis.to_contract_dict(),
             "decision": decision.to_contract_dict(),
             "backtest": backtest.to_contract_dict(),
+            "accountAssessment": account_assessment,
             "marketOverview": market_overview.to_contract_dict(),
         }
+
+    def recommendations(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        now = datetime.now(tz=UTC)
+        limit = _int_from_payload(payload.get("limit"), default=10, minimum=1, maximum=30)
+        horizon_days = _int_from_payload(
+            payload.get("horizonDays"),
+            default=10,
+            minimum=1,
+            maximum=21,
+        )
+        include_cross_border_etf = bool(payload.get("includeUsLinked", True))
+        members = tuple(
+            member
+            for member in DEFAULT_RECOMMENDATION_UNIVERSE
+            if _recommendation_member_allowed(
+                member,
+                include_cross_border_etf=include_cross_border_etf,
+            )
+        )
+        start_time = now - timedelta(days=460)
+        candidates: list[CandidateInput] = []
+        failures: list[dict[str, str]] = []
+
+        for member in members:
+            bars: tuple[Bar, ...] = ()
+            quote: Quote | None = None
+            try:
+                bars = tuple(
+                    asyncio.run(
+                        self._provider.get_bars(
+                            BarsRequest(
+                                security_id=member.security_id,
+                                interval=BarInterval.DAILY,
+                                start_time=start_time,
+                                end_time=now,
+                                adjustment=AdjustmentMode.NONE,
+                            )
+                        )
+                    )
+                )
+            except BaseException as error:  # noqa: BLE001 - returned as data quality evidence.
+                failures.append(
+                    {
+                        "securityId": member.security_id,
+                        "symbol": member.symbol,
+                        "name": member.name,
+                        "reason": f"K线获取失败：{_short_error(error)}",
+                    }
+                )
+                continue
+            try:
+                quote = asyncio.run(self._provider.get_quote(member.security_id))
+            except BaseException:
+                quote = None
+            candidates.append(CandidateInput(member=member, bars=bars, quote=quote))
+
+        report = build_recommendation_report(
+            candidates=tuple(candidates),
+            failures=tuple(failures),
+            as_of=now,
+            limit=limit,
+            horizon_days=horizon_days,
+        )
+        report["provider"] = self._provider.provider_id
+        report["dataHealth"] = {
+            "status": "HEALTHY" if not failures else "DEGRADED",
+            "issues": [item["reason"] for item in failures[:5]],
+            "block_signal": len(candidates) == 0,
+            "as_of": now.isoformat(),
+        }
+        return report
 
     def _resolve_security(self, query: str, *, allow_online: bool) -> _ResolvedSecurity:
         stripped = query.strip()
@@ -346,6 +445,13 @@ class ElectronBackendService:
             "analysis": AnalysisPanelState().to_contract_dict(),
             "decision": DecisionPanelState().to_contract_dict(),
             "backtest": BacktestPanelState(summary=message).to_contract_dict(),
+            "accountAssessment": evaluate_manual_account(
+                account=None,
+                latest_price=0.0,
+                final_signal=None,
+                grade=None,
+                target_position_limit=None,
+            ),
             "marketOverview": MarketOverviewPanelState.placeholder().to_contract_dict(),
         }
 
@@ -391,6 +497,9 @@ def _handler_for(service: ElectronBackendService) -> type[BaseHTTPRequestHandler
                 if parsed.path == "/api/search":
                     self._send_json(service.search(query.get("q", [""])[0]))
                     return
+                if parsed.path == "/api/market-overview":
+                    self._send_json(service.market_overview())
+                    return
                 self._send_json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
             except BaseException as error:  # noqa: BLE001
                 self._send_error(error)
@@ -401,6 +510,9 @@ def _handler_for(service: ElectronBackendService) -> type[BaseHTTPRequestHandler
                 payload = self._read_json()
                 if parsed.path == "/api/analyze":
                     self._send_json(service.analyze(payload))
+                    return
+                if parsed.path == "/api/recommendations":
+                    self._send_json(service.recommendations(payload))
                     return
                 self._send_json({"ok": False, "error": "not found"}, status=HTTPStatus.NOT_FOUND)
             except BaseException as error:  # noqa: BLE001
@@ -465,6 +577,32 @@ def _strategy_controls_from_payload(payload: Mapping[str, Any]) -> StrategyContr
             update={"max_trades_per_year": max(1, min(int(max_trades), 60))}
         )
     return controls
+
+
+def _recommendation_member_allowed(
+    member: RecommendationUniverseMember,
+    *,
+    include_cross_border_etf: bool,
+) -> bool:
+    if member.exchange not in {"SSE", "SZSE"}:
+        return False
+    if member.bucket == "海外ETF" and not include_cross_border_etf:
+        return False
+    return True
+
+
+def _int_from_payload(
+    value: object,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        parsed = int(value) if isinstance(value, (int, float, str)) else default
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
 
 
 def _interval_from_payload(value: object) -> BarInterval:

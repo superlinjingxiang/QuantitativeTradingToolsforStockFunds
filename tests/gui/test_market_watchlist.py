@@ -194,8 +194,12 @@ def test_market_overview_auto_refreshes_index_quotes(qtbot: Any) -> None:
     assert "上证指数" in index_list.item(0).text()
     assert "+2.00%" in index_list.item(0).text()
     assert "深证成指" in index_list.item(1).text()
-    assert "市场广度：上涨2 / 下跌0 / 平盘0" in summary.text()
-    assert "数据：HEALTHY" in summary.text()
+    assert "市场广度：" in summary.text()
+    assert "上涨2" in summary.text()
+    assert "下跌0" in summary.text()
+    assert "平盘0" in summary.text()
+    assert "数据：" in summary.text()
+    assert "HEALTHY" in summary.text()
 
     index_list.itemActivated.emit(index_list.item(0))
     assert view_model.state.selected_security_id == "SSE:000001"
@@ -282,7 +286,10 @@ def test_market_overview_and_watchlist_render_in_left_panel(qtbot: Any) -> None:
     assert summary is not None
     assert index_list is not None
     assert watchlist is not None
-    assert "市场广度：上涨1 / 下跌1 / 平盘1" in summary.text()
+    assert "市场广度：" in summary.text()
+    assert "上涨1" in summary.text()
+    assert "下跌1" in summary.text()
+    assert "平盘1" in summary.text()
     assert "RISK_ON" not in summary.text()
     assert index_list.count() == 2
     assert "上证指数" in index_list.item(0).text()

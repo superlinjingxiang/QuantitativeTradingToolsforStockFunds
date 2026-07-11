@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from pydantic import Field
@@ -210,7 +210,7 @@ def forecast_interval_from_bars(
             f"方向Brier {validation.direction_brier_score or 0.0:.3f}。"
         )
     quantiles = _calibrated_quantiles(distribution.quantiles, validation)
-    if quantiles != distribution.quantiles:
+    if validation is not None and quantiles != distribution.quantiles:
         notes.append(
             "区间已按滚动历史误差保守校正："
             f"下沿-{validation.lower_tail_adjustment:.2%}，"
@@ -469,7 +469,7 @@ def _calibrated_quantiles(
     return {"p05": lower, "p50": p50, "p95": upper}
 
 
-def _average_optional(values: Sequence[float | None]) -> float | None:
+def _average_optional(values: Iterable[float | None]) -> float | None:
     clean = tuple(value for value in values if value is not None)
     if not clean:
         return None

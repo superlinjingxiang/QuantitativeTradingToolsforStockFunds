@@ -7,6 +7,8 @@
 .pytest-cache/
 .pytest-tmp/
 node_modules/
+test-results/
+playwright-report/
 electron-dist/
 out/
 __pycache__/

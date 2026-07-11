@@ -8,133 +8,290 @@
   </head>
   <body>
     <div class="shell">
-      <header class="topbar">
-        <input id="searchInput" class="search-input" placeholder="代码 / 名称" autocomplete="off" />
-        <select id="strategyMode" class="control">
-          <option value="short_term">短线策略</option>
-          <option value="long_term">长线策略</option>
-        </select>
-        <select id="maxTrades" class="control">
-          <option value="4">4 次</option>
-          <option value="6">6 次</option>
-          <option value="8">8 次</option>
-          <option value="10">10 次</option>
-          <option value="12" selected>12 次</option>
-          <option value="20">20 次</option>
-          <option value="30">30 次</option>
-        </select>
-        <select id="themeMode" class="control">
-          <option>黑色主题</option>
-        </select>
-        <button id="chartBacktestButton" class="primary-button" type="button">回测曲线</button>
-        <div id="healthBanner" class="health healthy">数据健康：等待行情</div>
-        <div id="marketTime" class="market-time">行情时间：--</div>
-      </header>
-
-      <main class="workspace">
-        <aside class="left-rail">
-          <section class="panel small">
-            <div class="panel-title">自选列表</div>
-            <div class="watch-actions">
-              <button type="button">✓</button>
-              <button type="button">🗑</button>
-            </div>
-            <div id="watchlist" class="list-box"></div>
-          </section>
-          <section class="panel">
-            <div class="panel-title">指数</div>
-            <button id="refreshButton" class="icon-button" type="button">↻</button>
-            <div id="marketOverview" class="market-overview"></div>
-          </section>
-          <section class="panel small">
-            <div class="panel-title">最近访问</div>
-            <div id="recentList" class="list-box"></div>
-          </section>
-        </aside>
-
-        <section class="center-stage">
-          <div class="chart-controls">
-            <select id="intervalSelect" class="control">
-              <option value="1d" selected>日线</option>
-              <option value="30m">30分</option>
-              <option value="60m">60分</option>
-              <option value="1w">周线</option>
-            </select>
-            <select id="rangeSelect" class="control">
-              <option value="5d">5日</option>
-              <option value="1m" selected>1月</option>
-              <option value="3m">3月</option>
-              <option value="6m">6月</option>
-              <option value="1y">1年</option>
-            </select>
-            <select id="adjustmentSelect" class="control">
-              <option value="NONE" selected>不复权</option>
-              <option value="FORWARD">前复权</option>
-              <option value="BACKWARD">后复权</option>
-            </select>
-            <label class="toggle"><input id="volumeToggle" type="checkbox" checked />成交量</label>
-            <label class="toggle"><input id="maToggle" type="checkbox" />MA</label>
-            <label class="toggle"><input id="signalToggle" type="checkbox" />回测信号</label>
-            <label class="toggle"><input id="forecastToggle" type="checkbox" />预测区间</label>
+      <aside class="app-sidebar">
+        <div class="brand-block">
+          <div class="brand-mark">Q</div>
+          <div>
+            <div class="brand-title">量化工作台</div>
+            <div class="brand-subtitle">股票与基金研究终端</div>
           </div>
-          <div class="chart-card">
-            <canvas id="priceChart"></canvas>
-            <div id="chartEmpty" class="empty-state">暂无图表数据</div>
-          </div>
-          <div id="chartMeta" class="chart-meta">周期：1d | 复权：NONE | 范围：1m | 点数：0</div>
-        </section>
+        </div>
 
-        <aside class="right-rail">
-          <section class="decision-card">
-            <div class="panel-title">当前策略</div>
-            <div id="strategyPanel" class="rich-panel"></div>
-          </section>
-          <section class="decision-card">
-            <div class="panel-title">预期走势</div>
-            <div id="forecastPanel" class="rich-panel"></div>
-          </section>
-          <section class="decision-card">
-            <div class="panel-title">操作与风险</div>
-            <div id="operationPanel" class="rich-panel"></div>
-          </section>
-          <section class="decision-card">
-            <div class="panel-title">决策证据</div>
-            <div id="decisionPanel" class="rich-panel"></div>
-          </section>
-        </aside>
-      </main>
-
-      <footer class="bottom-dock">
-        <nav class="tabs">
-          <button class="tab active" data-tab="market" type="button">市场</button>
-          <button class="tab" data-tab="strategy" type="button">策略</button>
-          <button class="tab" data-tab="backtest" type="button">回测</button>
-          <button class="tab" data-tab="paper" type="button">模拟账户</button>
-          <button class="tab" data-tab="risk" type="button">风险</button>
-          <button class="tab" data-tab="knowledge" type="button">知识中心</button>
+        <nav class="side-nav" aria-label="主导航">
+          <button class="nav-item active" data-tab-target="market" type="button"><span>市场总览</span><small>行情与指数</small></button>
+          <button class="nav-item" data-tab-target="recommendations" type="button"><span>荐股池</span><small>短线候选</small></button>
+          <button class="nav-item" data-tab-target="strategy" type="button"><span>策略验证</span><small>预测与建议</small></button>
+          <button class="nav-item" data-tab-target="paper" type="button"><span>模拟账户</span><small>手动仓位</small></button>
+          <button class="nav-item" data-tab-target="risk" type="button"><span>风险雷达</span><small>回撤与门禁</small></button>
         </nav>
-        <section class="backtest-panel">
-          <div class="dock-head">
-            <strong>盈利验证回测</strong>
-            <button id="rerunButton" class="secondary-button" type="button">重新回测</button>
+
+        <section class="side-section">
+          <div class="section-head">
+            <span>自选列表</span>
+            <div class="watch-actions">
+              <button id="addWatchButton" type="button" title="加入当前标的">加入</button>
+              <button id="clearWatchButton" type="button" title="清空自选显示">清空</button>
+            </div>
           </div>
-          <div class="dock-grid">
-            <article>
-              <h3>摘要</h3>
-              <div id="backtestSummary" class="text-box"></div>
-            </article>
-            <article>
-              <h3>指标</h3>
-              <div id="backtestMetrics" class="text-box"></div>
-            </article>
-            <article>
-              <h3>证据</h3>
-              <div id="backtestEvidence" class="text-box"></div>
-            </article>
+          <div id="watchlist" class="list-box"></div>
+        </section>
+
+        <section class="side-section market-section">
+          <div class="section-head">
+            <span>市场指数</span>
+            <button id="refreshButton" class="icon-button" type="button">刷新</button>
+          </div>
+          <div id="marketOverview" class="market-overview"></div>
+        </section>
+
+        <section class="side-section">
+          <div class="section-head"><span>最近访问</span></div>
+          <div id="recentList" class="list-box"></div>
+        </section>
+      </aside>
+
+      <main class="dashboard">
+        <header class="dashboard-header">
+          <div class="title-block">
+            <div class="eyebrow">Research Workspace</div>
+            <h1 id="assetTitle">量化策略工作台</h1>
+            <p id="assetSubtitle">输入代码后回车，加载行情、策略预测与回测证据。</p>
+          </div>
+
+          <div class="toolbar">
+            <input id="searchInput" class="search-input" placeholder="代码 / 名称" autocomplete="off" />
+            <select id="strategyMode" class="control">
+              <option value="short_term">短线策略</option>
+              <option value="long_term">长线策略</option>
+            </select>
+            <select id="maxTrades" class="control">
+              <option value="4">4 次</option>
+              <option value="6">6 次</option>
+              <option value="8">8 次</option>
+              <option value="10">10 次</option>
+              <option value="12" selected>12 次</option>
+              <option value="20">20 次</option>
+              <option value="30">30 次</option>
+            </select>
+            <select id="themeMode" class="control">
+              <option value="dark" selected>黑色主题</option>
+              <option value="light">白色主题</option>
+            </select>
+            <select id="autoRefreshMode" class="control">
+              <option value="5000">5秒刷新</option>
+              <option value="15000" selected>15秒刷新</option>
+              <option value="30000">30秒刷新</option>
+              <option value="60000">60秒刷新</option>
+              <option value="0">停止刷新</option>
+            </select>
+            <button id="accountToggleButton" class="secondary-button" type="button">账户输入</button>
+            <button id="chartBacktestButton" class="primary-button" type="button">回测曲线</button>
+          </div>
+        </header>
+
+        <section class="status-row">
+          <div id="healthBanner" class="health healthy">数据健康：等待行情</div>
+          <div id="marketTime" class="market-time">行情时间：--</div>
+        </section>
+
+        <section class="kpi-grid">
+          <article class="kpi-card accent-blue">
+            <span class="kpi-label">当前价格</span>
+            <strong id="kpiPrice">--</strong>
+            <small id="kpiChange">等待行情</small>
+          </article>
+          <article class="kpi-card accent-red">
+            <span class="kpi-label">策略建议</span>
+            <strong id="kpiSignal">--</strong>
+            <small id="kpiSignalMeta">短线/长线会影响信号窗口</small>
+          </article>
+          <article class="kpi-card accent-green">
+            <span class="kpi-label">预期收益区间</span>
+            <strong id="kpiReturn">--</strong>
+            <small id="kpiReturnMeta">概率与回撤待计算</small>
+          </article>
+          <article class="kpi-card accent-amber">
+            <span class="kpi-label">回测状态</span>
+            <strong id="kpiBacktest">--</strong>
+            <small id="kpiBacktestMeta">样本外验证待加载</small>
+          </article>
+        </section>
+
+        <section class="content-grid">
+          <section class="chart-shell">
+            <div class="chart-head">
+              <div>
+                <div class="panel-title">行情曲线</div>
+                <div id="chartMeta" class="chart-meta">周期：1d | 复权：NONE | 范围：1m | 点数：0</div>
+              </div>
+              <div class="chart-controls">
+                <select id="intervalSelect" class="control">
+                  <option value="1d" selected>日线</option>
+                  <option value="30m">30分</option>
+                  <option value="60m">60分</option>
+                  <option value="1w">周线</option>
+                </select>
+                <select id="rangeSelect" class="control">
+                  <option value="5d">5日</option>
+                  <option value="1m" selected>1月</option>
+                  <option value="3m">3月</option>
+                  <option value="6m">6月</option>
+                  <option value="1y">1年</option>
+                </select>
+                <select id="adjustmentSelect" class="control">
+                  <option value="NONE" selected>不复权</option>
+                  <option value="FORWARD">前复权</option>
+                  <option value="BACKWARD">后复权</option>
+                </select>
+                <label class="toggle"><input id="volumeToggle" type="checkbox" checked />成交量</label>
+                <label class="toggle"><input id="maToggle" type="checkbox" />MA</label>
+                <label class="toggle"><input id="signalToggle" type="checkbox" />回测信号</label>
+                <label class="toggle"><input id="forecastToggle" type="checkbox" />预测区间</label>
+              </div>
+            </div>
+            <section id="accountPanel" class="account-panel" hidden>
+              <div class="account-head">
+                <div>
+                  <div class="panel-title">手动账户 / 仓位评估</div>
+                  <p>只保存在本机，用于研究建议；不会读取券商账户，也不会执行下单。</p>
+                </div>
+                <button id="accountClearButton" class="secondary-button" type="button">清空当前标的</button>
+              </div>
+              <div class="account-form">
+                <label>
+                  <span>计划总资金</span>
+                  <input id="accountCapitalInput" type="number" min="0" step="100" placeholder="例如 10000" />
+                </label>
+                <label>
+                  <span>可用现金</span>
+                  <input id="accountCashInput" type="number" min="0" step="100" placeholder="可选" />
+                </label>
+                <label>
+                  <span>持仓数量</span>
+                  <input id="accountQuantityInput" type="number" min="0" step="1" placeholder="股/份" />
+                </label>
+                <label>
+                  <span>成本价</span>
+                  <input id="accountCostInput" type="number" min="0" step="0.001" placeholder="买入均价" />
+                </label>
+                <label>
+                  <span>风险偏好(记录)</span>
+                  <select id="accountRiskInput">
+                    <option value="conservative">保守</option>
+                    <option value="standard" selected>标准</option>
+                    <option value="aggressive">激进</option>
+                  </select>
+                </label>
+                <button id="accountSaveButton" class="primary-button" type="button">按当前策略评估</button>
+              </div>
+              <div id="accountInlineSummary" class="account-inline-summary">当前标的尚未录入账户数据。</div>
+            </section>
+            <div class="chart-card">
+              <canvas id="priceChart"></canvas>
+              <div id="chartEmpty" class="empty-state">暂无图表数据</div>
+            </div>
+          </section>
+
+          <aside class="insight-stack">
+            <section class="decision-card">
+              <div class="panel-title">当前策略</div>
+              <div id="strategyPanel" class="rich-panel"></div>
+            </section>
+            <section class="decision-card">
+              <div class="panel-title">预期走势</div>
+              <div id="forecastPanel" class="rich-panel"></div>
+            </section>
+            <section class="decision-card">
+              <div class="panel-title">操作与风险</div>
+              <div id="operationPanel" class="rich-panel"></div>
+            </section>
+            <section class="decision-card">
+              <div class="panel-title">决策证据</div>
+              <div id="decisionPanel" class="rich-panel"></div>
+            </section>
+          </aside>
+        </section>
+
+        <section id="recommendationPanel" class="recommendation-panel">
+          <div class="recommendation-head">
+            <div>
+              <div class="panel-title">短线荐股候选池</div>
+              <p>按市场环境、板块主线、资金强度、趋势形态、相对强弱和可退出性评分。仅研究候选，不自动下单。</p>
+            </div>
+            <div class="recommendation-actions">
+              <select id="recommendationLimit" class="control">
+                <option value="8">前8只</option>
+                <option value="10" selected>前10只</option>
+                <option value="15">前15只</option>
+                <option value="20">前20只</option>
+              </select>
+              <label class="toggle"><input id="recommendationIncludeUs" type="checkbox" checked />跨境ETF</label>
+              <button id="refreshRecommendationsButton" class="primary-button" type="button">刷新荐股池</button>
+            </div>
+          </div>
+          <div id="recommendationSummary" class="recommendation-summary"></div>
+          <div class="recommendation-grid">
+            <div class="recommendation-table-wrap">
+              <table class="recommendation-table">
+                <thead>
+                  <tr>
+                    <th>标的</th>
+                    <th>等级</th>
+                    <th>总分</th>
+                    <th>交易制度</th>
+                    <th>核心逻辑</th>
+                    <th>买入触发</th>
+                    <th>止损/止盈</th>
+                    <th>仓位</th>
+                  </tr>
+                </thead>
+                <tbody id="recommendationTable">
+                  <tr><td colspan="8">点击“刷新荐股池”后生成候选列表。</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <aside class="recommendation-detail">
+              <h3>候选详情</h3>
+              <div id="recommendationDetail" class="text-box">选择一只候选标的查看六维评分和风险备注。</div>
+              <h3>失败/缺失数据</h3>
+              <div id="recommendationFailures" class="text-box">暂无。</div>
+            </aside>
           </div>
         </section>
-        <div id="statusBar" class="status-bar">状态：IDLE | 任务：IDLE | 标的：--</div>
-      </footer>
+
+        <footer class="bottom-dock">
+          <nav class="tabs">
+            <button class="tab active" data-tab="market" type="button">市场</button>
+            <button class="tab" data-tab="recommendations" type="button">荐股</button>
+            <button class="tab" data-tab="strategy" type="button">策略</button>
+            <button class="tab" data-tab="backtest" type="button">回测</button>
+            <button class="tab" data-tab="paper" type="button">模拟账户</button>
+            <button class="tab" data-tab="risk" type="button">风险</button>
+            <button class="tab" data-tab="knowledge" type="button">知识中心</button>
+          </nav>
+          <section class="backtest-panel">
+            <div class="dock-head">
+              <strong id="dockTitle">市场总览</strong>
+              <button id="rerunButton" class="secondary-button" type="button">重新回测</button>
+            </div>
+            <div class="dock-grid">
+              <article>
+                <h3>摘要</h3>
+                <div id="backtestSummary" class="text-box"></div>
+              </article>
+              <article>
+                <h3>指标</h3>
+                <div id="backtestMetrics" class="text-box"></div>
+              </article>
+              <article>
+                <h3>证据</h3>
+                <div id="backtestEvidence" class="text-box"></div>
+              </article>
+            </div>
+          </section>
+          <div id="statusBar" class="status-bar">状态：IDLE | 任务：IDLE | 标的：--</div>
+        </footer>
+      </main>
     </div>
     <script src="./renderer.js"></script>
   </body>

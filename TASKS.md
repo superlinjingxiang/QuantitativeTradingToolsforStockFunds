@@ -280,3 +280,13 @@
 - 交付：`ProfitSignalFeatures` 新增成交量确认 `volume_ratio` 和流动性确认 `liquidity_score`；`ProfitSeekingConfig` 新增 `min_volume_confirmation`、`min_liquidity_confirmation`；入场过滤和综合评分纳入量能/流动性；结果说明明确策略同时检查动量、趋势、波动、回撤、成交量和流动性。
 - 验收：同一行情在正常量能门槛下可交易，在严格量能确认门槛下交易次数下降；策略说明不得暗示保证收益；不改变DecisionHub真实交易门禁。
 - 完成证据：2026-07-02 完成量能/流动性确认优化；新增 `test_volume_confirmation_filter_blocks_unconfirmed_entries` 覆盖量能门槛生效；策略规格和ADR记录优化边界。
+
+## 阶段9——FastAPI、Vue与缓存现代化重构
+
+### [x] TASK-037——FastAPI + Vue + Redis兼容迁移
+- 依赖：TASK-025、TASK-029、TASK-034、TASK-036
+- 需求：FR-001、FR-003、FR-004、FR-013至FR-015、FR-020至FR-022、C-005
+- 核心定位：现代化前后端边界和加载体验，但不复制或重写既有策略、预测、回测、荐股和账户评估逻辑。
+- 交付：FastAPI/uvicorn兼容API、OpenAPI文档、Redis优先内存降级缓存、陈旧数据保留与信号阻断、Vue3/Vite/Pinia/ECharts前端、Electron默认加载Vue产物、旧renderer回退入口、FastAPI/缓存/Vue/Playwright测试与迁移文档。
+- 验收：`/api/health`、`/api/search`、`/api/analyze`、`/api/recommendations`字段兼容；Redis未启动时仍可运行；页面首次加载可展示本地最近成功结果并后台更新；上游失败时保留旧数据并标记STALE；旧Electron和PySide6入口继续可启动；荐股、回测信号、账户评估和真实下单禁用边界不改变。
+- 完成证据：2026-07-11完成 `src/china_quant_platform/api`、缓存后端、Vue工作台和Electron生产加载；Python全量255项通过，`ruff format --check src tests`、`ruff check src tests`、`mypy src tests`通过，Vitest 1项和Playwright 1项通过，FastAPI真实健康/OpenAPI启动冒烟通过，Electron生产窗口启动冒烟通过。Playwright首次浏览器下载超时后已在本机可用环境完成测试。

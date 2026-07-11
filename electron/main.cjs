@@ -46,6 +46,7 @@ function findFreePort() {
 async function startBackend(rootDir) {
   const port = await findFreePort();
   const python = findPython(rootDir);
+  const backendModule = process.env.CHINA_QUANT_BACKEND_MODULE || "china_quant_platform.api";
   const env = {
     ...process.env,
     PYTHONPATH: path.join(rootDir, "src"),
@@ -53,7 +54,7 @@ async function startBackend(rootDir) {
   };
   backendProcess = spawn(
     python,
-    ["-m", "china_quant_platform.electron_api", "--host", "127.0.0.1", "--port", String(port)],
+    ["-m", backendModule, "--host", "127.0.0.1", "--port", String(port)],
     {
       cwd: rootDir,
       env,
@@ -97,6 +98,8 @@ async function startBackend(rootDir) {
 async function createWindow() {
   const rootDir = process.cwd();
   const apiBase = await startBackend(rootDir);
+  const legacyFrontend = process.env.CQP_FRONTEND === "legacy";
+  const devUrl = process.env.VITE_DEV_SERVER_URL;
   Menu.setApplicationMenu(null);
   mainWindow = new BrowserWindow({
     width: 1680,
@@ -117,14 +120,23 @@ async function createWindow() {
     mainWindow.show();
     mainWindow.focus();
   });
-  const indexPath = path.join(rootDir, "electron", "index.html");
+  const indexPath = legacyFrontend
+    ? path.join(rootDir, "electron", "index.html")
+    : path.join(rootDir, "frontend", "dist", "index.html");
   mainWindow.webContents.on("did-fail-load", (_event, code, description, url) => {
     debugLog(rootDir, `did-fail-load code=${code} description=${description} url=${url}`);
   });
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     debugLog(rootDir, `render-process-gone ${JSON.stringify(details)}`);
   });
-  await mainWindow.loadFile(indexPath);
+  if (devUrl && !legacyFrontend) {
+    await mainWindow.loadURL(devUrl);
+  } else if (fs.existsSync(indexPath)) {
+    await mainWindow.loadFile(indexPath);
+  } else {
+    debugLog(rootDir, `Vue build missing, falling back to legacy UI: ${indexPath}`);
+    await mainWindow.loadFile(path.join(rootDir, "electron", "index.html"));
+  }
 }
 
 app.whenReady().then(createWindow).catch((error) => {
