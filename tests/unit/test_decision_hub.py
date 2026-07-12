@@ -210,6 +210,56 @@ def test_all_evidence_passes_to_api_candidate_without_real_order_path() -> None:
     assert report.real_order_submission_enabled is False
 
 
+def test_risk_adjusted_benchmark_path_can_pass_without_positive_excess() -> None:
+    evidence = profitability().model_copy(
+        update={
+            "total_return": 0.20,
+            "excess_return": -0.03,
+            "max_drawdown": -0.10,
+            "benchmark_max_drawdown": -0.25,
+            "sharpe_ratio": 1.05,
+        }
+    )
+
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis(),
+        profitability=evidence,
+        simulation=simulation(),
+    )
+
+    assert report.final_signal is FinalSignal.BUY_CANDIDATE
+    profitability_gate = next(
+        gate for gate in report.gates if gate.gate_id == "profitability-evidence"
+    )
+    assert profitability_gate.status is EvidenceGateStatus.PASS
+
+
+def test_negative_excess_without_drawdown_improvement_fails_profitability_gate() -> None:
+    evidence = profitability().model_copy(
+        update={
+            "total_return": 0.20,
+            "excess_return": -0.03,
+            "max_drawdown": -0.22,
+            "benchmark_max_drawdown": -0.25,
+            "sharpe_ratio": 1.05,
+        }
+    )
+
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis(),
+        profitability=evidence,
+        simulation=simulation(),
+    )
+
+    assert report.final_signal is FinalSignal.WATCH
+    profitability_gate = next(
+        gate for gate in report.gates if gate.gate_id == "profitability-evidence"
+    )
+    assert profitability_gate.status is EvidenceGateStatus.FAIL
+
+
 def test_blocked_data_forces_abstain_even_when_other_evidence_exists() -> None:
     report = DecisionHub().build_report(
         request=request(),

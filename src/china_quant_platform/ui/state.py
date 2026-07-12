@@ -131,12 +131,17 @@ class BacktestPanelState(DomainModel):
     selected_threshold: str = "--"
     total_return: str = "--"
     annualized_return: str = "--"
+    annualized_volatility: str = "--"
+    sharpe_ratio: str = "--"
+    calmar_ratio: str = "--"
     max_drawdown: str = "--"
+    benchmark_max_drawdown: str = "--"
     excess_return: str = "--"
     win_rate: str = "--"
     trade_count: str = "--"
     brier_score: str = "--"
     reliability_grade: str = "--"
+    walk_forward_consistency: str = "--"
     summary: str = "暂无回测结果"
     notes: tuple[str, ...] = ()
     trades: tuple[str, ...] = ()
@@ -151,12 +156,25 @@ class BacktestPanelState(DomainModel):
             selected_threshold=f"{result.selected_threshold:.2f}",
             total_return=_format_percent(result.total_return),
             annualized_return=_format_percent(result.annualized_return),
+            annualized_volatility=_format_percent(result.annualized_volatility),
+            sharpe_ratio=("--" if result.sharpe_ratio is None else f"{result.sharpe_ratio:.2f}"),
+            calmar_ratio=("--" if result.calmar_ratio is None else f"{result.calmar_ratio:.2f}"),
             max_drawdown=_format_percent(result.max_drawdown),
+            benchmark_max_drawdown=_format_percent(result.benchmark_max_drawdown),
             excess_return=_format_percent(result.excess_return),
             win_rate=_format_percent(result.win_rate),
             trade_count=str(result.trade_count),
             brier_score="--" if result.brier_score is None else f"{result.brier_score:.4f}",
             reliability_grade=result.reliability_grade.value,
+            walk_forward_consistency=(
+                "--"
+                if result.walk_forward_positive_ratio is None
+                else (
+                    f"正收益折{_format_percent(result.walk_forward_positive_ratio)}；"
+                    f"折中位{_format_percent(result.walk_forward_median_return or 0.0)}；"
+                    f"有效{result.walk_forward_active_folds}折"
+                )
+            ),
             summary=_backtest_summary(result),
             notes=tuple(result.notes),
             trades=_profit_trade_summaries(result),

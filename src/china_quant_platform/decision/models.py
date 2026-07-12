@@ -47,6 +47,8 @@ class DecisionRequest(DomainModel):
     min_backtest_trades: int = Field(default=10, ge=1)
     max_backtest_drawdown: float = Field(default=0.25, ge=0, le=1)
     max_brier_score: float = Field(default=0.25, ge=0, le=1)
+    min_sharpe_ratio: float = Field(default=0.75, ge=0)
+    min_drawdown_improvement: float = Field(default=0.20, ge=0, le=1)
     max_simulation_breaches: int = Field(default=0, ge=0)
     require_simulation_evidence: bool = True
 
@@ -73,14 +75,21 @@ class ProfitabilityEvidence(DomainModel):
     strategy_version: NonEmptyString
     total_return: float | None = None
     annualized_return: float | None = None
+    annualized_volatility: float | None = Field(default=None, ge=0)
+    sharpe_ratio: float | None = None
+    calmar_ratio: float | None = None
     max_drawdown: float | None = None
     benchmark_total_return: float | None = None
+    benchmark_max_drawdown: float | None = None
     excess_return: float | None = None
     trade_count: int = Field(default=0, ge=0)
     turnover: float | None = Field(default=None, ge=0)
     cost_drag: float | None = Field(default=None, ge=0)
     calibration_sample_count: int = Field(default=0, ge=0)
     brier_score: float | None = Field(default=None, ge=0)
+    walk_forward_positive_ratio: float | None = Field(default=None, ge=0, le=1)
+    walk_forward_excess_ratio: float | None = Field(default=None, ge=0, le=1)
+    walk_forward_median_return: float | None = None
     checksum: NonEmptyString | None = None
     notes: tuple[NonEmptyString, ...] = ()
 

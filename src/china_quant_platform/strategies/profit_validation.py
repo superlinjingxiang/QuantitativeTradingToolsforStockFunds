@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
@@ -133,6 +133,62 @@ DEFAULT_ETF_VALIDATION_UNIVERSE: tuple[DefaultValidationSecurity, ...] = (
 )
 
 
+DEFAULT_MIXED_VALIDATION_UNIVERSE: tuple[DefaultValidationSecurity, ...] = (
+    DefaultValidationSecurity(
+        security_id="SSE:600519",
+        symbol="600519",
+        name="贵州茅台",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="stock_consumer",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:600036",
+        symbol="600036",
+        name="招商银行",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="stock_financials",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:601318",
+        symbol="601318",
+        name="中国平安",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="stock_insurance",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:600276",
+        symbol="600276",
+        name="恒瑞医药",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="stock_healthcare",
+    ),
+    DefaultValidationSecurity(
+        security_id="SZSE:000333",
+        symbol="000333",
+        name="美的集团",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SZSE,
+        asset_bucket="stock_manufacturing",
+    ),
+    *(
+        member
+        for member in DEFAULT_ETF_VALIDATION_UNIVERSE
+        if member.security_id
+        in {
+            "SSE:510300",
+            "SZSE:159915",
+            "SSE:513300",
+            "SSE:518880",
+            "SSE:511010",
+        }
+    ),
+)
+
+
 class HorizonParameters(DomainModel):
     horizon: HorizonPreset
     short_lookback: int = Field(ge=1)
@@ -153,15 +209,19 @@ class ProfitSeekingConfig(DomainModel):
     max_annual_volatility: float = Field(default=0.65, gt=0)
     min_volume_confirmation: float = Field(default=0.80, ge=0)
     min_liquidity_confirmation: float = Field(default=0.30, ge=0, le=1)
+    max_short_momentum_for_entry: float = Field(default=1.0, gt=0, le=1)
+    minimum_trend_efficiency: float = Field(default=0.10, ge=0, le=1)
     stop_loss_pct: float = Field(default=0.12, gt=0, le=1)
     final_test_fraction: float = Field(default=0.25, gt=0, lt=1)
     validation_fraction: float = Field(default=0.25, gt=0, lt=1)
     minimum_oos_bars: int = Field(default=60, ge=20)
     minimum_validation_bars: int = Field(default=60, ge=20)
     minimum_trades_for_pass: int = Field(default=3, ge=1)
+    minimum_sharpe_for_pass: float = Field(default=0.75, ge=0)
+    minimum_drawdown_improvement: float = Field(default=0.20, ge=0, le=1)
     threshold_candidates: tuple[float, ...] = (0.18, 0.25, 0.32, 0.40, 0.50)
     strategy_id: NonEmptyString = "strategy.etf_profit_validation"
-    strategy_version: NonEmptyString = "profit-validation-v1"
+    strategy_version: NonEmptyString = "profit-validation-v2"
 
     @model_validator(mode="after")
     def validate_thresholds(self) -> Self:
@@ -181,6 +241,7 @@ class ProfitSignalFeatures(DomainModel):
     short_momentum: float
     long_momentum: float
     trend_strength: float
+    trend_efficiency: float = Field(ge=0, le=1)
     annualized_volatility: float = Field(ge=0)
     drawdown: float
     volume_ratio: float = Field(ge=0)
@@ -245,8 +306,12 @@ class ProfitBacktestResult(DomainModel):
     selected_threshold: float = Field(ge=-1, le=1)
     total_return: float
     annualized_return: float
+    annualized_volatility: float = Field(default=0.0, ge=0)
+    sharpe_ratio: float | None = None
+    calmar_ratio: float | None = None
     max_drawdown: float
     benchmark_total_return: float
+    benchmark_max_drawdown: float = 0.0
     excess_return: float
     win_rate: float = Field(ge=0, le=1)
     trade_count: int = Field(ge=0)
@@ -262,6 +327,11 @@ class ProfitBacktestResult(DomainModel):
     trades: tuple[ProfitBacktestTrade, ...]
     threshold_selection: ThresholdSelection | None = None
     walk_forward: tuple[WalkForwardFoldResult, ...] = ()
+    walk_forward_active_folds: int = Field(default=0, ge=0)
+    walk_forward_positive_ratio: float | None = Field(default=None, ge=0, le=1)
+    walk_forward_excess_ratio: float | None = Field(default=None, ge=0, le=1)
+    walk_forward_median_return: float | None = None
+    walk_forward_median_excess: float | None = None
     checksum: NonEmptyString
 
 
@@ -343,8 +413,49 @@ def horizon_parameters(horizon: HorizonPreset) -> HorizonParameters:
             )
 
 
+def profit_strategy_config(
+    strategy_mode: Literal["short_term", "long_term"],
+    horizon: HorizonPreset,
+    max_trades_per_year: int,
+) -> ProfitSeekingConfig:
+    """Build the canonical strategy config shared by desktop, API, and labs."""
+
+    parameters = horizon_parameters(horizon)
+    if strategy_mode == "long_term":
+        return ProfitSeekingConfig(
+            horizon=horizon,
+            max_trades_per_year=max_trades_per_year,
+            max_annual_volatility=0.58,
+            stop_loss_pct=0.18,
+            minimum_oos_bars=max(120, parameters.holding_days),
+            minimum_validation_bars=120,
+            minimum_trades_for_pass=max(1, min(2, max_trades_per_year)),
+            threshold_candidates=(0.20, 0.28, 0.36, 0.45, 0.55),
+            strategy_id="strategy.profit_validation_long_term",
+            strategy_version="profit-validation-long-v2",
+        )
+    return ProfitSeekingConfig(
+        horizon=horizon,
+        max_trades_per_year=max_trades_per_year,
+        max_annual_volatility=0.78,
+        stop_loss_pct=0.10,
+        minimum_oos_bars=max(80, parameters.holding_days),
+        minimum_validation_bars=80,
+        minimum_trades_for_pass=max(1, min(3, max_trades_per_year)),
+        threshold_candidates=(0.10, 0.14, 0.18, 0.25, 0.32, 0.40),
+        strategy_id="strategy.profit_validation_short_term",
+        strategy_version="profit-validation-short-v2",
+    )
+
+
 def default_etf_validation_universe() -> tuple[DefaultValidationSecurity, ...]:
     return DEFAULT_ETF_VALIDATION_UNIVERSE
+
+
+def default_mixed_validation_universe() -> tuple[DefaultValidationSecurity, ...]:
+    """Return five representative A-shares and five exchange-traded funds."""
+
+    return DEFAULT_MIXED_VALIDATION_UNIVERSE
 
 
 def run_profit_validation_lab(
@@ -422,8 +533,7 @@ def run_profit_strategy_backtest(
             sorted_bars,
             config=active_config,
         )
-        result = result.model_copy(update={"walk_forward": folds})
-        result = result.model_copy(update={"checksum": _result_checksum(result)})
+        result = _apply_walk_forward_evidence(result, folds, config=active_config)
     return result
 
 
@@ -581,14 +691,21 @@ def profitability_evidence_from_validation(
             strategy_version=report.config.strategy_version,
             total_return=result.total_return,
             annualized_return=result.annualized_return,
+            annualized_volatility=result.annualized_volatility,
+            sharpe_ratio=result.sharpe_ratio,
+            calmar_ratio=result.calmar_ratio,
             max_drawdown=result.max_drawdown,
             benchmark_total_return=result.benchmark_total_return,
+            benchmark_max_drawdown=result.benchmark_max_drawdown,
             excess_return=result.excess_return,
             trade_count=result.trade_count,
             turnover=result.turnover,
             cost_drag=result.cost_drag,
             calibration_sample_count=result.calibration_sample_count,
             brier_score=result.brier_score,
+            walk_forward_positive_ratio=result.walk_forward_positive_ratio,
+            walk_forward_excess_ratio=result.walk_forward_excess_ratio,
+            walk_forward_median_return=result.walk_forward_median_return,
             checksum=result.checksum,
             notes=(
                 f"{result.horizon.value}周期样本外结果；"
@@ -860,8 +977,10 @@ def _entry_signal_passes(
     return (
         features.score >= threshold
         and features.short_momentum > 0
+        and features.short_momentum <= config.max_short_momentum_for_entry
         and features.long_momentum > 0
         and features.trend_strength > 0
+        and features.trend_efficiency >= config.minimum_trend_efficiency
         and features.annualized_volatility <= config.max_annual_volatility
         and features.drawdown >= -0.35
         and features.volume_ratio >= config.min_volume_confirmation
@@ -890,6 +1009,7 @@ def _signal_features(
     trend_values = closes[index - parameters.trend_window + 1 : index + 1]
     trend_average = sum(trend_values) / len(trend_values)
     trend_strength = closes[index] / trend_average - 1.0 if trend_average > 0 else 0.0
+    trend_efficiency = _trend_efficiency(closes[index - parameters.short_lookback : index + 1])
     volatility_returns = _period_returns(closes[index - parameters.volatility_window : index + 1])
     annualized_volatility = _population_std(volatility_returns) * math.sqrt(252.0)
     volume_ratio = _volume_ratio(index, bars=bars, window=parameters.volatility_window)
@@ -914,6 +1034,7 @@ def _signal_features(
         short_momentum=short_momentum,
         long_momentum=long_momentum,
         trend_strength=trend_strength,
+        trend_efficiency=trend_efficiency,
         annualized_volatility=annualized_volatility,
         drawdown=drawdown,
         volume_ratio=volume_ratio,
@@ -941,7 +1062,11 @@ def _build_result(
         for previous, current in zip(equity_curve, equity_curve[1:], strict=False)
     )
     annualized_return = (1.0 + total_return) ** (252.0 / max(len(daily_returns), 1)) - 1.0
+    annualized_volatility = _population_std(daily_returns) * math.sqrt(252.0)
+    sharpe_ratio = _sharpe_ratio(daily_returns)
     max_drawdown = _max_drawdown(tuple(point.net_asset_value for point in equity_curve))
+    benchmark_max_drawdown = _max_drawdown(tuple(point.benchmark_value for point in equity_curve))
+    calmar_ratio = annualized_return / abs(max_drawdown) if max_drawdown < -1e-12 else None
     wins = sum(1 for trade in trades if trade.net_return > 0)
     win_rate = 0.0 if not trades else wins / len(trades)
     cost_drag = len(trades) * config.round_trip_cost_bps / 10_000.0
@@ -953,6 +1078,8 @@ def _build_result(
         total_return=total_return,
         excess_return=total_return - benchmark_total_return,
         max_drawdown=max_drawdown,
+        benchmark_max_drawdown=benchmark_max_drawdown,
+        sharpe_ratio=sharpe_ratio,
         trade_count=len(trades),
         config=config,
     )
@@ -973,8 +1100,12 @@ def _build_result(
         selected_threshold=threshold,
         total_return=total_return,
         annualized_return=annualized_return,
+        annualized_volatility=annualized_volatility,
+        sharpe_ratio=sharpe_ratio,
+        calmar_ratio=calmar_ratio,
         max_drawdown=max_drawdown,
         benchmark_total_return=benchmark_total_return,
+        benchmark_max_drawdown=benchmark_max_drawdown,
         excess_return=total_return - benchmark_total_return,
         win_rate=win_rate,
         trade_count=len(trades),
@@ -999,12 +1130,22 @@ def _validation_status(
     total_return: float,
     excess_return: float,
     max_drawdown: float,
+    benchmark_max_drawdown: float,
+    sharpe_ratio: float | None,
     trade_count: int,
     config: ProfitSeekingConfig,
 ) -> ProfitValidationStatus:
     if trade_count < config.minimum_trades_for_pass:
         return ProfitValidationStatus.WATCH
-    if total_return > 0 and excess_return > 0 and abs(max_drawdown) <= 0.25:
+    drawdown_improved = benchmark_max_drawdown < -1e-12 and abs(max_drawdown) <= abs(
+        benchmark_max_drawdown
+    ) * (1.0 - config.minimum_drawdown_improvement)
+    risk_adjusted_pass = (
+        sharpe_ratio is not None
+        and sharpe_ratio >= config.minimum_sharpe_for_pass
+        and drawdown_improved
+    )
+    if total_return > 0 and (excess_return > 0 or risk_adjusted_pass) and abs(max_drawdown) <= 0.25:
         return ProfitValidationStatus.PASS
     if total_return > 0 and abs(max_drawdown) <= 0.35:
         return ProfitValidationStatus.WATCH
@@ -1042,13 +1183,94 @@ def _result_notes(
         f"交易次数按每年最大{config.max_trades_per_year}次约束。",
         "入场同时检查动量、趋势、波动、回撤、成交量确认和流动性，避免只凭价格追涨。",
     ]
+    if config.max_short_momentum_for_entry < 1.0:
+        notes.append(f"短期动量超过{config.max_short_momentum_for_entry:.0%}视为过热，不追涨入场。")
+    if config.minimum_trend_efficiency > 0:
+        notes.append(f"趋势效率低于{config.minimum_trend_efficiency:.0%}时不入场。")
     if status is ProfitValidationStatus.PASS:
-        notes.append("样本外净收益、回撤和基准比较暂时通过。")
+        notes.append("样本外净收益、回撤及正超额或风险调整比较暂时通过。")
     elif trade_count < config.minimum_trades_for_pass:
         notes.append("样本外交易次数不足，不能证明通用赚钱能力。")
     else:
         notes.append("样本外收益、回撤或基准比较未全部通过。")
     return tuple(notes)
+
+
+def _apply_walk_forward_evidence(
+    result: ProfitBacktestResult,
+    folds: tuple[WalkForwardFoldResult, ...],
+    *,
+    config: ProfitSeekingConfig,
+) -> ProfitBacktestResult:
+    active = tuple(fold for fold in folds if fold.trade_count > 0)
+    if not active:
+        status = (
+            ProfitValidationStatus.FAIL
+            if result.status is ProfitValidationStatus.FAIL
+            else ProfitValidationStatus.WATCH
+        )
+        notes = (*result.notes, "滚动前推没有形成有效交易折，盈利证据降级。")
+        updated = result.model_copy(
+            update={
+                "walk_forward": folds,
+                "walk_forward_active_folds": 0,
+                "status": status,
+                "reliability_grade": (
+                    ReliabilityGrade.N
+                    if status is ProfitValidationStatus.FAIL
+                    else ReliabilityGrade.C
+                ),
+                "notes": notes,
+            }
+        )
+        return updated.model_copy(update={"checksum": _result_checksum(updated)})
+
+    positive_ratio = sum(fold.total_return > 0 for fold in active) / len(active)
+    excess_ratio = sum(fold.excess_return > 0 for fold in active) / len(active)
+    median_return = _median(tuple(fold.total_return for fold in active))
+    median_excess = _median(tuple(fold.excess_return for fold in active))
+    consistent = len(active) >= 5 and positive_ratio >= 0.55 and median_return > 0
+    status = result.status
+    if status is ProfitValidationStatus.PASS and not consistent:
+        status = ProfitValidationStatus.WATCH
+    grade = _reliability_grade(
+        total_return=result.total_return,
+        excess_return=result.excess_return,
+        max_drawdown=result.max_drawdown,
+        win_rate=result.win_rate,
+        trade_count=result.trade_count,
+        status=status,
+    )
+    if status is ProfitValidationStatus.PASS and positive_ratio >= 0.70:
+        grade = (
+            ReliabilityGrade.A
+            if result.sharpe_ratio is not None and result.sharpe_ratio >= 0.80
+            else ReliabilityGrade.B
+        )
+    notes = (
+        *result.notes,
+        (
+            f"滚动前推有效{len(active)}/{len(folds)}折，"
+            f"正收益折{positive_ratio:.0%}，超额为正折{excess_ratio:.0%}，"
+            f"折中位收益{median_return:.2%}。"
+        ),
+    )
+    if result.status is ProfitValidationStatus.PASS and status is ProfitValidationStatus.WATCH:
+        notes = (*notes, "最终留出区间虽通过，但跨窗口一致性不足，状态降为WATCH。")
+    updated = result.model_copy(
+        update={
+            "walk_forward": folds,
+            "walk_forward_active_folds": len(active),
+            "walk_forward_positive_ratio": positive_ratio,
+            "walk_forward_excess_ratio": excess_ratio,
+            "walk_forward_median_return": median_return,
+            "walk_forward_median_excess": median_excess,
+            "status": status,
+            "reliability_grade": grade,
+            "notes": notes,
+        }
+    )
+    return updated.model_copy(update={"checksum": _result_checksum(updated)})
 
 
 def _aggregate_results(results: Sequence[ProfitBacktestResult]) -> ProfitValidationAggregate:
@@ -1245,6 +1467,26 @@ def _population_std(values: Sequence[float]) -> float:
         return 0.0
     mean = sum(values) / len(values)
     return math.sqrt(sum((value - mean) ** 2 for value in values) / len(values))
+
+
+def _trend_efficiency(values: Sequence[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    path = sum(
+        abs(current - previous) for previous, current in zip(values, values[1:], strict=False)
+    )
+    if path <= 1e-12:
+        return 0.0
+    return max(0.0, min(abs(values[-1] - values[0]) / path, 1.0))
+
+
+def _sharpe_ratio(returns: Sequence[float]) -> float | None:
+    if len(returns) < 2:
+        return None
+    volatility = _population_std(returns)
+    if volatility <= 1e-12:
+        return None
+    return sum(returns) / len(returns) / volatility * math.sqrt(252.0)
 
 
 def _max_drawdown(values: Sequence[float]) -> float:

@@ -22,6 +22,12 @@
 | 术语表 | `GLOSSARY.md` | 统一金融与工程术语 |
 | 执行计划 | `exec-plans/active/` | 多模块或长周期实施工作 |
 
+## 近期记录
+
+- 2026-07-12 代码变更：CHANGELOG_2026-07-12.md
+- 短线策略 V2 真实验证：research/SHORT_TERM_STRATEGY_VALIDATION_2026-07-12.md
+- 当前活动执行计划：exec-plans/active/0009-profit-validation-v2.md
+
 ## 变更规则
 
 当实现改变产品行为时，应先更新最窄范围的事实源文档，再更新 `TRACEABILITY.md`、`spec/requirements.yaml`、测试和任务状态。除非某个文件明确标注为摘要，否则不得在多个文件中重复维护同一规范性需求。

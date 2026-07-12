@@ -15,12 +15,15 @@ from china_quant_platform.strategies import (
     ProfitSeekingConfig,
     ProfitValidationStatus,
     default_etf_validation_universe,
+    default_mixed_validation_universe,
     horizon_parameters,
+    profit_strategy_config,
     profitability_evidence_from_validation,
     run_profit_strategy_backtest,
     run_profit_validation_lab,
     select_profit_threshold,
 )
+from china_quant_platform.strategies.lab import report_summary
 from china_quant_platform.ui import BacktestPanelState
 
 
@@ -97,6 +100,17 @@ def test_horizon_presets_define_distinct_holding_periods() -> None:
     assert horizon_parameters(HorizonPreset.ONE_YEAR).warmup_bars > 252
 
 
+def test_canonical_short_and_long_configs_are_distinct() -> None:
+    short = profit_strategy_config("short_term", HorizonPreset.ONE_MONTH, 12)
+    long = profit_strategy_config("long_term", HorizonPreset.SIX_MONTHS, 4)
+
+    assert short.strategy_version == "profit-validation-short-v2"
+    assert long.strategy_version == "profit-validation-long-v2"
+    assert short.max_annual_volatility > long.max_annual_volatility
+    assert short.minimum_validation_bars < long.minimum_validation_bars
+    assert short.minimum_trend_efficiency == 0.10
+
+
 def test_profit_strategy_respects_annual_trade_limit_and_outputs_risk_metrics() -> None:
     config = ProfitSeekingConfig(
         horizon=HorizonPreset.ONE_MONTH,
@@ -106,16 +120,28 @@ def test_profit_strategy_respects_annual_trade_limit_and_outputs_risk_metrics() 
         minimum_trades_for_pass=1,
     )
 
-    result = run_profit_strategy_backtest("SSE:513300", make_daily_bars(), config=config)
+    result = run_profit_strategy_backtest(
+        "SSE:513300",
+        make_daily_bars(),
+        config=config,
+        include_walk_forward=True,
+    )
 
     assert result.trade_count > 0
     assert all(count <= config.max_trades_per_year for count in result.trades_per_year.values())
     assert result.total_return > -0.20
     assert result.max_drawdown <= 0
+    assert result.benchmark_max_drawdown <= 0
+    assert result.annualized_volatility >= 0
+    assert result.sharpe_ratio is not None
+    assert result.calmar_ratio is not None
     assert result.win_rate >= 0
     assert result.calibration_sample_count == result.trade_count
     assert result.brier_score is not None
     assert result.reliability_grade.value in {"A", "B", "C", "N"}
+    assert result.walk_forward_active_folds > 0
+    assert result.walk_forward_positive_ratio is not None
+    assert result.walk_forward_median_return is not None
     assert "不代表保证未来收益" in " ".join(result.notes)
 
 
@@ -189,6 +215,29 @@ def test_default_etf_validation_lab_builds_aggregate_profitability_evidence() ->
     assert evidence.checksum == report.checksum
     assert single_evidence.source == "profit_validation_oos"
     assert single_evidence.trade_count == report.results[1].trade_count
+    assert single_evidence.sharpe_ratio == report.results[1].sharpe_ratio
+    assert single_evidence.benchmark_max_drawdown == report.results[1].benchmark_max_drawdown
+    assert (
+        single_evidence.walk_forward_positive_ratio == report.results[1].walk_forward_positive_ratio
+    )
+    summary = report_summary(report, provider_id="fixture")
+    assert summary["provider"] == "fixture"
+    summary_results = summary["results"]
+    assert isinstance(summary_results, list)
+    assert len(summary_results) == 10
+    assert summary_results[0]["walk_forward_positive_ratio"] is not None
+
+
+def test_mixed_validation_universe_covers_stocks_and_etfs() -> None:
+    universe = default_mixed_validation_universe()
+
+    assert len(universe) == 10
+    assert sum(member.asset_type.value == "STOCK" for member in universe) == 5
+    assert sum(member.asset_type.value == "ETF" for member in universe) == 5
+    assert {member.security_id for member in universe} >= {
+        "SSE:600519",
+        "SSE:513300",
+    }
 
 
 def test_downtrend_does_not_pass_profit_validation() -> None:
@@ -233,6 +282,40 @@ def test_volume_confirmation_filter_blocks_unconfirmed_entries() -> None:
     assert "成交量确认" in " ".join(strict_volume.notes)
 
 
+def test_overheated_short_momentum_is_not_chased() -> None:
+    base_config = ProfitSeekingConfig(
+        horizon=HorizonPreset.ONE_MONTH,
+        max_trades_per_year=8,
+        minimum_oos_bars=80,
+        minimum_validation_bars=80,
+        minimum_trades_for_pass=1,
+        max_short_momentum_for_entry=1.0,
+    )
+    guarded_config = base_config.model_copy(update={"max_short_momentum_for_entry": 0.05})
+    bars = make_daily_bars(regime="late_rally")
+
+    unguarded = run_profit_strategy_backtest("SSE:513300", bars, config=base_config)
+    guarded = run_profit_strategy_backtest("SSE:513300", bars, config=guarded_config)
+
+    assert guarded.trade_count <= unguarded.trade_count
+    assert "过热" in " ".join(guarded.notes)
+
+
+def test_trend_efficiency_filter_is_part_of_entry_evidence() -> None:
+    config = ProfitSeekingConfig(
+        horizon=HorizonPreset.ONE_MONTH,
+        max_trades_per_year=8,
+        minimum_oos_bars=80,
+        minimum_validation_bars=80,
+        minimum_trades_for_pass=1,
+        minimum_trend_efficiency=0.10,
+    )
+
+    result = run_profit_strategy_backtest("SSE:513300", make_daily_bars(), config=config)
+
+    assert "趋势效率低于10%时不入场" in " ".join(result.notes)
+
+
 def test_backtest_panel_state_lists_trade_operations() -> None:
     config = ProfitSeekingConfig(
         horizon=HorizonPreset.ONE_MONTH,
@@ -241,11 +324,18 @@ def test_backtest_panel_state_lists_trade_operations() -> None:
         minimum_validation_bars=80,
         minimum_trades_for_pass=1,
     )
-    result = run_profit_strategy_backtest("SSE:513300", make_daily_bars(), config=config)
+    result = run_profit_strategy_backtest(
+        "SSE:513300",
+        make_daily_bars(),
+        config=config,
+        include_walk_forward=True,
+    )
 
     panel = BacktestPanelState.from_profit_result(result)
 
     assert panel.trade_count == str(result.trade_count)
+    assert panel.sharpe_ratio != "--"
+    assert panel.walk_forward_consistency != "--"
     assert panel.trades
     assert "买入" in panel.trades[0]
     assert "卖出" in panel.trades[0]

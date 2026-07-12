@@ -54,6 +54,16 @@
 
 TASK-001 至 TASK-025 已完成：当前仓库包含可复现 Python 工程骨架、`src/` 包结构、测试目录、配置/日志启动骨架、CI 骨架、`.gitignore`、`uv.lock`、标准领域模型、类型化错误、数据供应商协议、确定性假供应商、证券主数据、本地搜索索引、历史K线Parquet缓存、增量补缺网关、实时订阅状态、数据质量门禁、按生效日期解析的中国市场规则引擎、PySide6应用外壳、GUI搜索/原子化证券切换、实时/历史图表工作区、确定性指标/因子注册表、策略接口/解释模型、事件驱动回测内核、执行/成本/流动性/公司行为模型、组合/风险引擎、回测报告/固定回归夹具、ETF中期轮动研究基准策略、A股多因子趋势研究基准策略、经过校准的概率预测/不交易引擎、`AnalysisReport` 合成和GUI策略/预期走势/操作风险面板、市场概览/指数/自选列表状态、无真实下单路径的模拟经纪与可恢复账户状态、场外基金正式净值确认和风险比较分析、区分国际理论和中国市场规则的知识中心/上下文帮助，以及Windows PyInstaller打包入口、发布清单、恢复/迁移/观测审计和嵌入式凭据扫描。
 
+## 策略验证状态
+
+2026年7月12日完成盈利验证策略 V2：增加趋势效率、风险调整收益、滚动前推一致性和预测校准门禁。代码改动见 docs/CHANGELOG_2026-07-12.md，真实十标的结果见 docs/research/SHORT_TERM_STRATEGY_VALIDATION_2026-07-12.md。
+
+当前十 ETF 和混合十标的实验综合状态仍为 WATCH，不代表保证盈利。可使用以下命令复现：
+
+    .\.venv\Scripts\python.exe -m china_quant_platform.strategies.lab --strategy-mode short_term --horizon 1m --max-trades 12 --history-years 7 --universe etf10
+
+    .\.venv\Scripts\python.exe -m china_quant_platform.strategies.lab --strategy-mode short_term --horizon 1m --max-trades 12 --history-years 7 --universe mixed10
+
 ## 开发环境
 
 - Python：`3.12`

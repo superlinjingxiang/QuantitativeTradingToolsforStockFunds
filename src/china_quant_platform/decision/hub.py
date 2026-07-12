@@ -201,7 +201,8 @@ def _profitability_gate(
     if not profitability.has_benchmark_comparison:
         reasons.append("缺少基准比较，不能证明相对优势。")
     elif profitability.excess_return is not None and profitability.excess_return <= 0:
-        reasons.append("相对基准超额收益未为正。")
+        if not _risk_adjusted_benchmark_passed(request, profitability):
+            reasons.append("相对基准超额未为正，风险调整收益或回撤改善也未通过。")
 
     if reasons:
         return EvidenceGate(
@@ -214,7 +215,26 @@ def _profitability_gate(
         gate_id="profitability-evidence",
         name="历史赚钱证据",
         status=EvidenceGateStatus.PASS,
-        reasons=("扣除成本后的收益、回撤、交易次数和基准比较通过。",),
+        reasons=("扣除成本后的收益、回撤、交易次数和基准/风险调整比较通过。",),
+    )
+
+
+def _risk_adjusted_benchmark_passed(
+    request: DecisionRequest,
+    profitability: ProfitabilityEvidence,
+) -> bool:
+    if (
+        profitability.total_return is None
+        or profitability.total_return <= 0
+        or profitability.sharpe_ratio is None
+        or profitability.sharpe_ratio < request.min_sharpe_ratio
+        or profitability.max_drawdown is None
+        or profitability.benchmark_max_drawdown is None
+        or profitability.benchmark_max_drawdown >= 0
+    ):
+        return False
+    return abs(profitability.max_drawdown) <= abs(profitability.benchmark_max_drawdown) * (
+        1.0 - request.min_drawdown_improvement
     )
 
 

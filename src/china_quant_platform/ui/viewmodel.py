@@ -48,6 +48,7 @@ from china_quant_platform.strategies.profit_validation import (
     ProfitSeekingConfig,
     ProfitValidationStatus,
     horizon_parameters,
+    profit_strategy_config,
     run_profit_strategy_backtest,
 )
 from china_quant_platform.ui.state import (
@@ -1865,31 +1866,10 @@ def _profit_strategy_config(
     horizon: HorizonPreset,
     max_trades_per_year: int,
 ) -> ProfitSeekingConfig:
-    parameters = horizon_parameters(horizon)
-    if mode is StrategyMode.LONG_TERM:
-        return ProfitSeekingConfig(
-            horizon=horizon,
-            max_trades_per_year=max_trades_per_year,
-            max_annual_volatility=0.58,
-            stop_loss_pct=0.18,
-            minimum_oos_bars=max(120, parameters.holding_days),
-            minimum_validation_bars=120,
-            minimum_trades_for_pass=max(1, min(2, max_trades_per_year)),
-            threshold_candidates=(0.20, 0.28, 0.36, 0.45, 0.55),
-            strategy_id="strategy.profit_validation_long_term",
-            strategy_version="profit-validation-long-v1",
-        )
-    return ProfitSeekingConfig(
-        horizon=horizon,
-        max_trades_per_year=max_trades_per_year,
-        max_annual_volatility=0.78,
-        stop_loss_pct=0.10,
-        minimum_oos_bars=max(80, parameters.holding_days),
-        minimum_validation_bars=80,
-        minimum_trades_for_pass=max(1, min(3, max_trades_per_year)),
-        threshold_candidates=(0.10, 0.14, 0.18, 0.25, 0.32, 0.40),
-        strategy_id="strategy.profit_validation_short_term",
-        strategy_version="profit-validation-short-v1",
+    return profit_strategy_config(
+        "long_term" if mode is StrategyMode.LONG_TERM else "short_term",
+        horizon,
+        max_trades_per_year,
     )
 
 
@@ -1922,9 +1902,9 @@ def _analysis_report_from_profit_backtest(
         else "strategy.profit_validation_short_term"
     )
     strategy_version = (
-        "profit-validation-long-v1"
+        "profit-validation-long-v2"
         if mode is StrategyMode.LONG_TERM
-        else "profit-validation-short-v1"
+        else "profit-validation-short-v2"
     )
     return AnalysisReport(
         security_id=security.security_id,
@@ -1941,13 +1921,13 @@ def _analysis_report_from_profit_backtest(
         positive_drivers=_profit_positive_drivers(backtest, forecast, mode),
         negative_drivers=_profit_negative_drivers(backtest, data_health, forecast),
         model_version=forecast.model_version,
-        rule_version="rules-profit-validation-short-v1"
+        rule_version="rules-profit-validation-short-v2"
         if mode is StrategyMode.SHORT_TERM
-        else "rules-profit-validation-long-v1",
+        else "rules-profit-validation-long-v2",
         data_snapshot_id=f"profit-validation:{len(bars)}-daily-bars",
         expected_return_quantiles=_profit_expected_return_quantiles(backtest, forecast),
         expected_drawdown=forecast.expected_drawdown,
-        grade=backtest.reliability_grade.value,
+        grade=_effective_reliability_grade(backtest, forecast),
         target_position_limit=_target_position_limit(final_signal, backtest, forecast, mode),
         exit_or_invalidation_conditions=_profit_invalidation_conditions(backtest, mode),
         abstain_reason=_profit_abstain_reason(backtest, data_health, forecast),
@@ -1963,14 +1943,21 @@ def _profitability_evidence_from_backtest(
         strategy_version=_strategy_version_for_horizon(backtest.horizon),
         total_return=backtest.total_return,
         annualized_return=backtest.annualized_return,
+        annualized_volatility=backtest.annualized_volatility,
+        sharpe_ratio=backtest.sharpe_ratio,
+        calmar_ratio=backtest.calmar_ratio,
         max_drawdown=backtest.max_drawdown,
         benchmark_total_return=backtest.benchmark_total_return,
+        benchmark_max_drawdown=backtest.benchmark_max_drawdown,
         excess_return=backtest.excess_return,
         trade_count=backtest.trade_count,
         turnover=backtest.turnover,
         cost_drag=backtest.cost_drag,
         calibration_sample_count=backtest.calibration_sample_count,
         brier_score=backtest.brier_score,
+        walk_forward_positive_ratio=backtest.walk_forward_positive_ratio,
+        walk_forward_excess_ratio=backtest.walk_forward_excess_ratio,
+        walk_forward_median_return=backtest.walk_forward_median_return,
         checksum=backtest.checksum,
         notes=backtest.notes,
     )
@@ -1984,8 +1971,8 @@ def _strategy_id_for_horizon(horizon: HorizonPreset) -> str:
 
 def _strategy_version_for_horizon(horizon: HorizonPreset) -> str:
     if horizon in {HorizonPreset.SIX_MONTHS, HorizonPreset.ONE_YEAR}:
-        return "profit-validation-long-v1"
-    return "profit-validation-short-v1"
+        return "profit-validation-long-v2"
+    return "profit-validation-short-v2"
 
 
 def _profit_analysis_signal(
@@ -2003,11 +1990,18 @@ def _profit_analysis_signal(
     p05 = forecast.expected_return_quantiles.get("p05", -1.0)
     pass_like = backtest.status is ProfitValidationStatus.PASS
     enough_forecast = forecast.similar_sample_count >= 25 and forecast.confidence >= 0.28
+    calibrated_forecast = _forecast_validation_passes(forecast)
     if probabilities.down >= 0.58 and p50 <= 0:
         return FinalSignal.SELL
     if probabilities.down >= 0.48 and p50 <= 0:
         return FinalSignal.REDUCE
-    if pass_like and enough_forecast and probabilities.up >= 0.48 and p50 > 0:
+    if (
+        pass_like
+        and enough_forecast
+        and calibrated_forecast
+        and probabilities.up >= 0.48
+        and p50 > 0
+    ):
         return FinalSignal.BUY_CANDIDATE
     if pass_like and p50 > 0 and p05 > -0.12:
         return FinalSignal.HOLD if mode is StrategyMode.LONG_TERM else FinalSignal.WATCH
@@ -2112,6 +2106,18 @@ def _profit_positive_drivers(
         values.append(f"相对买入持有超额 {backtest.excess_return:.2%}。")
     if backtest.trade_count > 0:
         values.append(f"样本外成交 {backtest.trade_count} 次，胜率 {backtest.win_rate:.1%}。")
+    if backtest.sharpe_ratio is not None:
+        values.append(
+            f"样本外Sharpe {backtest.sharpe_ratio:.2f}，Calmar {backtest.calmar_ratio:.2f}。"
+            if backtest.calmar_ratio is not None
+            else f"样本外Sharpe {backtest.sharpe_ratio:.2f}。"
+        )
+    if backtest.walk_forward_positive_ratio is not None:
+        values.append(
+            f"滚动前推有效{backtest.walk_forward_active_folds}折，"
+            f"正收益折占比 {backtest.walk_forward_positive_ratio:.0%}，"
+            f"折中位收益 {(backtest.walk_forward_median_return or 0.0):.2%}。"
+        )
     if backtest.status is ProfitValidationStatus.PASS:
         values.append("盈利、回撤、基准比较三项暂时通过。")
     return tuple(values) or ("暂无足够正向赚钱证据。",)
@@ -2136,6 +2142,13 @@ def _target_position_limit(
     else:
         multiplier = 0.35
     if forecast.confidence < 0.40:
+        multiplier *= 0.60
+    if not _forecast_validation_passes(forecast):
+        multiplier *= 0.50
+    if (
+        backtest.walk_forward_positive_ratio is not None
+        and backtest.walk_forward_positive_ratio < 0.60
+    ):
         multiplier *= 0.60
     if abs(backtest.max_drawdown) > 0.25:
         multiplier *= 0.50
@@ -2176,6 +2189,12 @@ def _profit_negative_drivers(
         values.extend(backtest.notes)
     if backtest.excess_return <= 0:
         values.append(f"相对基准超额未为正：{backtest.excess_return:.2%}。")
+    if backtest.walk_forward_positive_ratio is None:
+        values.append("缺少滚动前推一致性指标，最终留出收益不能单独证明稳定性。")
+    elif backtest.walk_forward_positive_ratio < 0.55:
+        values.append(
+            f"滚动前推正收益折仅 {backtest.walk_forward_positive_ratio:.0%}，跨窗口稳定性不足。"
+        )
     if backtest.trade_count <= 0:
         values.append("样本外没有形成足够交易，不能证明可赚钱。")
     if backtest.brier_score is None:
@@ -2183,6 +2202,31 @@ def _profit_negative_drivers(
     if data_health.block_signal:
         values.extend(f"数据健康阻断：{issue}" for issue in data_health.issues)
     return tuple(dict.fromkeys(values))
+
+
+def _forecast_validation_passes(forecast: IntervalForecastResult) -> bool:
+    validation = forecast.validation
+    if validation is None:
+        return False
+    return (
+        validation.sample_count >= 40
+        and validation.interval_coverage is not None
+        and validation.interval_coverage >= 0.68
+        and validation.downside_breach_rate is not None
+        and validation.downside_breach_rate <= 0.22
+        and validation.direction_brier_score is not None
+        and validation.direction_brier_score <= 0.30
+    )
+
+
+def _effective_reliability_grade(
+    backtest: ProfitBacktestResult,
+    forecast: IntervalForecastResult,
+) -> str:
+    grade = backtest.reliability_grade.value
+    if grade in {"A", "B"} and not _forecast_validation_passes(forecast):
+        return "C"
+    return grade
 
 
 def _profit_invalidation_conditions(
