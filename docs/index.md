@@ -25,8 +25,11 @@
 ## 近期记录
 
 - 2026-07-13 代码变更：CHANGELOG_2026-07-13.md
+- 短线策略 V4 风险暴露与数据快照验证：research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md
 - 短线策略 V3 真实验证：research/SHORT_TERM_STRATEGY_VALIDATION_2026-07-13.md
-- 当前活动执行计划：exec-plans/active/0010-profit-validation-v3.md
+- 当前盈利验证活动计划：exec-plans/active/0011-profit-validation-v4.md
+- 已完成 V3 执行计划：exec-plans/completed/0010-profit-validation-v3.md
+- FastAPI/Vue/Redis 活动计划：exec-plans/active/0008-fastapi-vue-redis-refactor.md
 - 2026-07-12 代码变更：CHANGELOG_2026-07-12.md
 - 短线策略 V2 真实验证：research/SHORT_TERM_STRATEGY_VALIDATION_2026-07-12.md
 - 已完成 V2 执行计划：exec-plans/completed/0009-profit-validation-v2.md

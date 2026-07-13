@@ -42,8 +42,8 @@ EASTMONEY_PROVIDER_ID = "eastmoney"
 QUOTE_URL = "https://push2.eastmoney.com/api/qt/stock/get"
 KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
 YAHOO_CHART_URLS = (
-    "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
     "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}",
+    "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
 )
 QUOTE_FIELDS = "f43,f44,f45,f46,f47,f48,f57,f58,f59,f60,f86"
 EASTMONEY_UT = "fa5fd1943c7b386f172d6893dbfba10b"
@@ -152,6 +152,12 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
                 update={"security_id": _normalize_yahoo_native_security_id(request.security_id)}
             )
             return self._get_yahoo_bars(normalized_request)
+
+        if _prefer_yahoo_for_long_daily_history(request):
+            try:
+                return self._get_yahoo_bars(request)
+            except DataUnavailable:
+                pass
 
         secid = _security_id_to_secid(request.security_id)
         try:
@@ -360,10 +366,18 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
                 source_time,
                 request.interval,
             )
-            adjusted_open = open_price * ratio
-            adjusted_close = close_price * ratio
-            adjusted_high = max(high_price * ratio, adjusted_open, adjusted_close)
-            adjusted_low = min(low_price * ratio, adjusted_open, adjusted_close)
+            adjusted_open = _normalized_history_price(open_price * ratio)
+            adjusted_close = _normalized_history_price(close_price * ratio)
+            adjusted_high = max(
+                _normalized_history_price(high_price * ratio),
+                adjusted_open,
+                adjusted_close,
+            )
+            adjusted_low = min(
+                _normalized_history_price(low_price * ratio),
+                adjusted_open,
+                adjusted_close,
+            )
             received_at = datetime.now(tz=CHINA_TZ)
             if received_at < bar_end_time:
                 received_at = bar_end_time
@@ -766,6 +780,13 @@ def _daily_history_looks_truncated(request: BarsRequest, bars: Sequence[Bar]) ->
     return len(ordered) < minimum_plausible_count and covered_days < requested_days * 0.50
 
 
+def _prefer_yahoo_for_long_daily_history(request: BarsRequest) -> bool:
+    return (
+        request.interval is BarInterval.DAILY
+        and (request.end_time - request.start_time).days >= 730
+    )
+
+
 def _kline_type(interval: BarInterval) -> int:
     match interval:
         case BarInterval.TICK | BarInterval.ONE_MINUTE:
@@ -851,6 +872,10 @@ def _scaled_price(value: object, decimals: int, *, fallback: float | None = None
     scale: float = float(10**decimals)
     normalized_price: float = raw_price / scale
     return normalized_price
+
+
+def _normalized_history_price(value: float) -> float:
+    return round(value, 3)
 
 
 def _sequence_float(

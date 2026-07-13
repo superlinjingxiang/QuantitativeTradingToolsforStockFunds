@@ -85,6 +85,7 @@ class ProfitabilityEvidence(DomainModel):
     trade_count: int = Field(default=0, ge=0)
     turnover: float | None = Field(default=None, ge=0)
     cost_drag: float | None = Field(default=None, ge=0)
+    average_position_fraction: float | None = Field(default=None, gt=0, le=1)
     stress_round_trip_cost_bps: float | None = Field(default=None, ge=0)
     stress_total_return: float | None = None
     stress_max_drawdown: float | None = None

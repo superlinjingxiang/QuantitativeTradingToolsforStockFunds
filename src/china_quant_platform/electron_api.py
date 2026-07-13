@@ -163,7 +163,7 @@ class ElectronBackendService:
                             interval=BarInterval.DAILY,
                             start_time=decision_start,
                             end_time=now,
-                            adjustment=AdjustmentMode.NONE,
+                            adjustment=AdjustmentMode.FORWARD,
                         )
                     )
                 )
@@ -327,7 +327,7 @@ class ElectronBackendService:
                                 interval=BarInterval.DAILY,
                                 start_time=start_time,
                                 end_time=now,
-                                adjustment=AdjustmentMode.NONE,
+                                adjustment=AdjustmentMode.FORWARD,
                             )
                         )
                     )

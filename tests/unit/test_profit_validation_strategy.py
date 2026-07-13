@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, time, timedelta
 
+from china_quant_platform.data import BarsRequest
 from china_quant_platform.domain import (
     AdjustmentMode,
     Bar,
@@ -23,7 +25,7 @@ from china_quant_platform.strategies import (
     run_profit_validation_lab,
     select_profit_threshold,
 )
-from china_quant_platform.strategies.lab import report_summary
+from china_quant_platform.strategies.lab import report_summary, validate_profit_universe
 from china_quant_platform.ui import BacktestPanelState
 
 
@@ -85,6 +87,8 @@ def _daily_return(index: int, regime: str) -> float:
         return -0.012 if index >= 700 else _daily_return(index, "cyclical_up")
     if regime == "late_rally":
         return 0.006 if index >= 700 else _daily_return(index, "cyclical_up")
+    if regime == "volatile_trend":
+        return 0.025 if index % 20 < 12 else -0.015
     cycle = index % 120
     if cycle < 72:
         return 0.0025
@@ -105,9 +109,12 @@ def test_canonical_short_and_long_configs_are_distinct() -> None:
     short = profit_strategy_config("short_term", HorizonPreset.ONE_MONTH, 12)
     long = profit_strategy_config("long_term", HorizonPreset.SIX_MONTHS, 4)
 
-    assert short.strategy_version == "profit-validation-short-v3"
+    assert short.strategy_version == "profit-validation-short-v4"
     assert long.strategy_version == "profit-validation-long-v3"
     assert short.max_annual_volatility > long.max_annual_volatility
+    assert short.target_annual_volatility == 0.20
+    assert long.target_annual_volatility is None
+    assert short.stop_loss_pct == 0.075
     assert short.minimum_validation_bars < long.minimum_validation_bars
     assert short.minimum_trend_efficiency == 0.10
 
@@ -210,6 +217,11 @@ def test_default_etf_validation_lab_builds_aggregate_profitability_evidence() ->
     single_evidence = profitability_evidence_from_validation(report, security_id="SSE:513300")
 
     assert report.aggregate.security_count == 10
+    assert len(report.data_snapshots) == 10
+    assert report.data_snapshots[0].bar_count == 900
+    assert report.data_snapshots[0].providers == ("fixture",)
+    assert report.data_snapshots[0].adjustments == (AdjustmentMode.NONE,)
+    assert len(report.data_snapshots[0].checksum) == 64
     assert report.aggregate.total_trade_count > 0
     assert report.aggregate.status in {
         ProfitValidationStatus.PASS,
@@ -250,6 +262,30 @@ def test_mixed_validation_universe_covers_stocks_and_etfs() -> None:
         "SSE:600519",
         "SSE:513300",
     }
+
+
+def test_validation_lab_requests_forward_adjusted_history() -> None:
+    member = default_etf_validation_universe()[0]
+
+    class CapturingProvider:
+        provider_id = "capture"
+
+        def __init__(self) -> None:
+            self.requests: list[BarsRequest] = []
+
+        async def get_bars(self, request: BarsRequest) -> list[Bar]:
+            self.requests.append(request)
+            return list(make_daily_bars(member.security_id))
+
+    provider = CapturingProvider()
+    report, failures = asyncio.run(
+        validate_profit_universe(provider, universe=(member,), history_years=3)  # type: ignore[arg-type]
+    )
+
+    assert failures == ()
+    assert report.results
+    request = provider.requests[0]
+    assert request.adjustment is AdjustmentMode.FORWARD
 
 
 def test_downtrend_does_not_pass_profit_validation() -> None:
@@ -365,6 +401,36 @@ def test_market_regime_filter_is_configurable_and_explained() -> None:
     assert "价格相对中期均线低于0%时不新开仓" in notes
 
 
+def test_volatility_target_scales_exposure_without_leverage() -> None:
+    base_config = ProfitSeekingConfig(
+        horizon=HorizonPreset.ONE_MONTH,
+        max_trades_per_year=8,
+        minimum_oos_bars=80,
+        minimum_validation_bars=80,
+        minimum_trades_for_pass=1,
+    )
+    scaled_config = base_config.model_copy(
+        update={
+            "target_annual_volatility": 0.10,
+            "minimum_position_fraction": 0.25,
+            "maximum_position_fraction": 1.0,
+        }
+    )
+    bars = make_daily_bars(regime="volatile_trend")
+
+    baseline = run_profit_strategy_backtest("SSE:513300", bars, config=base_config)
+    scaled = run_profit_strategy_backtest("SSE:513300", bars, config=scaled_config)
+
+    assert baseline.trade_count > 0
+    assert scaled.trade_count == baseline.trade_count
+    assert scaled.average_position_fraction is not None
+    assert scaled.average_position_fraction < 1.0
+    assert all(0.25 <= trade.position_fraction <= 1.0 for trade in scaled.trades)
+    assert scaled.turnover < baseline.turnover
+    assert scaled.max_drawdown >= baseline.max_drawdown
+    assert "不使用杠杆" in " ".join(scaled.notes)
+
+
 def test_backtest_panel_state_lists_trade_operations() -> None:
     config = ProfitSeekingConfig(
         horizon=HorizonPreset.ONE_MONTH,
@@ -383,6 +449,7 @@ def test_backtest_panel_state_lists_trade_operations() -> None:
     panel = BacktestPanelState.from_profit_result(result)
 
     assert panel.trade_count == str(result.trade_count)
+    assert panel.average_position_fraction != "--"
     assert panel.sharpe_ratio != "--"
     assert panel.walk_forward_consistency != "--"
     assert panel.cost_stress != "--"
@@ -390,6 +457,7 @@ def test_backtest_panel_state_lists_trade_operations() -> None:
     assert "买入" in panel.trades[0]
     assert "卖出" in panel.trades[0]
     assert "收益" in panel.trades[0]
+    assert "暴露" in panel.trades[0]
 
 
 def _relabel_and_continue(

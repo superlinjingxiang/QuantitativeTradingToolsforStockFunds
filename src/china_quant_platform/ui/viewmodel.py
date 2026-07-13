@@ -1057,7 +1057,7 @@ class ApplicationViewModel(QtCore.QObject):
                 interval=BarInterval.DAILY,
                 start_time=decision_start_time,
                 end_time=end_time,
-                adjustment=adjustment,
+                adjustment=AdjustmentMode.FORWARD,
             )
             bars_result, decision_bars_result, quote = await asyncio.gather(
                 _run_provider_operation(lambda: provider.get_bars(request)),
@@ -1904,7 +1904,7 @@ def _analysis_report_from_profit_backtest(
     strategy_version = (
         "profit-validation-long-v3"
         if mode is StrategyMode.LONG_TERM
-        else "profit-validation-short-v3"
+        else "profit-validation-short-v4"
     )
     return AnalysisReport(
         security_id=security.security_id,
@@ -1921,7 +1921,7 @@ def _analysis_report_from_profit_backtest(
         positive_drivers=_profit_positive_drivers(backtest, forecast, mode),
         negative_drivers=_profit_negative_drivers(backtest, data_health, forecast),
         model_version=forecast.model_version,
-        rule_version="rules-profit-validation-short-v3"
+        rule_version="rules-profit-validation-short-v4"
         if mode is StrategyMode.SHORT_TERM
         else "rules-profit-validation-long-v3",
         data_snapshot_id=f"profit-validation:{len(bars)}-daily-bars",
@@ -1953,6 +1953,7 @@ def _profitability_evidence_from_backtest(
         trade_count=backtest.trade_count,
         turnover=backtest.turnover,
         cost_drag=backtest.cost_drag,
+        average_position_fraction=backtest.average_position_fraction,
         stress_round_trip_cost_bps=backtest.stress_round_trip_cost_bps,
         stress_total_return=backtest.stress_total_return,
         stress_max_drawdown=backtest.stress_max_drawdown,
@@ -1977,7 +1978,7 @@ def _strategy_id_for_horizon(horizon: HorizonPreset) -> str:
 def _strategy_version_for_horizon(horizon: HorizonPreset) -> str:
     if horizon in {HorizonPreset.SIX_MONTHS, HorizonPreset.ONE_YEAR}:
         return "profit-validation-long-v3"
-    return "profit-validation-short-v3"
+    return "profit-validation-short-v4"
 
 
 def _profit_analysis_signal(
@@ -2117,6 +2118,11 @@ def _profit_positive_drivers(
         values.append(f"相对买入持有超额 {backtest.excess_return:.2%}。")
     if backtest.trade_count > 0:
         values.append(f"样本外成交 {backtest.trade_count} 次，胜率 {backtest.win_rate:.1%}。")
+    if backtest.average_position_fraction is not None:
+        values.append(
+            f"20%目标波动下历史平均策略暴露 {backtest.average_position_fraction:.0%}，"
+            "高波动阶段只减仓、不加杠杆。"
+        )
     if backtest.sharpe_ratio is not None:
         values.append(
             f"样本外Sharpe {backtest.sharpe_ratio:.2f}，Calmar {backtest.calmar_ratio:.2f}。"
@@ -2168,6 +2174,8 @@ def _target_position_limit(
         multiplier *= 0.60
     if abs(backtest.max_drawdown) > 0.25:
         multiplier *= 0.50
+    if backtest.average_position_fraction is not None:
+        multiplier *= min(1.0, backtest.average_position_fraction)
     return round(base * multiplier, 4)
 
 
@@ -2205,6 +2213,11 @@ def _profit_negative_drivers(
         values.extend(backtest.notes)
     if backtest.excess_return <= 0:
         values.append(f"相对基准超额未为正：{backtest.excess_return:.2%}。")
+    if backtest.average_position_fraction is not None and backtest.average_position_fraction < 0.75:
+        values.append(
+            f"历史平均暴露仅 {backtest.average_position_fraction:.0%}："
+            "标的波动较高，账户建议已同步降低仓位上限。"
+        )
     if backtest.walk_forward_positive_ratio is None:
         values.append("缺少滚动前推一致性指标，最终留出收益不能单独证明稳定性。")
     elif backtest.walk_forward_positive_ratio < 0.55:

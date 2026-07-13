@@ -77,7 +77,7 @@ async def validate_profit_universe(
                     interval=BarInterval.DAILY,
                     start_time=start_time,
                     end_time=end_time,
-                    adjustment=AdjustmentMode.NONE,
+                    adjustment=AdjustmentMode.FORWARD,
                 )
             )
         except Exception as exc:  # pragma: no cover - provider exceptions vary.
@@ -105,6 +105,7 @@ def report_summary(
     return {
         "provider": provider_id,
         "config": report.config.to_contract_dict(),
+        "data_snapshots": [snapshot.to_contract_dict() for snapshot in report.data_snapshots],
         "aggregate": report.aggregate.to_contract_dict(),
         "results": [
             {
@@ -120,6 +121,7 @@ def report_summary(
                 "benchmark_max_drawdown": result.benchmark_max_drawdown,
                 "excess_return": result.excess_return,
                 "trade_count": result.trade_count,
+                "average_position_fraction": result.average_position_fraction,
                 "win_rate": result.win_rate,
                 "brier_score": result.brier_score,
                 "walk_forward_active_folds": result.walk_forward_active_folds,

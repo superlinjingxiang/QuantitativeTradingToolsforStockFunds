@@ -14,7 +14,7 @@ from typing import Literal, Self
 from pydantic import Field, model_validator
 
 from china_quant_platform.decision.models import ProfitabilityEvidence
-from china_quant_platform.domain import AssetType, Bar, Exchange
+from china_quant_platform.domain import AdjustmentMode, AssetType, Bar, Exchange
 from china_quant_platform.domain.base import DomainModel
 from china_quant_platform.domain.identifiers import NonEmptyString
 
@@ -217,6 +217,9 @@ class ProfitSeekingConfig(DomainModel):
     round_trip_cost_bps: float = Field(default=15.0, ge=0)
     cost_stress_multiplier: float = Field(default=3.0, ge=1.0)
     max_annual_volatility: float = Field(default=0.65, gt=0)
+    target_annual_volatility: float | None = Field(default=None, gt=0)
+    minimum_position_fraction: float = Field(default=0.25, gt=0, le=1)
+    maximum_position_fraction: float = Field(default=1.0, gt=0, le=1)
     min_volume_confirmation: float = Field(default=0.80, ge=0)
     min_liquidity_confirmation: float = Field(default=0.30, ge=0, le=1)
     max_short_momentum_for_entry: float = Field(default=1.0, gt=0, le=1)
@@ -234,7 +237,7 @@ class ProfitSeekingConfig(DomainModel):
     minimum_drawdown_improvement: float = Field(default=0.20, ge=0, le=1)
     threshold_candidates: tuple[float, ...] = (0.18, 0.25, 0.32, 0.40, 0.50)
     strategy_id: NonEmptyString = "strategy.etf_profit_validation"
-    strategy_version: NonEmptyString = "profit-validation-v3"
+    strategy_version: NonEmptyString = "profit-validation-v4"
 
     @model_validator(mode="after")
     def validate_thresholds(self) -> Self:
@@ -244,6 +247,8 @@ class ProfitSeekingConfig(DomainModel):
             raise ValueError("threshold_candidates must stay within [-1, 1]")
         if self.final_test_fraction + self.validation_fraction >= 0.80:
             raise ValueError("validation and final test fractions leave too little training data")
+        if self.minimum_position_fraction > self.maximum_position_fraction:
+            raise ValueError("minimum_position_fraction must not exceed maximum_position_fraction")
         return self
 
 
@@ -273,6 +278,7 @@ class ProfitBacktestTrade(DomainModel):
     holding_days: int = Field(ge=0)
     signal_score: float = Field(ge=-1, le=1)
     predicted_probability: float = Field(ge=0, le=1)
+    position_fraction: float = Field(default=1.0, gt=0, le=1)
     gross_return: float
     net_return: float
     exit_reason: NonEmptyString
@@ -333,6 +339,7 @@ class ProfitBacktestResult(DomainModel):
     trade_count: int = Field(ge=0)
     turnover: float = Field(ge=0)
     cost_drag: float = Field(ge=0)
+    average_position_fraction: float | None = Field(default=None, gt=0, le=1)
     stress_round_trip_cost_bps: float | None = Field(default=None, ge=0)
     stress_total_return: float | None = None
     stress_max_drawdown: float | None = None
@@ -370,9 +377,20 @@ class ProfitValidationAggregate(DomainModel):
     notes: tuple[NonEmptyString, ...]
 
 
+class ValidationDataSnapshot(DomainModel):
+    security_id: NonEmptyString
+    providers: tuple[NonEmptyString, ...]
+    adjustments: tuple[AdjustmentMode, ...]
+    bar_count: int = Field(ge=0)
+    start_date: date | None = None
+    end_date: date | None = None
+    checksum: NonEmptyString
+
+
 class ProfitValidationReport(DomainModel):
     config: ProfitSeekingConfig
     universe: tuple[DefaultValidationSecurity, ...]
+    data_snapshots: tuple[ValidationDataSnapshot, ...]
     results: tuple[ProfitBacktestResult, ...]
     aggregate: ProfitValidationAggregate
     checksum: NonEmptyString
@@ -391,6 +409,7 @@ class _OpenPosition:
     shares: float
     signal_score: float
     predicted_probability: float
+    position_fraction: float
     trailing_peak: float
 
 
@@ -462,14 +481,15 @@ def profit_strategy_config(
     return ProfitSeekingConfig(
         horizon=horizon,
         max_trades_per_year=max_trades_per_year,
+        target_annual_volatility=0.20,
         max_annual_volatility=0.78,
-        stop_loss_pct=0.10,
+        stop_loss_pct=0.075,
         minimum_oos_bars=max(80, parameters.holding_days),
         minimum_validation_bars=80,
         minimum_trades_for_pass=max(1, min(3, max_trades_per_year)),
         threshold_candidates=(0.10, 0.14, 0.18, 0.25, 0.32, 0.40),
         strategy_id="strategy.profit_validation_short_term",
-        strategy_version="profit-validation-short-v3",
+        strategy_version="profit-validation-short-v4",
     )
 
 
@@ -492,8 +512,10 @@ def run_profit_validation_lab(
     active_config = config or ProfitSeekingConfig()
     active_universe = tuple(universe or DEFAULT_ETF_VALIDATION_UNIVERSE)
     results: list[ProfitBacktestResult] = []
+    data_snapshots: list[ValidationDataSnapshot] = []
     for member in active_universe:
         bars = bars_by_security.get(member.security_id, ())
+        data_snapshots.append(_validation_data_snapshot(member.security_id, bars))
         results.append(
             run_profit_strategy_backtest(
                 member.security_id,
@@ -503,11 +525,19 @@ def run_profit_validation_lab(
             )
         )
     result_tuple = tuple(results)
+    snapshot_tuple = tuple(data_snapshots)
     aggregate = _aggregate_results(result_tuple)
-    checksum = _validation_checksum(active_config, active_universe, result_tuple, aggregate)
+    checksum = _validation_checksum(
+        active_config,
+        active_universe,
+        snapshot_tuple,
+        result_tuple,
+        aggregate,
+    )
     return ProfitValidationReport(
         config=active_config,
         universe=active_universe,
+        data_snapshots=snapshot_tuple,
         results=result_tuple,
         aggregate=aggregate,
         checksum=checksum,
@@ -735,6 +765,7 @@ def profitability_evidence_from_validation(
             trade_count=result.trade_count,
             turnover=result.turnover,
             cost_drag=result.cost_drag,
+            average_position_fraction=result.average_position_fraction,
             stress_round_trip_cost_bps=result.stress_round_trip_cost_bps,
             stress_total_return=result.stress_total_return,
             stress_max_drawdown=result.stress_max_drawdown,
@@ -766,6 +797,16 @@ def profitability_evidence_from_validation(
         trade_count=aggregate.total_trade_count,
         turnover=None,
         cost_drag=sum(result.cost_drag for result in report.results),
+        average_position_fraction=(
+            sum(
+                result.average_position_fraction
+                for result in report.results
+                if result.average_position_fraction is not None
+            )
+            / sum(result.average_position_fraction is not None for result in report.results)
+            if any(result.average_position_fraction is not None for result in report.results)
+            else None
+        ),
         calibration_sample_count=sum(result.calibration_sample_count for result in report.results),
         brier_score=average_brier,
         checksum=report.checksum,
@@ -807,14 +848,14 @@ def _simulate_strategy(
     for index in range(start_index, end_index + 1):
         bar = bars[index]
         if pending_entry is not None and position is None:
-            position = _open_position(
+            position, cash = _open_position(
                 index=index,
                 bar=bar,
                 cash=cash,
                 half_cost_rate=half_cost_rate,
                 pending_entry=pending_entry,
+                config=config,
             )
-            cash = 0.0
             last_entry_index = index
             entries_per_year[position.entry_date.year] = (
                 entries_per_year.get(position.entry_date.year, 0) + 1
@@ -829,6 +870,7 @@ def _simulate_strategy(
                 shares=position.shares,
                 signal_score=position.signal_score,
                 predicted_probability=position.predicted_probability,
+                position_fraction=position.position_fraction,
                 trailing_peak=max(position.trailing_peak, bar.close_price),
             )
             exit_reason = _exit_reason(
@@ -844,6 +886,7 @@ def _simulate_strategy(
                     security_id=security_id,
                     index=index,
                     bar=bar,
+                    cash_reserve=cash,
                     position=position,
                     half_cost_rate=half_cost_rate,
                     exit_reason=exit_reason,
@@ -851,7 +894,7 @@ def _simulate_strategy(
                 trades.append(trade)
                 position = None
 
-        nav = cash if position is None else position.shares * bar.close_price
+        nav = cash if position is None else cash + position.shares * bar.close_price
         benchmark_value = 1.0 if benchmark_start <= 0 else bar.close_price / benchmark_start
         equity_curve.append(
             ProfitEquityPoint(
@@ -889,6 +932,7 @@ def _simulate_strategy(
             security_id=security_id,
             index=end_index,
             bar=final_bar,
+            cash_reserve=cash,
             position=position,
             half_cost_rate=half_cost_rate,
             exit_reason="end_of_sample_liquidation",
@@ -920,9 +964,12 @@ def _open_position(
     cash: float,
     half_cost_rate: float,
     pending_entry: _PendingEntry,
-) -> _OpenPosition:
+    config: ProfitSeekingConfig,
+) -> tuple[_OpenPosition, float]:
     entry_price = max(bar.open_price, 1e-12)
-    shares = cash / (entry_price * (1.0 + half_cost_rate))
+    position_fraction = _position_fraction(pending_entry.features, config=config)
+    allocated_cash = cash * position_fraction
+    shares = allocated_cash / (entry_price * (1.0 + half_cost_rate))
     return _OpenPosition(
         entry_index=index,
         entry_date=bar.trade_date,
@@ -930,8 +977,9 @@ def _open_position(
         shares=shares,
         signal_score=pending_entry.features.score,
         predicted_probability=pending_entry.features.predicted_probability,
+        position_fraction=position_fraction,
         trailing_peak=max(bar.high_price, bar.close_price, entry_price),
-    )
+    ), cash - allocated_cash
 
 
 def _close_position(
@@ -939,12 +987,13 @@ def _close_position(
     security_id: str,
     index: int,
     bar: Bar,
+    cash_reserve: float,
     position: _OpenPosition,
     half_cost_rate: float,
     exit_reason: str,
 ) -> tuple[float, ProfitBacktestTrade]:
     exit_price = max(bar.close_price, 1e-12)
-    cash = position.shares * exit_price * (1.0 - half_cost_rate)
+    cash = cash_reserve + position.shares * exit_price * (1.0 - half_cost_rate)
     gross_return = exit_price / position.entry_price - 1.0
     net_return = (
         cash - 1.0
@@ -961,9 +1010,26 @@ def _close_position(
         holding_days=max(0, index - position.entry_index),
         signal_score=position.signal_score,
         predicted_probability=position.predicted_probability,
+        position_fraction=position.position_fraction,
         gross_return=gross_return,
         net_return=net_return,
         exit_reason=exit_reason,
+    )
+
+
+def _position_fraction(
+    features: ProfitSignalFeatures,
+    *,
+    config: ProfitSeekingConfig,
+) -> float:
+    if config.target_annual_volatility is None:
+        return 1.0
+    if features.annualized_volatility <= 1e-12:
+        return config.maximum_position_fraction
+    unbounded = config.target_annual_volatility / features.annualized_volatility
+    return max(
+        config.minimum_position_fraction,
+        min(config.maximum_position_fraction, unbounded),
     )
 
 
@@ -1120,8 +1186,10 @@ def _build_result(
     calmar_ratio = annualized_return / abs(max_drawdown) if max_drawdown < -1e-12 else None
     wins = sum(1 for trade in trades if trade.net_return > 0)
     win_rate = 0.0 if not trades else wins / len(trades)
-    cost_drag = len(trades) * config.round_trip_cost_bps / 10_000.0
-    turnover = float(len(trades) * 2)
+    total_position_fraction = sum(trade.position_fraction for trade in trades)
+    cost_drag = total_position_fraction * config.round_trip_cost_bps / 10_000.0
+    turnover = total_position_fraction * 2.0
+    average_position_fraction = total_position_fraction / len(trades) if trades else None
     probabilities = tuple(trade.predicted_probability for trade in trades)
     outcomes = tuple(1 if trade.net_return > 0 else 0 for trade in trades)
     brier_score = _brier_score(probabilities, outcomes) if probabilities else None
@@ -1162,6 +1230,7 @@ def _build_result(
         trade_count=len(trades),
         turnover=turnover,
         cost_drag=cost_drag,
+        average_position_fraction=average_position_fraction,
         calibration_sample_count=len(outcomes),
         brier_score=brier_score,
         trades_per_year=trades_per_year,
@@ -1232,6 +1301,7 @@ def _result_notes(
     notes = [
         "收益为扣除简化往返成本后的历史样本外结果，不代表保证未来收益。",
         f"交易次数按每年最大{config.max_trades_per_year}次约束。",
+        f"跟踪止损阈值为{config.stop_loss_pct:.1%}，按收盘价确认退出。",
         "入场同时检查动量、趋势、波动、回撤、成交量确认和流动性，避免只凭价格追涨。",
     ]
     if config.max_short_momentum_for_entry < 1.0:
@@ -1244,6 +1314,12 @@ def _result_notes(
         notes.append(f"中期状态收益低于{config.minimum_regime_momentum:.0%}时不新开仓。")
     if config.minimum_regime_trend_strength > -1:
         notes.append(f"价格相对中期均线低于{config.minimum_regime_trend_strength:.0%}时不新开仓。")
+    if config.target_annual_volatility is not None:
+        notes.append(
+            f"按{config.target_annual_volatility:.0%}年化目标波动缩放历史仓位，"
+            f"单次暴露限制在{config.minimum_position_fraction:.0%}-"
+            f"{config.maximum_position_fraction:.0%}，不使用杠杆。"
+        )
     if status is ProfitValidationStatus.PASS:
         notes.append("样本外净收益、回撤及正超额或风险调整比较暂时通过。")
     elif trade_count < config.minimum_trades_for_pass:
@@ -1651,6 +1727,7 @@ def _result_checksum(result: ProfitBacktestResult) -> str:
 def _validation_checksum(
     config: ProfitSeekingConfig,
     universe: Sequence[DefaultValidationSecurity],
+    data_snapshots: Sequence[ValidationDataSnapshot],
     results: Sequence[ProfitBacktestResult],
     aggregate: ProfitValidationAggregate,
 ) -> str:
@@ -1658,9 +1735,41 @@ def _validation_checksum(
         {
             "config": config.to_contract_dict(),
             "universe": [member.to_contract_dict() for member in universe],
+            "data_snapshots": [snapshot.to_contract_dict() for snapshot in data_snapshots],
             "results": [result.to_contract_dict() for result in results],
             "aggregate": aggregate.to_contract_dict(),
         }
+    )
+
+
+def _validation_data_snapshot(
+    security_id: str,
+    bars: Sequence[Bar],
+) -> ValidationDataSnapshot:
+    sorted_bars = _sorted_bars(security_id, bars)
+    payload = [
+        {
+            "trade_date": bar.trade_date.isoformat(),
+            "open": bar.open_price,
+            "high": bar.high_price,
+            "low": bar.low_price,
+            "close": bar.close_price,
+            "volume": bar.volume,
+            "adjustment": bar.adjustment.value,
+            "provider": bar.provider,
+        }
+        for bar in sorted_bars
+    ]
+    return ValidationDataSnapshot(
+        security_id=security_id,
+        providers=tuple(sorted({bar.provider for bar in sorted_bars})),
+        adjustments=tuple(
+            sorted({bar.adjustment for bar in sorted_bars}, key=lambda item: item.value)
+        ),
+        bar_count=len(sorted_bars),
+        start_date=sorted_bars[0].trade_date if sorted_bars else None,
+        end_date=sorted_bars[-1].trade_date if sorted_bars else None,
+        checksum=_stable_checksum(payload),
     )
 
 

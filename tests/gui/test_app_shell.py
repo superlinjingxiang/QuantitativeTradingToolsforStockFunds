@@ -395,6 +395,10 @@ def test_online_provider_searches_code_and_loads_chart(qtbot: Any) -> None:
     assert "HEALTHY" in window.health_banner.text()
     assert "2026-06-29" in window.market_time_label.text()
     assert provider.bar_requests[0].interval is BarInterval.DAILY
+    assert any(
+        request.interval is BarInterval.DAILY and request.adjustment is AdjustmentMode.FORWARD
+        for request in provider.bar_requests
+    )
 
     backtest_label = window.findChild(QtWidgets.QLabel, "backtestSummaryText")
     metrics_label = window.findChild(QtWidgets.QLabel, "backtestMetricsText")
@@ -471,6 +475,10 @@ def test_chart_controls_reload_online_market_data(qtbot: Any) -> None:
     qtbot.waitUntil(lambda: len(provider.bar_requests) >= 2, timeout=1000)
     assert any(
         request.interval is BarInterval.ONE_MINUTE and request.adjustment is AdjustmentMode.FORWARD
+        for request in provider.bar_requests
+    )
+    assert any(
+        request.interval is BarInterval.DAILY and request.adjustment is AdjustmentMode.FORWARD
         for request in provider.bar_requests
     )
 

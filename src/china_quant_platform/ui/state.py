@@ -139,6 +139,7 @@ class BacktestPanelState(DomainModel):
     excess_return: str = "--"
     win_rate: str = "--"
     trade_count: str = "--"
+    average_position_fraction: str = "--"
     brier_score: str = "--"
     reliability_grade: str = "--"
     walk_forward_consistency: str = "--"
@@ -165,6 +166,11 @@ class BacktestPanelState(DomainModel):
             excess_return=_format_percent(result.excess_return),
             win_rate=_format_percent(result.win_rate),
             trade_count=str(result.trade_count),
+            average_position_fraction=(
+                "--"
+                if result.average_position_fraction is None
+                else _format_percent(result.average_position_fraction)
+            ),
             brier_score="--" if result.brier_score is None else f"{result.brier_score:.4f}",
             reliability_grade=result.reliability_grade.value,
             walk_forward_consistency=(
@@ -881,6 +887,7 @@ def _profit_trade_summaries(result: ProfitBacktestResult) -> tuple[str, ...]:
         values.append(
             f"{index}. 买入 {trade.entry_date.isoformat()} @ {trade.entry_price:.3f}；"
             f"卖出 {trade.exit_date.isoformat()} @ {trade.exit_price:.3f}；"
+            f"暴露 {_format_percent(trade.position_fraction)}；"
             f"收益 {_format_percent(trade.net_return)}；原因 {trade.exit_reason}"
         )
     return tuple(values)

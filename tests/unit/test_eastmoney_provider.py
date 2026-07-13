@@ -134,12 +134,14 @@ def test_eastmoney_long_history_uses_longer_yahoo_result_when_response_is_trunca
     monkeypatch: MonkeyPatch,
 ) -> None:
     provider = EastmoneyMarketDataProvider()
+    requested_urls: list[str] = []
 
     def fake_get_json(
         url: str,
         _params: Mapping[str, object],
         **_kwargs: object,
     ) -> Mapping[str, Any]:
+        requested_urls.append(url)
         if "eastmoney.com" in url:
             return {
                 "data": {"klines": ["2026-06-29,2.652,2.668,2.671,2.642,1572452,418140505.000"]}
@@ -159,6 +161,7 @@ def test_eastmoney_long_history_uses_longer_yahoo_result_when_response_is_trunca
 
     assert len(bars) == 2
     assert all(bar.provider == "yahoo" for bar in bars)
+    assert all("finance.yahoo.com" in url for url in requested_urls)
 
 
 def test_yahoo_daily_fallback_normalizes_ohlc_and_received_time(
