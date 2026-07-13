@@ -809,8 +809,20 @@ def _core_indicators_from_strategy(report: AnalysisReport) -> tuple[str, ...]:
     if "long_term" in report.strategy_id:
         return ("中长期趋势", "相对强弱", "回撤", "波动稳定性", "滚动校准")
     if "short_term" in report.strategy_id:
-        return ("短中期动量", "成交量确认", "波动/回撤", "相似区间预测", "样本外回测")
+        indicators = ["短中期动量", "成交量确认", "波动/回撤", "相似区间预测", "样本外回测"]
+        if _is_a_share_stock_id(report.security_id):
+            indicators.insert(1, "A股3%/20%反追涨")
+        return tuple(indicators)
     return ("动量", "趋势", "波动", "回撤", "样本外回测")
+
+
+def _is_a_share_stock_id(security_id: str) -> bool:
+    exchange, _separator, symbol = security_id.partition(":")
+    if exchange == "SSE":
+        return symbol.startswith(("600", "601", "603", "605", "688", "689"))
+    if exchange == "SZSE":
+        return symbol.startswith(("000", "001", "002", "003", "300", "301"))
+    return False
 
 
 def _sample_count_from_report(report: AnalysisReport) -> str:

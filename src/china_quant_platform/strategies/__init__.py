@@ -38,6 +38,7 @@ from china_quant_platform.strategies.etf_rotation import (
     cost_turnover_sensitivity,
 )
 from china_quant_platform.strategies.profit_validation import (
+    DEFAULT_A_SHARE_VALIDATION_UNIVERSE,
     DEFAULT_ETF_VALIDATION_UNIVERSE,
     DEFAULT_MIXED_VALIDATION_UNIVERSE,
     DefaultValidationSecurity,
@@ -56,6 +57,7 @@ from china_quant_platform.strategies.profit_validation import (
     ThresholdSelection,
     ValidationDataSnapshot,
     WalkForwardFoldResult,
+    default_a_share_validation_universe,
     default_etf_validation_universe,
     default_mixed_validation_universe,
     horizon_parameters,
@@ -96,6 +98,7 @@ __all__ = [
     "EtfSignalFeatures",
     "EtfUniverseMember",
     "ResearchStatus",
+    "DEFAULT_A_SHARE_VALIDATION_UNIVERSE",
     "DEFAULT_ETF_VALIDATION_UNIVERSE",
     "DEFAULT_MIXED_VALIDATION_UNIVERSE",
     "DefaultValidationSecurity",
@@ -115,6 +118,7 @@ __all__ = [
     "ValidationDataSnapshot",
     "WalkForwardFoldResult",
     "cost_turnover_sensitivity",
+    "default_a_share_validation_universe",
     "default_etf_validation_universe",
     "default_mixed_validation_universe",
     "evaluate_strategy",

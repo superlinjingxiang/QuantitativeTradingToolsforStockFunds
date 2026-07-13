@@ -67,3 +67,16 @@
 真实前复权复跑结果：十 ETF 为 2/10 PASS、平均收益 17.81%、平均最大回撤 -10.93%；混合十标的为 2/10 PASS、平均收益 8.02%、平均最大回撤 -12.68%。五只 A 股为 0/5 PASS，因此综合状态仍为 `WATCH`，不能宣称策略已具备通用盈利能力。完整方法、逐标的证据和报告校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`。
 
 V4 发布检查：Ruff format、Ruff lint、mypy 通过；Python `269 passed`；Vitest `1 passed`；Vite build 和 Playwright `2 passed`。FastAPI TestClient 仍有 1 条上游弃用警告，ECharts 构建仍有分包体积告警。
+
+## 盈利验证 V5
+
+- 新增正式 `stock10` 验证池，覆盖消费、银行、保险、医药、制造、券商、公用事业、金融科技、电子和资源材料十类 A 股。
+- 短线策略版本升级为 `profit-validation-short-v5`。
+- 仅对 A 股个股启用反追涨约束：信号日前单日涨幅不得超过 3%，21 日动量不得超过 20%；ETF 保持 V4 行为。
+- 参数先在十 A 股前 75% 历史开发折选择，最后 25% 只做一次独立确认。
+- 当前策略卡显示 V5 版本和“A股3%/20%反追涨”，操作与风险增加可见支持依据，回测和 DecisionHub 门禁不放宽。
+- 未通过的因果概率硬门、沪深300市场状态门、替代持有期和量价评分重构均未进入默认路径。
+
+真实结果：十 A 股平均最终收益由 3.92% 提升到 5.71%，中位收益由 3.64% 提升到 8.21%，平均最大回撤由 -12.34% 改善到 -11.64%，但仍为 0/10 PASS；十 ETF 保持 2/10 PASS；混合十标的平均收益由 8.02% 提升到 9.95%、平均回撤由 -12.68% 改善到 -12.00%。完整记录见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V5_2026-07-13.md`。
+
+V5 发布检查：Ruff format、Ruff lint、mypy 通过；Python `272 passed`；发布审计 `RELEASE_AUDIT_OK`；Vitest `1 passed`；Vite build 和 Playwright `2 passed`。FastAPI TestClient 仍有 1 条上游弃用警告，ECharts 构建仍有分包体积告警。

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, date, datetime, time, timedelta
 
+import china_quant_platform.strategies.profit_validation as profit_validation_module
 from china_quant_platform.data import BarsRequest
 from china_quant_platform.domain import (
     AdjustmentMode,
@@ -15,7 +16,9 @@ from china_quant_platform.domain import (
 from china_quant_platform.strategies import (
     HorizonPreset,
     ProfitSeekingConfig,
+    ProfitSignalFeatures,
     ProfitValidationStatus,
+    default_a_share_validation_universe,
     default_etf_validation_universe,
     default_mixed_validation_universe,
     horizon_parameters,
@@ -109,7 +112,7 @@ def test_canonical_short_and_long_configs_are_distinct() -> None:
     short = profit_strategy_config("short_term", HorizonPreset.ONE_MONTH, 12)
     long = profit_strategy_config("long_term", HorizonPreset.SIX_MONTHS, 4)
 
-    assert short.strategy_version == "profit-validation-short-v4"
+    assert short.strategy_version == "profit-validation-short-v5"
     assert long.strategy_version == "profit-validation-long-v3"
     assert short.max_annual_volatility > long.max_annual_volatility
     assert short.target_annual_volatility == 0.20
@@ -117,6 +120,43 @@ def test_canonical_short_and_long_configs_are_distinct() -> None:
     assert short.stop_loss_pct == 0.075
     assert short.minimum_validation_bars < long.minimum_validation_bars
     assert short.minimum_trend_efficiency == 0.10
+    assert short.apply_a_share_anti_chase is True
+    assert short.a_share_max_one_day_return_for_entry == 0.03
+    assert short.a_share_max_short_momentum_for_entry == 0.20
+    assert long.apply_a_share_anti_chase is False
+
+
+def test_a_share_anti_chase_limit_does_not_change_etf_entries() -> None:
+    config = profit_strategy_config("short_term", HorizonPreset.ONE_MONTH, 12)
+    features = ProfitSignalFeatures(
+        as_of=date(2026, 7, 13),
+        score=0.50,
+        predicted_probability=0.625,
+        one_day_return=0.04,
+        short_momentum=0.10,
+        long_momentum=0.20,
+        trend_strength=0.05,
+        trend_efficiency=0.50,
+        regime_momentum=0.10,
+        regime_trend_strength=0.05,
+        annualized_volatility=0.30,
+        drawdown=-0.05,
+        volume_ratio=1.20,
+        liquidity_score=0.80,
+    )
+
+    assert not profit_validation_module._entry_signal_passes(
+        "SSE:600519",
+        features,
+        threshold=0.10,
+        config=config,
+    )
+    assert profit_validation_module._entry_signal_passes(
+        "SSE:513300",
+        features,
+        threshold=0.10,
+        config=config,
+    )
 
 
 def test_profit_strategy_respects_annual_trade_limit_and_outputs_risk_metrics() -> None:
@@ -261,6 +301,20 @@ def test_mixed_validation_universe_covers_stocks_and_etfs() -> None:
     assert {member.security_id for member in universe} >= {
         "SSE:600519",
         "SSE:513300",
+    }
+
+
+def test_a_share_validation_universe_has_ten_industry_buckets() -> None:
+    universe = default_a_share_validation_universe()
+
+    assert len(universe) == 10
+    assert all(member.asset_type.value == "STOCK" for member in universe)
+    assert len({member.asset_bucket for member in universe}) == 10
+    assert {member.security_id for member in universe} >= {
+        "SSE:600519",
+        "SSE:600030",
+        "SZSE:300059",
+        "SSE:601899",
     }
 
 

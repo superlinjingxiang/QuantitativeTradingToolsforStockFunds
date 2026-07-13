@@ -14,6 +14,7 @@ from china_quant_platform.strategies.profit_validation import (
     DefaultValidationSecurity,
     HorizonPreset,
     ProfitValidationReport,
+    default_a_share_validation_universe,
     default_etf_validation_universe,
     default_mixed_validation_universe,
     horizon_parameters,
@@ -160,9 +161,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--history-years", type=int, default=7)
     parser.add_argument(
         "--universe",
-        choices=("etf10", "mixed10"),
+        choices=("etf10", "stock10", "mixed10"),
         default="etf10",
-        help="Use ten ETFs or a reproducible five-stock/five-ETF validation pool.",
+        help="Use ten ETFs, ten A-shares, or a five-stock/five-ETF validation pool.",
     )
     args = parser.parse_args(argv)
 
@@ -171,11 +172,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     provider = create_default_market_data_provider()
 
     async def run() -> tuple[ProfitValidationReport, tuple[str, ...]]:
-        universe = (
-            default_mixed_validation_universe()
-            if args.universe == "mixed10"
-            else default_etf_validation_universe()
-        )
+        if args.universe == "stock10":
+            universe = default_a_share_validation_universe()
+        elif args.universe == "mixed10":
+            universe = default_mixed_validation_universe()
+        else:
+            universe = default_etf_validation_universe()
         return await validate_profit_universe(
             provider,
             universe=universe,

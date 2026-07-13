@@ -133,7 +133,7 @@ DEFAULT_ETF_VALIDATION_UNIVERSE: tuple[DefaultValidationSecurity, ...] = (
 )
 
 
-DEFAULT_MIXED_VALIDATION_UNIVERSE: tuple[DefaultValidationSecurity, ...] = (
+DEFAULT_A_SHARE_VALIDATION_UNIVERSE: tuple[DefaultValidationSecurity, ...] = (
     DefaultValidationSecurity(
         security_id="SSE:600519",
         symbol="600519",
@@ -174,6 +174,51 @@ DEFAULT_MIXED_VALIDATION_UNIVERSE: tuple[DefaultValidationSecurity, ...] = (
         exchange=Exchange.SZSE,
         asset_bucket="stock_manufacturing",
     ),
+    DefaultValidationSecurity(
+        security_id="SSE:600030",
+        symbol="600030",
+        name="中信证券",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="stock_broker",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:600900",
+        symbol="600900",
+        name="长江电力",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="stock_utility",
+    ),
+    DefaultValidationSecurity(
+        security_id="SZSE:300059",
+        symbol="300059",
+        name="东方财富",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SZSE,
+        asset_bucket="stock_fintech",
+    ),
+    DefaultValidationSecurity(
+        security_id="SZSE:002475",
+        symbol="002475",
+        name="立讯精密",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SZSE,
+        asset_bucket="stock_electronics",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:601899",
+        symbol="601899",
+        name="紫金矿业",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="stock_materials",
+    ),
+)
+
+
+DEFAULT_MIXED_VALIDATION_UNIVERSE: tuple[DefaultValidationSecurity, ...] = (
+    *DEFAULT_A_SHARE_VALIDATION_UNIVERSE[:5],
     *(
         member
         for member in DEFAULT_ETF_VALIDATION_UNIVERSE
@@ -227,6 +272,9 @@ class ProfitSeekingConfig(DomainModel):
     minimum_trend_efficiency: float = Field(default=0.10, ge=0, le=1)
     minimum_regime_momentum: float = Field(default=-1.0, ge=-1, le=1)
     minimum_regime_trend_strength: float = Field(default=-1.0, ge=-1, le=1)
+    apply_a_share_anti_chase: bool = False
+    a_share_max_short_momentum_for_entry: float = Field(default=0.20, gt=0, le=1)
+    a_share_max_one_day_return_for_entry: float = Field(default=0.03, gt=0, le=1)
     stop_loss_pct: float = Field(default=0.12, gt=0, le=1)
     final_test_fraction: float = Field(default=0.25, gt=0, lt=1)
     validation_fraction: float = Field(default=0.25, gt=0, lt=1)
@@ -481,6 +529,7 @@ def profit_strategy_config(
     return ProfitSeekingConfig(
         horizon=horizon,
         max_trades_per_year=max_trades_per_year,
+        apply_a_share_anti_chase=True,
         target_annual_volatility=0.20,
         max_annual_volatility=0.78,
         stop_loss_pct=0.075,
@@ -489,12 +538,18 @@ def profit_strategy_config(
         minimum_trades_for_pass=max(1, min(3, max_trades_per_year)),
         threshold_candidates=(0.10, 0.14, 0.18, 0.25, 0.32, 0.40),
         strategy_id="strategy.profit_validation_short_term",
-        strategy_version="profit-validation-short-v4",
+        strategy_version="profit-validation-short-v5",
     )
 
 
 def default_etf_validation_universe() -> tuple[DefaultValidationSecurity, ...]:
     return DEFAULT_ETF_VALIDATION_UNIVERSE
+
+
+def default_a_share_validation_universe() -> tuple[DefaultValidationSecurity, ...]:
+    """Return ten liquid A-shares spanning distinct industries."""
+
+    return DEFAULT_A_SHARE_VALIDATION_UNIVERSE
 
 
 def default_mixed_validation_universe() -> tuple[DefaultValidationSecurity, ...]:
@@ -920,6 +975,7 @@ def _simulate_strategy(
         ):
             features = _signal_features(index, bars=bars, closes=closes, parameters=parameters)
             if features is not None and _entry_signal_passes(
+                security_id,
                 features,
                 threshold=threshold,
                 config=config,
@@ -1074,16 +1130,28 @@ def _can_enter(
 
 
 def _entry_signal_passes(
+    security_id: str,
     features: ProfitSignalFeatures,
     *,
     threshold: float,
     config: ProfitSeekingConfig,
 ) -> bool:
+    use_a_share_limits = config.apply_a_share_anti_chase and _is_a_share_stock(security_id)
+    max_one_day_return = (
+        config.a_share_max_one_day_return_for_entry
+        if use_a_share_limits
+        else config.max_one_day_return_for_entry
+    )
+    max_short_momentum = (
+        config.a_share_max_short_momentum_for_entry
+        if use_a_share_limits
+        else config.max_short_momentum_for_entry
+    )
     return (
         features.score >= threshold
-        and features.one_day_return <= config.max_one_day_return_for_entry
+        and features.one_day_return <= max_one_day_return
         and features.short_momentum > 0
-        and features.short_momentum <= config.max_short_momentum_for_entry
+        and features.short_momentum <= max_short_momentum
         and features.long_momentum > 0
         and features.trend_strength > 0
         and features.trend_efficiency >= config.minimum_trend_efficiency
@@ -1157,6 +1225,15 @@ def _signal_features(
         volume_ratio=volume_ratio,
         liquidity_score=liquidity_score,
     )
+
+
+def _is_a_share_stock(security_id: str) -> bool:
+    exchange, _separator, symbol = security_id.partition(":")
+    if exchange == Exchange.SSE.value:
+        return symbol.startswith(("600", "601", "603", "605", "688", "689"))
+    if exchange == Exchange.SZSE.value:
+        return symbol.startswith(("000", "001", "002", "003", "300", "301"))
+    return False
 
 
 def _build_result(
@@ -1236,7 +1313,12 @@ def _build_result(
         trades_per_year=trades_per_year,
         status=status,
         reliability_grade=grade,
-        notes=_result_notes(status=status, trade_count=len(trades), config=config),
+        notes=_result_notes(
+            security_id=security_id,
+            status=status,
+            trade_count=len(trades),
+            config=config,
+        ),
         equity_curve=equity_curve,
         trades=trades,
         threshold_selection=threshold_selection,
@@ -1294,6 +1376,7 @@ def _reliability_grade(
 
 def _result_notes(
     *,
+    security_id: str,
     status: ProfitValidationStatus,
     trade_count: int,
     config: ProfitSeekingConfig,
@@ -1314,6 +1397,12 @@ def _result_notes(
         notes.append(f"中期状态收益低于{config.minimum_regime_momentum:.0%}时不新开仓。")
     if config.minimum_regime_trend_strength > -1:
         notes.append(f"价格相对中期均线低于{config.minimum_regime_trend_strength:.0%}时不新开仓。")
+    if config.apply_a_share_anti_chase and _is_a_share_stock(security_id):
+        notes.append(
+            "A股个股额外启用反追涨约束："
+            f"单日涨幅不超过{config.a_share_max_one_day_return_for_entry:.0%}，"
+            f"短期动量不超过{config.a_share_max_short_momentum_for_entry:.0%}。"
+        )
     if config.target_annual_volatility is not None:
         notes.append(
             f"按{config.target_annual_volatility:.0%}年化目标波动缩放历史仓位，"

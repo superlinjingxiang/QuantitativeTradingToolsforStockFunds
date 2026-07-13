@@ -43,6 +43,7 @@ from china_quant_platform.ui import (
     UiTaskStatus,
     UiThemeMode,
 )
+from china_quant_platform.ui.viewmodel import _is_a_share_security
 
 
 def aware_datetime() -> datetime:
@@ -65,6 +66,47 @@ def invalid_health() -> DataHealth:
         as_of=aware_datetime(),
         issues=("invalid ohlc",),
     )
+
+
+def test_a_share_evidence_detection_excludes_foreign_stocks_and_domestic_etfs() -> None:
+    as_of = aware_datetime().date()
+    a_share = SecurityRef(
+        security_id="SSE:600519",
+        symbol="600519",
+        name="贵州茅台",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        currency=Currency.CNY,
+        listed_date=as_of,
+        status_date=as_of,
+        status=SecurityStatus.ACTIVE,
+    )
+    domestic_etf = SecurityRef(
+        security_id="SSE:513300",
+        symbol="513300",
+        name="纳斯达克ETF华夏",
+        asset_type=AssetType.ETF,
+        exchange=Exchange.SSE,
+        currency=Currency.CNY,
+        listed_date=as_of,
+        status_date=as_of,
+        status=SecurityStatus.ACTIVE,
+    )
+    us_stock = SecurityRef(
+        security_id="NASDAQ:AAPL",
+        symbol="AAPL",
+        name="Apple",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.NASDAQ,
+        currency=Currency.USD,
+        listed_date=as_of,
+        status_date=as_of,
+        status=SecurityStatus.ACTIVE,
+    )
+
+    assert _is_a_share_security(a_share)
+    assert not _is_a_share_security(domestic_etf)
+    assert not _is_a_share_security(us_stock)
 
 
 class InstantOnlineProvider:

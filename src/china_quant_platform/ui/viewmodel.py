@@ -1904,7 +1904,7 @@ def _analysis_report_from_profit_backtest(
     strategy_version = (
         "profit-validation-long-v3"
         if mode is StrategyMode.LONG_TERM
-        else "profit-validation-short-v4"
+        else "profit-validation-short-v5"
     )
     return AnalysisReport(
         security_id=security.security_id,
@@ -1918,10 +1918,10 @@ def _analysis_report_from_profit_backtest(
         raw_signal=_profit_raw_signal(backtest, forecast, mode),
         final_signal=final_signal,
         valid_until=quote.source_time + timedelta(days=1),
-        positive_drivers=_profit_positive_drivers(backtest, forecast, mode),
+        positive_drivers=_profit_positive_drivers(security, backtest, forecast, mode),
         negative_drivers=_profit_negative_drivers(backtest, data_health, forecast),
         model_version=forecast.model_version,
-        rule_version="rules-profit-validation-short-v4"
+        rule_version="rules-profit-validation-short-v5"
         if mode is StrategyMode.SHORT_TERM
         else "rules-profit-validation-long-v3",
         data_snapshot_id=f"profit-validation:{len(bars)}-daily-bars",
@@ -1978,7 +1978,7 @@ def _strategy_id_for_horizon(horizon: HorizonPreset) -> str:
 def _strategy_version_for_horizon(horizon: HorizonPreset) -> str:
     if horizon in {HorizonPreset.SIX_MONTHS, HorizonPreset.ONE_YEAR}:
         return "profit-validation-long-v3"
-    return "profit-validation-short-v4"
+    return "profit-validation-short-v5"
 
 
 def _profit_analysis_signal(
@@ -2101,6 +2101,7 @@ def _profit_expected_return_quantiles(
 
 
 def _profit_positive_drivers(
+    security: SecurityRef,
     backtest: ProfitBacktestResult,
     forecast: IntervalForecastResult,
     mode: StrategyMode,
@@ -2111,6 +2112,8 @@ def _profit_positive_drivers(
         if mode is StrategyMode.SHORT_TERM
         else "长线模式：偏重63-252日趋势、相对强弱和波动稳定性。"
     )
+    if mode is StrategyMode.SHORT_TERM and _is_a_share_security(security):
+        values.append("A股个股启用反追涨约束：单日涨幅不超过3%，21日动量不超过20%。")
     values.extend(forecast.notes[:2])
     if backtest.total_return > 0:
         values.append(f"样本外扣费净收益 {backtest.total_return:.2%}。")
@@ -2284,6 +2287,19 @@ def _profit_invalidation_conditions(
     if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
         values.append("补足长期日线历史后重新验证。")
     return tuple(values)
+
+
+def _is_a_share_security(security: SecurityRef) -> bool:
+    exchange, _separator, symbol = security.security_id.partition(":")
+    if exchange == Exchange.SSE.value:
+        return security.asset_type is AssetType.STOCK and symbol.startswith(
+            ("600", "601", "603", "605", "688", "689")
+        )
+    if exchange == Exchange.SZSE.value:
+        return security.asset_type is AssetType.STOCK and symbol.startswith(
+            ("000", "001", "002", "003", "300", "301")
+        )
+    return False
 
 
 def _watchlist_panel_from_items(items: tuple[WatchlistItemState, ...]) -> WatchlistPanelState:

@@ -25,6 +25,7 @@
 ## 近期记录
 
 - 2026-07-13 代码变更：CHANGELOG_2026-07-13.md
+- 短线策略 V5 A股反追涨验证：research/SHORT_TERM_STRATEGY_VALIDATION_V5_2026-07-13.md
 - 短线策略 V4 风险暴露与数据快照验证：research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md
 - 短线策略 V3 真实验证：research/SHORT_TERM_STRATEGY_VALIDATION_2026-07-13.md
 - 当前盈利验证活动计划：exec-plans/active/0011-profit-validation-v4.md
