@@ -142,6 +142,7 @@ class BacktestPanelState(DomainModel):
     brier_score: str = "--"
     reliability_grade: str = "--"
     walk_forward_consistency: str = "--"
+    cost_stress: str = "--"
     summary: str = "暂无回测结果"
     notes: tuple[str, ...] = ()
     trades: tuple[str, ...] = ()
@@ -172,7 +173,18 @@ class BacktestPanelState(DomainModel):
                 else (
                     f"正收益折{_format_percent(result.walk_forward_positive_ratio)}；"
                     f"折中位{_format_percent(result.walk_forward_median_return or 0.0)}；"
+                    f"参与{_format_percent(result.walk_forward_participation_ratio or 0.0)}；"
                     f"有效{result.walk_forward_active_folds}折"
+                )
+            ),
+            cost_stress=(
+                "--"
+                if result.cost_stress_passed is None
+                else (
+                    f"{'通过' if result.cost_stress_passed else '未通过'}；"
+                    f"{result.stress_round_trip_cost_bps or 0:.0f}bp；"
+                    f"收益{_format_percent(result.stress_total_return or 0.0)}；"
+                    f"回撤{_format_percent(result.stress_max_drawdown or 0.0)}"
                 )
             ),
             summary=_backtest_summary(result),
@@ -708,9 +720,20 @@ def _profitability_summary(report: DecisionReport) -> str:
     excess_return = (
         "--" if evidence.excess_return is None else _format_percent(evidence.excess_return)
     )
+    stress_return = (
+        "--"
+        if evidence.stress_total_return is None
+        else _format_percent(evidence.stress_total_return)
+    )
+    stress_status = (
+        "缺失"
+        if evidence.cost_stress_passed is None
+        else ("通过" if evidence.cost_stress_passed else "未通过")
+    )
     return (
         f"历史净收益：{total_return}；最大回撤：{max_drawdown}；"
-        f"相对基准：{excess_return}；交易次数：{evidence.trade_count}"
+        f"相对基准：{excess_return}；交易次数：{evidence.trade_count}；"
+        f"成本压力：{stress_status}/{stress_return}"
     )
 
 

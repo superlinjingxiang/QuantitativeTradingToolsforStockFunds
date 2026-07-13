@@ -229,7 +229,7 @@ class ElectronBackendService:
                     profitability=_profitability_evidence_from_backtest(profit_backtest),
                     simulation=None,
                     out_of_sample_passed=profit_backtest.status is ProfitValidationStatus.PASS,
-                    cost_stress_passed=profit_backtest.cost_drag is not None,
+                    cost_stress_passed=profit_backtest.cost_stress_passed,
                 )
                 analysis = AnalysisPanelState.from_report(report)
                 decision = DecisionPanelState.from_report(decision_report)

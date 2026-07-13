@@ -16,6 +16,7 @@ from china_quant_platform.strategies.profit_validation import (
     ProfitValidationReport,
     default_etf_validation_universe,
     default_mixed_validation_universe,
+    horizon_parameters,
     profit_strategy_config,
     run_profit_validation_lab,
 )
@@ -59,6 +60,13 @@ async def validate_profit_universe(
     if end_time.tzinfo is None:
         raise ValueError("as_of must be timezone-aware")
     start_time = end_time - timedelta(days=365 * history_years + 30)
+    config = profit_strategy_config(
+        "long_term" if strategy_mode == "long_term" else "short_term",
+        horizon,
+        max_trades_per_year,
+    )
+    parameters = horizon_parameters(horizon)
+    minimum_bars = parameters.warmup_bars + config.minimum_validation_bars + config.minimum_oos_bars
     bars_by_security: dict[str, tuple[Bar, ...]] = {}
     failures: list[str] = []
     for member in universe:
@@ -76,13 +84,13 @@ async def validate_profit_universe(
             failures.append(f"{member.security_id}: {type(exc).__name__}: {exc}")
             continue
         bars_by_security[member.security_id] = tuple(bars)
+        if len(bars) < minimum_bars:
+            failures.append(
+                f"{member.security_id}: insufficient history {len(bars)}/{minimum_bars} bars"
+            )
     report = run_profit_validation_lab(
         bars_by_security,
-        config=profit_strategy_config(
-            "long_term" if strategy_mode == "long_term" else "short_term",
-            horizon,
-            max_trades_per_year,
-        ),
+        config=config,
         universe=universe,
     )
     return report, tuple(failures)
@@ -115,9 +123,14 @@ def report_summary(
                 "win_rate": result.win_rate,
                 "brier_score": result.brier_score,
                 "walk_forward_active_folds": result.walk_forward_active_folds,
+                "walk_forward_participation_ratio": result.walk_forward_participation_ratio,
                 "walk_forward_positive_ratio": result.walk_forward_positive_ratio,
                 "walk_forward_excess_ratio": result.walk_forward_excess_ratio,
                 "walk_forward_median_return": result.walk_forward_median_return,
+                "stress_round_trip_cost_bps": result.stress_round_trip_cost_bps,
+                "stress_total_return": result.stress_total_return,
+                "stress_max_drawdown": result.stress_max_drawdown,
+                "cost_stress_passed": result.cost_stress_passed,
                 "notes": result.notes,
             }
             for result in report.results

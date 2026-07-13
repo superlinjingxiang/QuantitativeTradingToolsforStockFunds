@@ -1260,7 +1260,7 @@ class ApplicationViewModel(QtCore.QObject):
                 profitability=_profitability_evidence_from_backtest(backtest),
                 simulation=None,
                 out_of_sample_passed=backtest.status is ProfitValidationStatus.PASS,
-                cost_stress_passed=backtest.cost_drag is not None,
+                cost_stress_passed=backtest.cost_stress_passed,
             )
         except Exception:  # noqa: BLE001 - decision output is optional for market rendering.
             return
@@ -1902,9 +1902,9 @@ def _analysis_report_from_profit_backtest(
         else "strategy.profit_validation_short_term"
     )
     strategy_version = (
-        "profit-validation-long-v2"
+        "profit-validation-long-v3"
         if mode is StrategyMode.LONG_TERM
-        else "profit-validation-short-v2"
+        else "profit-validation-short-v3"
     )
     return AnalysisReport(
         security_id=security.security_id,
@@ -1921,9 +1921,9 @@ def _analysis_report_from_profit_backtest(
         positive_drivers=_profit_positive_drivers(backtest, forecast, mode),
         negative_drivers=_profit_negative_drivers(backtest, data_health, forecast),
         model_version=forecast.model_version,
-        rule_version="rules-profit-validation-short-v2"
+        rule_version="rules-profit-validation-short-v3"
         if mode is StrategyMode.SHORT_TERM
-        else "rules-profit-validation-long-v2",
+        else "rules-profit-validation-long-v3",
         data_snapshot_id=f"profit-validation:{len(bars)}-daily-bars",
         expected_return_quantiles=_profit_expected_return_quantiles(backtest, forecast),
         expected_drawdown=forecast.expected_drawdown,
@@ -1953,9 +1953,14 @@ def _profitability_evidence_from_backtest(
         trade_count=backtest.trade_count,
         turnover=backtest.turnover,
         cost_drag=backtest.cost_drag,
+        stress_round_trip_cost_bps=backtest.stress_round_trip_cost_bps,
+        stress_total_return=backtest.stress_total_return,
+        stress_max_drawdown=backtest.stress_max_drawdown,
+        cost_stress_passed=backtest.cost_stress_passed,
         calibration_sample_count=backtest.calibration_sample_count,
         brier_score=backtest.brier_score,
         walk_forward_positive_ratio=backtest.walk_forward_positive_ratio,
+        walk_forward_participation_ratio=backtest.walk_forward_participation_ratio,
         walk_forward_excess_ratio=backtest.walk_forward_excess_ratio,
         walk_forward_median_return=backtest.walk_forward_median_return,
         checksum=backtest.checksum,
@@ -1971,8 +1976,8 @@ def _strategy_id_for_horizon(horizon: HorizonPreset) -> str:
 
 def _strategy_version_for_horizon(horizon: HorizonPreset) -> str:
     if horizon in {HorizonPreset.SIX_MONTHS, HorizonPreset.ONE_YEAR}:
-        return "profit-validation-long-v2"
-    return "profit-validation-short-v2"
+        return "profit-validation-long-v3"
+    return "profit-validation-short-v3"
 
 
 def _profit_analysis_signal(
@@ -1997,6 +2002,7 @@ def _profit_analysis_signal(
         return FinalSignal.REDUCE
     if (
         pass_like
+        and backtest.cost_stress_passed is True
         and enough_forecast
         and calibrated_forecast
         and probabilities.up >= 0.48
@@ -2005,7 +2011,12 @@ def _profit_analysis_signal(
         return FinalSignal.BUY_CANDIDATE
     if pass_like and p50 > 0 and p05 > -0.12:
         return FinalSignal.HOLD if mode is StrategyMode.LONG_TERM else FinalSignal.WATCH
-    if backtest.total_return > 0 and probabilities.up > probabilities.down:
+    if (
+        backtest.total_return > 0
+        and backtest.cost_stress_passed is True
+        and (backtest.walk_forward_positive_ratio or 0.0) >= 0.55
+        and probabilities.up > probabilities.down
+    ):
         return FinalSignal.HOLD
     return FinalSignal.WATCH
 
@@ -2118,6 +2129,11 @@ def _profit_positive_drivers(
             f"正收益折占比 {backtest.walk_forward_positive_ratio:.0%}，"
             f"折中位收益 {(backtest.walk_forward_median_return or 0.0):.2%}。"
         )
+    if backtest.cost_stress_passed is True and backtest.stress_total_return is not None:
+        values.append(
+            f"提高到{backtest.stress_round_trip_cost_bps or 0:.0f}bp往返成本后，"
+            f"样本外收益仍为 {backtest.stress_total_return:.2%}。"
+        )
     if backtest.status is ProfitValidationStatus.PASS:
         values.append("盈利、回撤、基准比较三项暂时通过。")
     return tuple(values) or ("暂无足够正向赚钱证据。",)
@@ -2195,6 +2211,13 @@ def _profit_negative_drivers(
         values.append(
             f"滚动前推正收益折仅 {backtest.walk_forward_positive_ratio:.0%}，跨窗口稳定性不足。"
         )
+    if backtest.cost_stress_passed is not True:
+        if backtest.stress_total_return is None:
+            values.append("缺少固定交易路径的提高成本压力测试。")
+        else:
+            values.append(
+                f"提高成本后样本外收益 {backtest.stress_total_return:.2%}，成本压力未通过。"
+            )
     if backtest.trade_count <= 0:
         values.append("样本外没有形成足够交易，不能证明可赚钱。")
     if backtest.brier_score is None:
@@ -2224,7 +2247,11 @@ def _effective_reliability_grade(
     forecast: IntervalForecastResult,
 ) -> str:
     grade = backtest.reliability_grade.value
-    if grade in {"A", "B"} and not _forecast_validation_passes(forecast):
+    if grade in {"A", "B"} and (
+        not _forecast_validation_passes(forecast)
+        or backtest.cost_stress_passed is not True
+        or (backtest.walk_forward_positive_ratio or 0.0) < 0.55
+    ):
         return "C"
     return grade
 
@@ -2236,6 +2263,7 @@ def _profit_invalidation_conditions(
     values = [
         "模拟盘成交与偏差证据未通过前，不允许进入真实API下单候选。",
         "若后续回测扣费净收益转负或相对基准超额转负，策略失效。",
+        "若固定交易路径在提高成本后转为亏损，取消买入候选并重新验证。",
         "短线若跌破止损或量价背离需要退出。"
         if mode is StrategyMode.SHORT_TERM
         else "长线若中长期趋势跌破或最大回撤扩大需要降仓。",

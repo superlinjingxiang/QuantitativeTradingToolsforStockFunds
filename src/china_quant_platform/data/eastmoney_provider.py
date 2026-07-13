@@ -186,11 +186,19 @@ class EastmoneyMarketDataProvider(MarketDataProvider):
             for raw_kline in raw_klines
             if isinstance(raw_kline, str)
         ]
-        return [
+        filtered_bars = [
             bar
             for bar in bars
             if request.start_time <= bar.start_time and bar.end_time <= request.end_time
         ]
+        if _daily_history_looks_truncated(request, filtered_bars):
+            try:
+                fallback_bars = self._get_yahoo_bars(request)
+            except DataUnavailable:
+                return filtered_bars
+            if len(fallback_bars) > len(filtered_bars):
+                return fallback_bars
+        return filtered_bars
 
     def subscribe_quotes(self, security_ids: Sequence[str]) -> AsyncIterator[Quote]:
         if not security_ids:
@@ -742,6 +750,20 @@ def _kline_window(value: str, interval: BarInterval) -> tuple[datetime, datetime
     start_time = datetime.combine(trade_date, time(9, 30), tzinfo=CHINA_TZ)
     end_time = datetime.combine(trade_date, time(15, 0), tzinfo=CHINA_TZ)
     return start_time, end_time, trade_date
+
+
+def _daily_history_looks_truncated(request: BarsRequest, bars: Sequence[Bar]) -> bool:
+    if request.interval is not BarInterval.DAILY:
+        return False
+    requested_days = (request.end_time - request.start_time).days
+    if requested_days < 365:
+        return False
+    if not bars:
+        return True
+    ordered = sorted(bars, key=lambda bar: bar.start_time)
+    covered_days = (ordered[-1].end_time - ordered[0].start_time).days
+    minimum_plausible_count = max(120, int(requested_days * 0.20))
+    return len(ordered) < minimum_plausible_count and covered_days < requested_days * 0.50
 
 
 def _kline_type(interval: BarInterval) -> int:

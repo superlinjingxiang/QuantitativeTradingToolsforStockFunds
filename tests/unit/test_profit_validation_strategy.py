@@ -98,14 +98,15 @@ def test_horizon_presets_define_distinct_holding_periods() -> None:
     assert horizon_parameters(HorizonPreset.THREE_MONTHS).holding_days == 63
     assert horizon_parameters(HorizonPreset.SIX_MONTHS).long_lookback == 252
     assert horizon_parameters(HorizonPreset.ONE_YEAR).warmup_bars > 252
+    assert horizon_parameters(HorizonPreset.ONE_MONTH).regime_lookback == 126
 
 
 def test_canonical_short_and_long_configs_are_distinct() -> None:
     short = profit_strategy_config("short_term", HorizonPreset.ONE_MONTH, 12)
     long = profit_strategy_config("long_term", HorizonPreset.SIX_MONTHS, 4)
 
-    assert short.strategy_version == "profit-validation-short-v2"
-    assert long.strategy_version == "profit-validation-long-v2"
+    assert short.strategy_version == "profit-validation-short-v3"
+    assert long.strategy_version == "profit-validation-long-v3"
     assert short.max_annual_volatility > long.max_annual_volatility
     assert short.minimum_validation_bars < long.minimum_validation_bars
     assert short.minimum_trend_efficiency == 0.10
@@ -138,8 +139,14 @@ def test_profit_strategy_respects_annual_trade_limit_and_outputs_risk_metrics() 
     assert result.win_rate >= 0
     assert result.calibration_sample_count == result.trade_count
     assert result.brier_score is not None
+    assert result.stress_round_trip_cost_bps is not None
+    assert result.stress_round_trip_cost_bps >= 30
+    assert result.stress_total_return is not None
+    assert result.stress_total_return <= result.total_return
+    assert result.cost_stress_passed is not None
     assert result.reliability_grade.value in {"A", "B", "C", "N"}
     assert result.walk_forward_active_folds > 0
+    assert result.walk_forward_participation_ratio is not None
     assert result.walk_forward_positive_ratio is not None
     assert result.walk_forward_median_return is not None
     assert "不代表保证未来收益" in " ".join(result.notes)
@@ -217,6 +224,11 @@ def test_default_etf_validation_lab_builds_aggregate_profitability_evidence() ->
     assert single_evidence.trade_count == report.results[1].trade_count
     assert single_evidence.sharpe_ratio == report.results[1].sharpe_ratio
     assert single_evidence.benchmark_max_drawdown == report.results[1].benchmark_max_drawdown
+    assert single_evidence.cost_stress_passed == report.results[1].cost_stress_passed
+    assert (
+        single_evidence.walk_forward_participation_ratio
+        == report.results[1].walk_forward_participation_ratio
+    )
     assert (
         single_evidence.walk_forward_positive_ratio == report.results[1].walk_forward_positive_ratio
     )
@@ -301,6 +313,25 @@ def test_overheated_short_momentum_is_not_chased() -> None:
     assert "过热" in " ".join(guarded.notes)
 
 
+def test_one_day_spike_filter_is_configurable_and_explained() -> None:
+    config = ProfitSeekingConfig(
+        horizon=HorizonPreset.ONE_MONTH,
+        max_trades_per_year=8,
+        minimum_oos_bars=80,
+        minimum_validation_bars=80,
+        minimum_trades_for_pass=1,
+        max_one_day_return_for_entry=0.05,
+    )
+
+    result = run_profit_strategy_backtest(
+        "SSE:513300",
+        make_daily_bars(regime="late_rally"),
+        config=config,
+    )
+
+    assert "单日涨幅超过5%时不在次日追入" in " ".join(result.notes)
+
+
 def test_trend_efficiency_filter_is_part_of_entry_evidence() -> None:
     config = ProfitSeekingConfig(
         horizon=HorizonPreset.ONE_MONTH,
@@ -314,6 +345,24 @@ def test_trend_efficiency_filter_is_part_of_entry_evidence() -> None:
     result = run_profit_strategy_backtest("SSE:513300", make_daily_bars(), config=config)
 
     assert "趋势效率低于10%时不入场" in " ".join(result.notes)
+
+
+def test_market_regime_filter_is_configurable_and_explained() -> None:
+    config = ProfitSeekingConfig(
+        horizon=HorizonPreset.ONE_MONTH,
+        max_trades_per_year=8,
+        minimum_oos_bars=80,
+        minimum_validation_bars=80,
+        minimum_trades_for_pass=1,
+        minimum_regime_momentum=0.0,
+        minimum_regime_trend_strength=0.0,
+    )
+
+    result = run_profit_strategy_backtest("SSE:513300", make_daily_bars(), config=config)
+
+    notes = " ".join(result.notes)
+    assert "中期状态收益低于0%时不新开仓" in notes
+    assert "价格相对中期均线低于0%时不新开仓" in notes
 
 
 def test_backtest_panel_state_lists_trade_operations() -> None:
@@ -336,6 +385,7 @@ def test_backtest_panel_state_lists_trade_operations() -> None:
     assert panel.trade_count == str(result.trade_count)
     assert panel.sharpe_ratio != "--"
     assert panel.walk_forward_consistency != "--"
+    assert panel.cost_stress != "--"
     assert panel.trades
     assert "买入" in panel.trades[0]
     assert "卖出" in panel.trades[0]

@@ -24,9 +24,12 @@
 
 ## 近期记录
 
+- 2026-07-13 代码变更：CHANGELOG_2026-07-13.md
+- 短线策略 V3 真实验证：research/SHORT_TERM_STRATEGY_VALIDATION_2026-07-13.md
+- 当前活动执行计划：exec-plans/active/0010-profit-validation-v3.md
 - 2026-07-12 代码变更：CHANGELOG_2026-07-12.md
 - 短线策略 V2 真实验证：research/SHORT_TERM_STRATEGY_VALIDATION_2026-07-12.md
-- 当前活动执行计划：exec-plans/active/0009-profit-validation-v2.md
+- 已完成 V2 执行计划：exec-plans/completed/0009-profit-validation-v2.md
 
 ## 变更规则
 

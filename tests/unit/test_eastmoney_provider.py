@@ -130,6 +130,37 @@ def test_eastmoney_daily_klines_fall_back_to_yahoo(monkeypatch: MonkeyPatch) -> 
     assert bars[0].volume == 1_676_431
 
 
+def test_eastmoney_long_history_uses_longer_yahoo_result_when_response_is_truncated(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    provider = EastmoneyMarketDataProvider()
+
+    def fake_get_json(
+        url: str,
+        _params: Mapping[str, object],
+        **_kwargs: object,
+    ) -> Mapping[str, Any]:
+        if "eastmoney.com" in url:
+            return {
+                "data": {"klines": ["2026-06-29,2.652,2.668,2.671,2.642,1572452,418140505.000"]}
+            }
+        return _yahoo_chart_payload()
+
+    monkeypatch.setattr(provider, "_get_json", fake_get_json)
+    request = BarsRequest(
+        security_id="SSE:513300",
+        interval=BarInterval.DAILY,
+        start_time=datetime(2020, 1, 1, tzinfo=UTC),
+        end_time=datetime(2026, 7, 1, tzinfo=UTC),
+        adjustment=AdjustmentMode.NONE,
+    )
+
+    bars = asyncio.run(provider.get_bars(request))
+
+    assert len(bars) == 2
+    assert all(bar.provider == "yahoo" for bar in bars)
+
+
 def test_yahoo_daily_fallback_normalizes_ohlc_and_received_time(
     monkeypatch: MonkeyPatch,
 ) -> None:

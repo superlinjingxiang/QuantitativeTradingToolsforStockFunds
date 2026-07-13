@@ -67,7 +67,6 @@ def build_research_decision_from_market_data(
         profitability=profitability,
         simulation=None,
         out_of_sample_passed=profitability is not None and profitability.trade_count >= 5,
-        cost_stress_passed=profitability is not None and profitability.cost_drag is not None,
     )
 
 

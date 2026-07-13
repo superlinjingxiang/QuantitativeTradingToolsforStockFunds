@@ -85,9 +85,14 @@ class ProfitabilityEvidence(DomainModel):
     trade_count: int = Field(default=0, ge=0)
     turnover: float | None = Field(default=None, ge=0)
     cost_drag: float | None = Field(default=None, ge=0)
+    stress_round_trip_cost_bps: float | None = Field(default=None, ge=0)
+    stress_total_return: float | None = None
+    stress_max_drawdown: float | None = None
+    cost_stress_passed: bool | None = None
     calibration_sample_count: int = Field(default=0, ge=0)
     brier_score: float | None = Field(default=None, ge=0)
     walk_forward_positive_ratio: float | None = Field(default=None, ge=0, le=1)
+    walk_forward_participation_ratio: float | None = Field(default=None, ge=0, le=1)
     walk_forward_excess_ratio: float | None = Field(default=None, ge=0, le=1)
     walk_forward_median_return: float | None = None
     checksum: NonEmptyString | None = None

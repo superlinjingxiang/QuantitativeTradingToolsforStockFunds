@@ -36,7 +36,7 @@ class DecisionHub:
         benchmark_total_return: float | None = None,
         simulation: SimulationEvidence | None = None,
         simulation_state: SimulationAccountState | None = None,
-        cost_stress_passed: bool = True,
+        cost_stress_passed: bool | None = None,
         out_of_sample_passed: bool = True,
     ) -> DecisionReport:
         if profitability is None and backtest_report is not None:
@@ -46,6 +46,8 @@ class DecisionHub:
             )
         if simulation is None and simulation_state is not None:
             simulation = simulation_evidence_from_state(simulation_state)
+        if cost_stress_passed is None and profitability is not None:
+            cost_stress_passed = profitability.cost_stress_passed
 
         gates = (
             _data_gate(analysis_report),
@@ -274,7 +276,14 @@ def _calibration_gate(
     )
 
 
-def _cost_stress_gate(cost_stress_passed: bool) -> EvidenceGate:
+def _cost_stress_gate(cost_stress_passed: bool | None) -> EvidenceGate:
+    if cost_stress_passed is None:
+        return EvidenceGate(
+            gate_id="cost-stress",
+            name="成本压力",
+            status=EvidenceGateStatus.MISSING,
+            reasons=("尚未用提高后的成本和相同交易路径复算样本外结果。",),
+        )
     if not cost_stress_passed:
         return EvidenceGate(
             gate_id="cost-stress",
@@ -286,7 +295,7 @@ def _cost_stress_gate(cost_stress_passed: bool) -> EvidenceGate:
         gate_id="cost-stress",
         name="成本压力",
         status=EvidenceGateStatus.PASS,
-        reasons=("成本压力输入通过。",),
+        reasons=("提高成本且不重新调参后，样本外收益仍为正。",),
     )
 
 

@@ -62,6 +62,17 @@ class FailingMarketDataProvider:
         raise DataUnavailable("fund nav failed")
 
 
+class EmptyBarsMarketDataProvider(FailingMarketDataProvider):
+    provider_id = "empty"
+    capabilities = ProviderCapabilities(
+        provider_id=provider_id,
+        supported=FailingMarketDataProvider.capabilities.supported,
+    )
+
+    async def get_bars(self, request: BarsRequest) -> list[Bar]:
+        return []
+
+
 def test_multi_source_falls_back_to_next_provider_for_quote() -> None:
     provider = MultiSourceMarketDataProvider(
         (FailingMarketDataProvider(), DeterministicFakeMarketDataProvider())
@@ -70,6 +81,26 @@ def test_multi_source_falls_back_to_next_provider_for_quote() -> None:
     quote = asyncio.run(provider.get_quote("SSE:600519"))
 
     assert quote.provider == "deterministic_fake"
+
+
+def test_multi_source_falls_back_when_provider_returns_empty_bars() -> None:
+    provider = MultiSourceMarketDataProvider(
+        (EmptyBarsMarketDataProvider(), DeterministicFakeMarketDataProvider())
+    )
+    request = BarsRequest.model_validate(
+        {
+            "security_id": "SSE:600519",
+            "interval": "1d",
+            "start_time": "2026-06-01T00:00:00Z",
+            "end_time": "2026-07-01T00:00:00Z",
+            "adjustment": "NONE",
+        }
+    )
+
+    bars = asyncio.run(provider.get_bars(request))
+
+    assert bars
+    assert bars[0].provider == "deterministic_fake"
 
 
 def test_multi_source_raises_combined_failure_when_all_sources_fail() -> None:

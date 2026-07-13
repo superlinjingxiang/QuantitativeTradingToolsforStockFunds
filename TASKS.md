@@ -291,3 +291,13 @@
 - 交付：FastAPI/uvicorn兼容API、OpenAPI文档、Redis优先内存降级缓存、陈旧数据保留与信号阻断、Vue3/Vite/Pinia/ECharts前端、Electron默认加载Vue产物、旧renderer回退入口、FastAPI/缓存/Vue/Playwright测试与迁移文档。
 - 验收：`/api/health`、`/api/search`、`/api/analyze`、`/api/recommendations`字段兼容；Redis未启动时仍可运行；页面首次加载可展示本地最近成功结果并后台更新；上游失败时保留旧数据并标记STALE；旧Electron和PySide6入口继续可启动；荐股、回测信号、账户评估和真实下单禁用边界不改变。
 - 完成证据：2026-07-11完成 `src/china_quant_platform/api`、缓存后端、Vue工作台和Electron生产加载；Python全量255项通过，`ruff format --check src tests`、`ruff check src tests`、`mypy src tests`通过，Vitest 1项和Playwright 1项通过，FastAPI真实健康/OpenAPI启动冒烟通过，Electron生产窗口启动冒烟通过。Playwright首次浏览器下载超时后已在本机可用环境完成测试。
+
+## 阶段10——盈利验证 V3 与证据质量
+
+### [x] TASK-038——成本压力、滚动前推纠偏和历史完整性
+- 依赖：TASK-027、TASK-037
+- 需求：FR-013至FR-015、FR-020至FR-022、EPV-001至EPV-006
+- 核心定位：减少盈利验证假阳性，禁止基础成本结果冒充压力测试，禁止只统计有交易窗口，并把上游历史截断与真实策略失败区分开。
+- 交付：固定交易路径 45bp 成本压力；滚动前推参与率和全折统计；DecisionHub MISSING/FAIL/PASS 成本门禁；右侧四模块证据展示；长周期 K 线截断自动备用源；空 K 线切换供应商；验证实验室历史不足失败记录。
+- 验收：压力测试不得重新选择阈值；无交易折按0收益进入一致性分母；成本证据缺失不得自动通过；供应商返回空或明显截断历史时不得静默作为完整样本；十 ETF 与混合十标的必须分别真实复跑。
+- 完成证据：2026-07-13 两组真实验证均 10/10 成功取数，十 ETF 2/10 PASS、混合池 2/10 PASS，综合均为 WATCH；Ruff、mypy、267项Python回归、Vitest 1项、Vite build和Playwright 2项通过。详见 `docs/CHANGELOG_2026-07-13.md` 与 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_2026-07-13.md`。

@@ -103,9 +103,21 @@ class MultiSourceMarketDataProvider(MarketDataProvider):
             if request.interval in _MINUTE_INTERVALS
             else ProviderCapability.HISTORICAL_BARS
         )
-        return await self._first_success(
-            capability,
-            lambda provider: provider.get_bars(request),
+        failures: list[str] = []
+        for provider in self._providers_for(capability):
+            try:
+                bars = await provider.get_bars(request)
+            except DataUnavailable as exc:
+                failures.append(_failure_text(provider.provider_id, exc))
+                continue
+            if bars:
+                return bars
+            failures.append(f"{provider.provider_id}: returned no bars")
+        if failures:
+            raise DataUnavailable("；".join(failures))
+        raise DataUnavailable(
+            f"No configured provider supports {capability.value}",
+            retryable=False,
         )
 
     def subscribe_quotes(self, security_ids: Sequence[str]) -> AsyncIterator[Quote]:

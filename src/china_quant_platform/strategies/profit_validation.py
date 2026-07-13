@@ -195,22 +195,35 @@ class HorizonParameters(DomainModel):
     long_lookback: int = Field(ge=1)
     trend_window: int = Field(ge=1)
     volatility_window: int = Field(ge=2)
+    regime_lookback: int = Field(ge=2)
     holding_days: int = Field(ge=1)
 
     @property
     def warmup_bars(self) -> int:
-        return max(self.short_lookback, self.long_lookback, self.trend_window) + 1
+        return (
+            max(
+                self.short_lookback,
+                self.long_lookback,
+                self.trend_window,
+                self.regime_lookback,
+            )
+            + 1
+        )
 
 
 class ProfitSeekingConfig(DomainModel):
     horizon: HorizonPreset = HorizonPreset.ONE_MONTH
     max_trades_per_year: int = Field(default=12, ge=1, le=252)
     round_trip_cost_bps: float = Field(default=15.0, ge=0)
+    cost_stress_multiplier: float = Field(default=3.0, ge=1.0)
     max_annual_volatility: float = Field(default=0.65, gt=0)
     min_volume_confirmation: float = Field(default=0.80, ge=0)
     min_liquidity_confirmation: float = Field(default=0.30, ge=0, le=1)
     max_short_momentum_for_entry: float = Field(default=1.0, gt=0, le=1)
+    max_one_day_return_for_entry: float = Field(default=1.0, gt=0, le=1)
     minimum_trend_efficiency: float = Field(default=0.10, ge=0, le=1)
+    minimum_regime_momentum: float = Field(default=-1.0, ge=-1, le=1)
+    minimum_regime_trend_strength: float = Field(default=-1.0, ge=-1, le=1)
     stop_loss_pct: float = Field(default=0.12, gt=0, le=1)
     final_test_fraction: float = Field(default=0.25, gt=0, lt=1)
     validation_fraction: float = Field(default=0.25, gt=0, lt=1)
@@ -221,7 +234,7 @@ class ProfitSeekingConfig(DomainModel):
     minimum_drawdown_improvement: float = Field(default=0.20, ge=0, le=1)
     threshold_candidates: tuple[float, ...] = (0.18, 0.25, 0.32, 0.40, 0.50)
     strategy_id: NonEmptyString = "strategy.etf_profit_validation"
-    strategy_version: NonEmptyString = "profit-validation-v2"
+    strategy_version: NonEmptyString = "profit-validation-v3"
 
     @model_validator(mode="after")
     def validate_thresholds(self) -> Self:
@@ -238,10 +251,13 @@ class ProfitSignalFeatures(DomainModel):
     as_of: date
     score: float = Field(ge=-1, le=1)
     predicted_probability: float = Field(ge=0, le=1)
+    one_day_return: float
     short_momentum: float
     long_momentum: float
     trend_strength: float
     trend_efficiency: float = Field(ge=0, le=1)
+    regime_momentum: float
+    regime_trend_strength: float
     annualized_volatility: float = Field(ge=0)
     drawdown: float
     volume_ratio: float = Field(ge=0)
@@ -317,6 +333,10 @@ class ProfitBacktestResult(DomainModel):
     trade_count: int = Field(ge=0)
     turnover: float = Field(ge=0)
     cost_drag: float = Field(ge=0)
+    stress_round_trip_cost_bps: float | None = Field(default=None, ge=0)
+    stress_total_return: float | None = None
+    stress_max_drawdown: float | None = None
+    cost_stress_passed: bool | None = None
     calibration_sample_count: int = Field(ge=0)
     brier_score: float | None = Field(default=None, ge=0)
     trades_per_year: dict[int, int] = Field(default_factory=dict)
@@ -328,6 +348,7 @@ class ProfitBacktestResult(DomainModel):
     threshold_selection: ThresholdSelection | None = None
     walk_forward: tuple[WalkForwardFoldResult, ...] = ()
     walk_forward_active_folds: int = Field(default=0, ge=0)
+    walk_forward_participation_ratio: float | None = Field(default=None, ge=0, le=1)
     walk_forward_positive_ratio: float | None = Field(default=None, ge=0, le=1)
     walk_forward_excess_ratio: float | None = Field(default=None, ge=0, le=1)
     walk_forward_median_return: float | None = None
@@ -382,6 +403,7 @@ def horizon_parameters(horizon: HorizonPreset) -> HorizonParameters:
                 long_lookback=63,
                 trend_window=60,
                 volatility_window=20,
+                regime_lookback=126,
                 holding_days=21,
             )
         case HorizonPreset.THREE_MONTHS:
@@ -391,6 +413,7 @@ def horizon_parameters(horizon: HorizonPreset) -> HorizonParameters:
                 long_lookback=126,
                 trend_window=120,
                 volatility_window=40,
+                regime_lookback=252,
                 holding_days=63,
             )
         case HorizonPreset.SIX_MONTHS:
@@ -400,6 +423,7 @@ def horizon_parameters(horizon: HorizonPreset) -> HorizonParameters:
                 long_lookback=252,
                 trend_window=200,
                 volatility_window=60,
+                regime_lookback=252,
                 holding_days=126,
             )
         case HorizonPreset.ONE_YEAR:
@@ -409,6 +433,7 @@ def horizon_parameters(horizon: HorizonPreset) -> HorizonParameters:
                 long_lookback=504,
                 trend_window=252,
                 volatility_window=80,
+                regime_lookback=504,
                 holding_days=252,
             )
 
@@ -432,7 +457,7 @@ def profit_strategy_config(
             minimum_trades_for_pass=max(1, min(2, max_trades_per_year)),
             threshold_candidates=(0.20, 0.28, 0.36, 0.45, 0.55),
             strategy_id="strategy.profit_validation_long_term",
-            strategy_version="profit-validation-long-v2",
+            strategy_version="profit-validation-long-v3",
         )
     return ProfitSeekingConfig(
         horizon=horizon,
@@ -444,7 +469,7 @@ def profit_strategy_config(
         minimum_trades_for_pass=max(1, min(3, max_trades_per_year)),
         threshold_candidates=(0.10, 0.14, 0.18, 0.25, 0.32, 0.40),
         strategy_id="strategy.profit_validation_short_term",
-        strategy_version="profit-validation-short-v2",
+        strategy_version="profit-validation-short-v3",
     )
 
 
@@ -534,7 +559,16 @@ def run_profit_strategy_backtest(
             config=active_config,
         )
         result = _apply_walk_forward_evidence(result, folds, config=active_config)
-    return result
+    return _apply_cost_stress_evidence(
+        result,
+        security_id=security_id,
+        bars=sorted_bars,
+        parameters=parameters,
+        start_index=final_start,
+        end_index=len(sorted_bars) - 1,
+        threshold=selection.selected_threshold,
+        config=active_config,
+    )
 
 
 def select_profit_threshold(
@@ -701,9 +735,14 @@ def profitability_evidence_from_validation(
             trade_count=result.trade_count,
             turnover=result.turnover,
             cost_drag=result.cost_drag,
+            stress_round_trip_cost_bps=result.stress_round_trip_cost_bps,
+            stress_total_return=result.stress_total_return,
+            stress_max_drawdown=result.stress_max_drawdown,
+            cost_stress_passed=result.cost_stress_passed,
             calibration_sample_count=result.calibration_sample_count,
             brier_score=result.brier_score,
             walk_forward_positive_ratio=result.walk_forward_positive_ratio,
+            walk_forward_participation_ratio=result.walk_forward_participation_ratio,
             walk_forward_excess_ratio=result.walk_forward_excess_ratio,
             walk_forward_median_return=result.walk_forward_median_return,
             checksum=result.checksum,
@@ -976,11 +1015,14 @@ def _entry_signal_passes(
 ) -> bool:
     return (
         features.score >= threshold
+        and features.one_day_return <= config.max_one_day_return_for_entry
         and features.short_momentum > 0
         and features.short_momentum <= config.max_short_momentum_for_entry
         and features.long_momentum > 0
         and features.trend_strength > 0
         and features.trend_efficiency >= config.minimum_trend_efficiency
+        and features.regime_momentum >= config.minimum_regime_momentum
+        and features.regime_trend_strength >= config.minimum_regime_trend_strength
         and features.annualized_volatility <= config.max_annual_volatility
         and features.drawdown >= -0.35
         and features.volume_ratio >= config.min_volume_confirmation
@@ -1006,10 +1048,16 @@ def _signal_features(
 
     short_momentum = closes[index] / short_base - 1.0
     long_momentum = closes[index] / long_base - 1.0
+    one_day_return = closes[index] / closes[index - 1] - 1.0
     trend_values = closes[index - parameters.trend_window + 1 : index + 1]
     trend_average = sum(trend_values) / len(trend_values)
     trend_strength = closes[index] / trend_average - 1.0 if trend_average > 0 else 0.0
     trend_efficiency = _trend_efficiency(closes[index - parameters.short_lookback : index + 1])
+    regime_base = closes[index - parameters.regime_lookback]
+    regime_momentum = closes[index] / regime_base - 1.0 if regime_base > 0 else -1.0
+    regime_values = closes[index - parameters.regime_lookback + 1 : index + 1]
+    regime_average = sum(regime_values) / len(regime_values)
+    regime_trend_strength = closes[index] / regime_average - 1.0 if regime_average > 0 else -1.0
     volatility_returns = _period_returns(closes[index - parameters.volatility_window : index + 1])
     annualized_volatility = _population_std(volatility_returns) * math.sqrt(252.0)
     volume_ratio = _volume_ratio(index, bars=bars, window=parameters.volatility_window)
@@ -1031,10 +1079,13 @@ def _signal_features(
         as_of=as_of,
         score=score,
         predicted_probability=max(0.05, min(0.95, 0.50 + score * 0.25)),
+        one_day_return=one_day_return,
         short_momentum=short_momentum,
         long_momentum=long_momentum,
         trend_strength=trend_strength,
         trend_efficiency=trend_efficiency,
+        regime_momentum=regime_momentum,
+        regime_trend_strength=regime_trend_strength,
         annualized_volatility=annualized_volatility,
         drawdown=drawdown,
         volume_ratio=volume_ratio,
@@ -1185,8 +1236,14 @@ def _result_notes(
     ]
     if config.max_short_momentum_for_entry < 1.0:
         notes.append(f"短期动量超过{config.max_short_momentum_for_entry:.0%}视为过热，不追涨入场。")
+    if config.max_one_day_return_for_entry < 1.0:
+        notes.append(f"单日涨幅超过{config.max_one_day_return_for_entry:.0%}时不在次日追入。")
     if config.minimum_trend_efficiency > 0:
         notes.append(f"趋势效率低于{config.minimum_trend_efficiency:.0%}时不入场。")
+    if config.minimum_regime_momentum > -1:
+        notes.append(f"中期状态收益低于{config.minimum_regime_momentum:.0%}时不新开仓。")
+    if config.minimum_regime_trend_strength > -1:
+        notes.append(f"价格相对中期均线低于{config.minimum_regime_trend_strength:.0%}时不新开仓。")
     if status is ProfitValidationStatus.PASS:
         notes.append("样本外净收益、回撤及正超额或风险调整比较暂时通过。")
     elif trade_count < config.minimum_trades_for_pass:
@@ -1225,11 +1282,17 @@ def _apply_walk_forward_evidence(
         )
         return updated.model_copy(update={"checksum": _result_checksum(updated)})
 
-    positive_ratio = sum(fold.total_return > 0 for fold in active) / len(active)
-    excess_ratio = sum(fold.excess_return > 0 for fold in active) / len(active)
-    median_return = _median(tuple(fold.total_return for fold in active))
-    median_excess = _median(tuple(fold.excess_return for fold in active))
-    consistent = len(active) >= 5 and positive_ratio >= 0.55 and median_return > 0
+    participation_ratio = len(active) / len(folds)
+    positive_ratio = sum(fold.total_return > 0 for fold in folds) / len(folds)
+    excess_ratio = sum(fold.excess_return > 0 for fold in folds) / len(folds)
+    median_return = _median(tuple(fold.total_return for fold in folds))
+    median_excess = _median(tuple(fold.excess_return for fold in folds))
+    consistent = (
+        len(active) >= 5
+        and participation_ratio >= 0.50
+        and positive_ratio >= 0.55
+        and median_return > 0
+    )
     status = result.status
     if status is ProfitValidationStatus.PASS and not consistent:
         status = ProfitValidationStatus.WATCH
@@ -1251,6 +1314,7 @@ def _apply_walk_forward_evidence(
         *result.notes,
         (
             f"滚动前推有效{len(active)}/{len(folds)}折，"
+            f"参与率{participation_ratio:.0%}，"
             f"正收益折{positive_ratio:.0%}，超额为正折{excess_ratio:.0%}，"
             f"折中位收益{median_return:.2%}。"
         ),
@@ -1261,10 +1325,72 @@ def _apply_walk_forward_evidence(
         update={
             "walk_forward": folds,
             "walk_forward_active_folds": len(active),
+            "walk_forward_participation_ratio": participation_ratio,
             "walk_forward_positive_ratio": positive_ratio,
             "walk_forward_excess_ratio": excess_ratio,
             "walk_forward_median_return": median_return,
             "walk_forward_median_excess": median_excess,
+            "status": status,
+            "reliability_grade": grade,
+            "notes": notes,
+        }
+    )
+    return updated.model_copy(update={"checksum": _result_checksum(updated)})
+
+
+def _apply_cost_stress_evidence(
+    result: ProfitBacktestResult,
+    *,
+    security_id: str,
+    bars: Sequence[Bar],
+    parameters: HorizonParameters,
+    start_index: int,
+    end_index: int,
+    threshold: float,
+    config: ProfitSeekingConfig,
+) -> ProfitBacktestResult:
+    stress_cost_bps = max(
+        config.round_trip_cost_bps * config.cost_stress_multiplier,
+        config.round_trip_cost_bps + 15.0,
+        30.0,
+    )
+    stress_config = config.model_copy(update={"round_trip_cost_bps": stress_cost_bps})
+    stressed = _simulate_strategy(
+        security_id=security_id,
+        bars=bars,
+        config=stress_config,
+        parameters=parameters,
+        start_index=start_index,
+        end_index=end_index,
+        threshold=threshold,
+        threshold_selection=None,
+    )
+    passed = (
+        stressed.trade_count == result.trade_count
+        and stressed.total_return > 0
+        and stressed.max_drawdown >= -0.35
+    )
+    status = result.status
+    grade = result.reliability_grade
+    notes = (
+        *result.notes,
+        (
+            f"成本压力使用往返{stress_cost_bps:.0f}bp且不重新选阈值，"
+            f"样本外收益{stressed.total_return:.2%}，"
+            f"最大回撤{stressed.max_drawdown:.2%}："
+            f"{'通过' if passed else '未通过'}。"
+        ),
+    )
+    if status is ProfitValidationStatus.PASS and not passed:
+        status = ProfitValidationStatus.WATCH
+        grade = ReliabilityGrade.C
+        notes = (*notes, "基础成本下虽通过，但提高成本后证据失效，状态降为WATCH。")
+    updated = result.model_copy(
+        update={
+            "stress_round_trip_cost_bps": stress_cost_bps,
+            "stress_total_return": stressed.total_return,
+            "stress_max_drawdown": stressed.max_drawdown,
+            "cost_stress_passed": passed,
             "status": status,
             "reliability_grade": grade,
             "notes": notes,

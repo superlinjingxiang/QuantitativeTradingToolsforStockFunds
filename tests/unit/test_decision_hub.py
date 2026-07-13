@@ -93,6 +93,10 @@ def profitability() -> ProfitabilityEvidence:
         trade_count=24,
         turnover=5.2,
         cost_drag=0.012,
+        stress_round_trip_cost_bps=45.0,
+        stress_total_return=0.15,
+        stress_max_drawdown=-0.09,
+        cost_stress_passed=True,
         calibration_sample_count=80,
         brier_score=0.18,
         checksum="profitability-fixture",
@@ -260,6 +264,39 @@ def test_negative_excess_without_drawdown_improvement_fails_profitability_gate()
     assert profitability_gate.status is EvidenceGateStatus.FAIL
 
 
+def test_missing_cost_stress_is_visible_and_blocks_execution_upgrade() -> None:
+    evidence = profitability().model_copy(update={"cost_stress_passed": None})
+
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis(),
+        profitability=evidence,
+        simulation=simulation(),
+    )
+
+    gate = next(item for item in report.gates if item.gate_id == "cost-stress")
+    assert gate.status is EvidenceGateStatus.MISSING
+    assert report.final_signal is FinalSignal.WATCH
+    assert report.execution_readiness is ExecutionReadiness.RESEARCH_ONLY
+
+
+def test_failed_cost_stress_is_a_real_blocking_gate() -> None:
+    evidence = profitability().model_copy(
+        update={"stress_total_return": -0.01, "cost_stress_passed": False}
+    )
+
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis(),
+        profitability=evidence,
+        simulation=simulation(),
+    )
+
+    gate = next(item for item in report.gates if item.gate_id == "cost-stress")
+    assert gate.status is EvidenceGateStatus.FAIL
+    assert report.final_signal is FinalSignal.WATCH
+
+
 def test_blocked_data_forces_abstain_even_when_other_evidence_exists() -> None:
     report = DecisionHub().build_report(
         request=request(),
@@ -287,3 +324,5 @@ def test_research_decision_from_market_data_contains_profitability_context() -> 
     assert report.simulation is None
     assert report.final_signal in {FinalSignal.WATCH, FinalSignal.BUY_CANDIDATE}
     assert any("模拟盘" in item for item in report.negative_evidence)
+    cost_gate = next(gate for gate in report.gates if gate.gate_id == "cost-stress")
+    assert cost_gate.status is EvidenceGateStatus.MISSING
