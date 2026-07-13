@@ -134,6 +134,11 @@ def report_summary(
                 "stress_total_return": result.stress_total_return,
                 "stress_max_drawdown": result.stress_max_drawdown,
                 "cost_stress_passed": result.cost_stress_passed,
+                "next_open_exit_count": result.next_open_exit_count,
+                "same_day_exit_count": result.same_day_exit_count,
+                "entry_rejection_count": result.entry_rejection_count,
+                "exit_deferral_count": result.exit_deferral_count,
+                "t_plus_one_deferral_count": result.t_plus_one_deferral_count,
                 "notes": result.notes,
             }
             for result in report.results

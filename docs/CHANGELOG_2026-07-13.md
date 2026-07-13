@@ -80,3 +80,15 @@ V4 发布检查：Ruff format、Ruff lint、mypy 通过；Python `269 passed`；
 真实结果：十 A 股平均最终收益由 3.92% 提升到 5.71%，中位收益由 3.64% 提升到 8.21%，平均最大回撤由 -12.34% 改善到 -11.64%，但仍为 0/10 PASS；十 ETF 保持 2/10 PASS；混合十标的平均收益由 8.02% 提升到 9.95%、平均回撤由 -12.68% 改善到 -12.00%。完整记录见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V5_2026-07-13.md`。
 
 V5 发布检查：Ruff format、Ruff lint、mypy 通过；Python `272 passed`；发布审计 `RELEASE_AUDIT_OK`；Vitest `1 passed`；Vite build 和 Playwright `2 passed`。FastAPI TestClient 仍有 1 条上游弃用警告，ECharts 构建仍有分包体积告警。
+
+## 盈利验证 V6
+
+- 短线策略版本升级为 `profit-validation-short-v6`，修复收盘退出信号使用同一收盘价成交的理想化时序；持有期、评分和趋势退出统一在下一交易日开盘执行。
+- 跟踪止损支持隔夜跳空：开盘越过止损价时按开盘成交，否则按止损触发价成交。
+- A 股个股启用 T+1、停牌/零成交量和一字涨跌停成交阻断；ETF 暂不套用 A 股个股规则。
+- 回测结果、实验室 JSON 和 Vue 右侧“决策证据”新增次日开盘退出、同日退出、T+1 延迟、拒绝买入和延迟卖出统计。
+- 当前策略和支持依据同步显示“次日开盘/T+1/涨跌停约束”，四个决策模块继续共用同一份 Python 回测结果。
+
+真实前复权复跑结果：十 A 股 `0/10 PASS`、平均收益 -0.14%、中位 -2.44%、平均回撤 -12.25%；十 ETF `2/10 PASS`、平均收益 17.42%、平均回撤 -10.39%；混合十标的 `2/10 PASS`、平均收益 7.14%、平均回撤 -11.94%。V5 的十 A 股平均收益为 5.71%，修正后降为负值，说明原结果受理想成交时点影响，当前策略仍不得升级为真实交易候选。
+
+V6 发布检查：Ruff format、Ruff lint、mypy 通过；Python `276 passed`；发布审计 `RELEASE_AUDIT_OK`；Vitest `1 passed`；Vite build 和 Playwright `2 passed`。完整执行模型、规则依据、逐标的结果和校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`。

@@ -144,6 +144,7 @@ class BacktestPanelState(DomainModel):
     reliability_grade: str = "--"
     walk_forward_consistency: str = "--"
     cost_stress: str = "--"
+    execution_realism: str = "--"
     summary: str = "暂无回测结果"
     notes: tuple[str, ...] = ()
     trades: tuple[str, ...] = ()
@@ -192,6 +193,13 @@ class BacktestPanelState(DomainModel):
                     f"收益{_format_percent(result.stress_total_return or 0.0)}；"
                     f"回撤{_format_percent(result.stress_max_drawdown or 0.0)}"
                 )
+            ),
+            execution_realism=(
+                f"次日开盘退出{result.next_open_exit_count}次；"
+                f"同日退出{result.same_day_exit_count}次；"
+                f"T+1延迟{result.t_plus_one_deferral_count}次；"
+                f"拒绝买入{result.entry_rejection_count}次；"
+                f"延迟卖出{result.exit_deferral_count}次"
             ),
             summary=_backtest_summary(result),
             notes=tuple(result.notes),
@@ -812,6 +820,7 @@ def _core_indicators_from_strategy(report: AnalysisReport) -> tuple[str, ...]:
         indicators = ["短中期动量", "成交量确认", "波动/回撤", "相似区间预测", "样本外回测"]
         if _is_a_share_stock_id(report.security_id):
             indicators.insert(1, "A股3%/20%反追涨")
+            indicators.insert(2, "次日开盘/T+1/涨跌停约束")
         return tuple(indicators)
     return ("动量", "趋势", "波动", "回撤", "样本外回测")
 

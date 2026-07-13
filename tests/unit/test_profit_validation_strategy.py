@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, date, datetime, time, timedelta
 
+import pytest
+
 import china_quant_platform.strategies.profit_validation as profit_validation_module
 from china_quant_platform.data import BarsRequest
 from china_quant_platform.domain import (
@@ -100,6 +102,25 @@ def _daily_return(index: int, regime: str) -> float:
     return 0.0006
 
 
+def _passing_features(as_of: date = date(2026, 7, 13)) -> ProfitSignalFeatures:
+    return ProfitSignalFeatures(
+        as_of=as_of,
+        score=0.50,
+        predicted_probability=0.625,
+        one_day_return=0.01,
+        short_momentum=0.10,
+        long_momentum=0.20,
+        trend_strength=0.05,
+        trend_efficiency=0.50,
+        regime_momentum=0.10,
+        regime_trend_strength=0.05,
+        annualized_volatility=0.30,
+        drawdown=-0.05,
+        volume_ratio=1.20,
+        liquidity_score=0.80,
+    )
+
+
 def test_horizon_presets_define_distinct_holding_periods() -> None:
     assert horizon_parameters(HorizonPreset.ONE_MONTH).holding_days == 21
     assert horizon_parameters(HorizonPreset.THREE_MONTHS).holding_days == 63
@@ -112,7 +133,7 @@ def test_canonical_short_and_long_configs_are_distinct() -> None:
     short = profit_strategy_config("short_term", HorizonPreset.ONE_MONTH, 12)
     long = profit_strategy_config("long_term", HorizonPreset.SIX_MONTHS, 4)
 
-    assert short.strategy_version == "profit-validation-short-v5"
+    assert short.strategy_version == "profit-validation-short-v6"
     assert long.strategy_version == "profit-validation-long-v3"
     assert short.max_annual_volatility > long.max_annual_volatility
     assert short.target_annual_volatility == 0.20
@@ -123,7 +144,13 @@ def test_canonical_short_and_long_configs_are_distinct() -> None:
     assert short.apply_a_share_anti_chase is True
     assert short.a_share_max_one_day_return_for_entry == 0.03
     assert short.a_share_max_short_momentum_for_entry == 0.20
+    assert short.execute_close_signals_at_next_open is True
+    assert short.apply_a_share_t_plus_one is True
+    assert short.block_a_share_one_price_limits is True
     assert long.apply_a_share_anti_chase is False
+    assert long.execute_close_signals_at_next_open is False
+    assert long.apply_a_share_t_plus_one is False
+    assert long.block_a_share_one_price_limits is False
 
 
 def test_a_share_anti_chase_limit_does_not_change_etf_entries() -> None:
@@ -157,6 +184,224 @@ def test_a_share_anti_chase_limit_does_not_change_etf_entries() -> None:
         threshold=0.10,
         config=config,
     )
+
+
+def test_close_signal_executes_at_next_open_without_same_day_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars = make_daily_bars("SSE:513300", count=8)
+    config = ProfitSeekingConfig(
+        max_trades_per_year=252,
+        execute_close_signals_at_next_open=True,
+        stop_loss_pct=0.50,
+    )
+
+    def fake_features(index: int, **_kwargs: object) -> ProfitSignalFeatures | None:
+        return _passing_features(bars[index].trade_date) if index == 1 else None
+
+    def fake_exit(*, index: int, **_kwargs: object) -> str | None:
+        return "score_breakdown" if index == 3 else None
+
+    monkeypatch.setattr(profit_validation_module, "_signal_features", fake_features)
+    monkeypatch.setattr(profit_validation_module, "_close_signal_reason", fake_exit)
+
+    result = profit_validation_module._simulate_strategy(
+        security_id="SSE:513300",
+        bars=bars,
+        config=config,
+        parameters=horizon_parameters(HorizonPreset.ONE_MONTH),
+        start_index=1,
+        end_index=6,
+        threshold=0.10,
+        threshold_selection=None,
+    )
+
+    assert result.trade_count == 1
+    assert result.trades[0].entry_date == bars[2].trade_date
+    assert result.trades[0].exit_date == bars[4].trade_date
+    assert result.trades[0].exit_price == bars[4].open_price
+    assert result.next_open_exit_count == 1
+    assert result.same_day_exit_count == 0
+
+
+def test_a_share_t_plus_one_defers_entry_day_stop_to_next_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = list(make_daily_bars("SSE:600519", count=8))
+    entry_bar = source[2]
+    source[2] = entry_bar.model_copy(
+        update={
+            "low_price": entry_bar.open_price * 0.80,
+        }
+    )
+    bars = tuple(source)
+    config = ProfitSeekingConfig(
+        max_trades_per_year=252,
+        execute_close_signals_at_next_open=True,
+        apply_a_share_t_plus_one=True,
+        stop_loss_pct=0.05,
+    )
+
+    def fake_features(index: int, **_kwargs: object) -> ProfitSignalFeatures | None:
+        return _passing_features(bars[index].trade_date) if index == 1 else None
+
+    monkeypatch.setattr(profit_validation_module, "_signal_features", fake_features)
+    monkeypatch.setattr(
+        profit_validation_module,
+        "_close_signal_reason",
+        lambda **_kwargs: None,
+    )
+
+    result = profit_validation_module._simulate_strategy(
+        security_id="SSE:600519",
+        bars=bars,
+        config=config,
+        parameters=horizon_parameters(HorizonPreset.ONE_MONTH),
+        start_index=1,
+        end_index=6,
+        threshold=0.10,
+        threshold_selection=None,
+    )
+
+    assert result.trade_count == 1
+    assert result.trades[0].entry_date == bars[2].trade_date
+    assert result.trades[0].exit_date == bars[3].trade_date
+    assert result.trades[0].exit_price == bars[3].open_price
+    assert result.trades[0].exit_reason == "stop_loss"
+    assert result.next_open_exit_count == 1
+    assert result.same_day_exit_count == 0
+    assert result.t_plus_one_deferral_count == 1
+
+
+def test_a_share_one_price_limits_block_buy_and_sell_but_not_etf() -> None:
+    config = profit_strategy_config("short_term", HorizonPreset.ONE_MONTH, 12)
+    previous_close = 10.0
+    ordinary_bar = make_daily_bars("SSE:600519", count=1)[0]
+    limit_up = ordinary_bar.model_copy(
+        update={
+            "open_price": 11.0,
+            "high_price": 11.0,
+            "low_price": 11.0,
+            "close_price": 11.0,
+        }
+    )
+    limit_down = ordinary_bar.model_copy(
+        update={
+            "open_price": 9.0,
+            "high_price": 9.0,
+            "low_price": 9.0,
+            "close_price": 9.0,
+        }
+    )
+
+    assert (
+        profit_validation_module._a_share_execution_block_reason(
+            security_id="SSE:600519",
+            side="BUY",
+            previous_close=previous_close,
+            bar=limit_up,
+            config=config,
+        )
+        == "one_price_limit_up"
+    )
+    assert (
+        profit_validation_module._a_share_execution_block_reason(
+            security_id="SSE:600519",
+            side="SELL",
+            previous_close=previous_close,
+            bar=limit_down,
+            config=config,
+        )
+        == "one_price_limit_down"
+    )
+    assert (
+        profit_validation_module._a_share_execution_block_reason(
+            security_id="SSE:513300",
+            side="BUY",
+            previous_close=previous_close,
+            bar=limit_up,
+            config=config,
+        )
+        is None
+    )
+
+
+def test_a_share_limit_up_rejection_and_limit_down_exit_deferral_are_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = list(make_daily_bars("SSE:600519", count=8))
+    entry_previous_close = base[1].close_price
+    limit_up_price = entry_previous_close * 1.10
+    limit_up_bars = base.copy()
+    limit_up_bars[2] = limit_up_bars[2].model_copy(
+        update={
+            "open_price": limit_up_price,
+            "high_price": limit_up_price,
+            "low_price": limit_up_price,
+            "close_price": limit_up_price,
+        }
+    )
+    config = profit_strategy_config(
+        "short_term",
+        HorizonPreset.ONE_MONTH,
+        252,
+    ).model_copy(update={"stop_loss_pct": 0.50})
+
+    def entry_features(index: int, **_kwargs: object) -> ProfitSignalFeatures | None:
+        return _passing_features(base[index].trade_date) if index == 1 else None
+
+    monkeypatch.setattr(profit_validation_module, "_signal_features", entry_features)
+    monkeypatch.setattr(
+        profit_validation_module,
+        "_close_signal_reason",
+        lambda **_kwargs: None,
+    )
+    rejected = profit_validation_module._simulate_strategy(
+        security_id="SSE:600519",
+        bars=tuple(limit_up_bars),
+        config=config,
+        parameters=horizon_parameters(HorizonPreset.ONE_MONTH),
+        start_index=1,
+        end_index=6,
+        threshold=0.10,
+        threshold_selection=None,
+    )
+
+    assert rejected.trade_count == 0
+    assert rejected.entry_rejection_count == 1
+
+    limit_down_bars = base.copy()
+    exit_previous_close = limit_down_bars[2].close_price
+    limit_down_price = exit_previous_close * 0.90
+    limit_down_bars[3] = limit_down_bars[3].model_copy(
+        update={
+            "open_price": limit_down_price,
+            "high_price": limit_down_price,
+            "low_price": limit_down_price,
+            "close_price": limit_down_price,
+        }
+    )
+
+    def close_after_entry(*, index: int, **_kwargs: object) -> str | None:
+        return "score_breakdown" if index == 2 else None
+
+    monkeypatch.setattr(profit_validation_module, "_close_signal_reason", close_after_entry)
+    deferred = profit_validation_module._simulate_strategy(
+        security_id="SSE:600519",
+        bars=tuple(limit_down_bars),
+        config=config,
+        parameters=horizon_parameters(HorizonPreset.ONE_MONTH),
+        start_index=1,
+        end_index=6,
+        threshold=0.10,
+        threshold_selection=None,
+    )
+
+    assert deferred.trade_count == 1
+    assert deferred.trades[0].exit_date == limit_down_bars[4].trade_date
+    assert deferred.next_open_exit_count == 1
+    assert deferred.exit_deferral_count == 1
+    assert deferred.same_day_exit_count == 0
 
 
 def test_profit_strategy_respects_annual_trade_limit_and_outputs_risk_metrics() -> None:
@@ -290,6 +535,11 @@ def test_default_etf_validation_lab_builds_aggregate_profitability_evidence() ->
     assert isinstance(summary_results, list)
     assert len(summary_results) == 10
     assert summary_results[0]["walk_forward_positive_ratio"] is not None
+    assert summary_results[0]["next_open_exit_count"] >= 0
+    assert summary_results[0]["same_day_exit_count"] >= 0
+    assert summary_results[0]["entry_rejection_count"] >= 0
+    assert summary_results[0]["exit_deferral_count"] >= 0
+    assert summary_results[0]["t_plus_one_deferral_count"] >= 0
 
 
 def test_mixed_validation_universe_covers_stocks_and_etfs() -> None:
@@ -507,6 +757,8 @@ def test_backtest_panel_state_lists_trade_operations() -> None:
     assert panel.sharpe_ratio != "--"
     assert panel.walk_forward_consistency != "--"
     assert panel.cost_stress != "--"
+    assert "次日开盘退出" in panel.execution_realism
+    assert "同日退出" in panel.execution_realism
     assert panel.trades
     assert "买入" in panel.trades[0]
     assert "卖出" in panel.trades[0]

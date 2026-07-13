@@ -275,6 +275,9 @@ class ProfitSeekingConfig(DomainModel):
     apply_a_share_anti_chase: bool = False
     a_share_max_short_momentum_for_entry: float = Field(default=0.20, gt=0, le=1)
     a_share_max_one_day_return_for_entry: float = Field(default=0.03, gt=0, le=1)
+    execute_close_signals_at_next_open: bool = False
+    apply_a_share_t_plus_one: bool = False
+    block_a_share_one_price_limits: bool = False
     stop_loss_pct: float = Field(default=0.12, gt=0, le=1)
     final_test_fraction: float = Field(default=0.25, gt=0, lt=1)
     validation_fraction: float = Field(default=0.25, gt=0, lt=1)
@@ -408,6 +411,11 @@ class ProfitBacktestResult(DomainModel):
     walk_forward_excess_ratio: float | None = Field(default=None, ge=0, le=1)
     walk_forward_median_return: float | None = None
     walk_forward_median_excess: float | None = None
+    next_open_exit_count: int = Field(default=0, ge=0)
+    same_day_exit_count: int = Field(default=0, ge=0)
+    entry_rejection_count: int = Field(default=0, ge=0)
+    exit_deferral_count: int = Field(default=0, ge=0)
+    t_plus_one_deferral_count: int = Field(default=0, ge=0)
     checksum: NonEmptyString
 
 
@@ -447,6 +455,11 @@ class ProfitValidationReport(DomainModel):
 @dataclass(frozen=True, slots=True)
 class _PendingEntry:
     features: ProfitSignalFeatures
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingExit:
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,6 +543,9 @@ def profit_strategy_config(
         horizon=horizon,
         max_trades_per_year=max_trades_per_year,
         apply_a_share_anti_chase=True,
+        execute_close_signals_at_next_open=True,
+        apply_a_share_t_plus_one=True,
+        block_a_share_one_price_limits=True,
         target_annual_volatility=0.20,
         max_annual_volatility=0.78,
         stop_loss_pct=0.075,
@@ -538,7 +554,7 @@ def profit_strategy_config(
         minimum_trades_for_pass=max(1, min(3, max_trades_per_year)),
         threshold_candidates=(0.10, 0.14, 0.18, 0.25, 0.32, 0.40),
         strategy_id="strategy.profit_validation_short_term",
-        strategy_version="profit-validation-short-v5",
+        strategy_version="profit-validation-short-v6",
     )
 
 
@@ -892,29 +908,79 @@ def _simulate_strategy(
     cash = 1.0
     position: _OpenPosition | None = None
     pending_entry: _PendingEntry | None = None
+    pending_exit: _PendingExit | None = None
     last_entry_index = -10_000
     entries_per_year: dict[int, int] = {}
     trades: list[ProfitBacktestTrade] = []
     equity_curve: list[ProfitEquityPoint] = []
+    next_open_exit_count = 0
+    same_day_exit_count = 0
+    entry_rejection_count = 0
+    exit_deferral_count = 0
+    t_plus_one_deferral_count = 0
     half_cost_rate = config.round_trip_cost_bps / 20_000.0
     benchmark_start = bars[start_index].close_price
     benchmark_value = 1.0
 
     for index in range(start_index, end_index + 1):
         bar = bars[index]
-        if pending_entry is not None and position is None:
-            position, cash = _open_position(
-                index=index,
-                bar=bar,
-                cash=cash,
-                half_cost_rate=half_cost_rate,
-                pending_entry=pending_entry,
-                config=config,
-            )
-            last_entry_index = index
-            entries_per_year[position.entry_date.year] = (
-                entries_per_year.get(position.entry_date.year, 0) + 1
-            )
+        previous_close = bars[index - 1].close_price if index > 0 else bar.open_price
+
+        if pending_exit is not None and position is not None:
+            if (
+                _a_share_execution_block_reason(
+                    security_id=security_id,
+                    side="SELL",
+                    previous_close=previous_close,
+                    bar=bar,
+                    config=config,
+                )
+                is not None
+            ):
+                exit_deferral_count += 1
+            else:
+                cash, trade = _close_position(
+                    security_id=security_id,
+                    index=index,
+                    bar=bar,
+                    execution_price=bar.open_price,
+                    cash_reserve=cash,
+                    position=position,
+                    half_cost_rate=half_cost_rate,
+                    exit_reason=pending_exit.reason,
+                )
+                trades.append(trade)
+                position = None
+                pending_exit = None
+                next_open_exit_count += 1
+        elif pending_exit is not None:
+            pending_exit = None
+
+        if pending_entry is not None and position is None and pending_exit is None:
+            if (
+                _a_share_execution_block_reason(
+                    security_id=security_id,
+                    side="BUY",
+                    previous_close=previous_close,
+                    bar=bar,
+                    config=config,
+                )
+                is not None
+            ):
+                entry_rejection_count += 1
+            else:
+                position, cash = _open_position(
+                    index=index,
+                    bar=bar,
+                    cash=cash,
+                    half_cost_rate=half_cost_rate,
+                    pending_entry=pending_entry,
+                    config=config,
+                )
+                last_entry_index = index
+                entries_per_year[position.entry_date.year] = (
+                    entries_per_year.get(position.entry_date.year, 0) + 1
+                )
             pending_entry = None
 
         if position is not None:
@@ -928,7 +994,42 @@ def _simulate_strategy(
                 position_fraction=position.position_fraction,
                 trailing_peak=max(position.trailing_peak, bar.close_price),
             )
-            exit_reason = _exit_reason(
+            stop_price = position.trailing_peak * (1.0 - config.stop_loss_pct)
+            if bar.low_price <= stop_price and pending_exit is None:
+                blocked_reason = _a_share_execution_block_reason(
+                    security_id=security_id,
+                    side="SELL",
+                    previous_close=previous_close,
+                    bar=bar,
+                    config=config,
+                )
+                t_plus_one_blocked = (
+                    config.apply_a_share_t_plus_one
+                    and _is_a_share_stock(security_id)
+                    and index <= position.entry_index
+                )
+                if t_plus_one_blocked or blocked_reason is not None:
+                    pending_exit = _PendingExit(reason="stop_loss")
+                    exit_deferral_count += 1
+                    t_plus_one_deferral_count += int(t_plus_one_blocked)
+                else:
+                    stop_execution_price = min(bar.open_price, stop_price)
+                    cash, trade = _close_position(
+                        security_id=security_id,
+                        index=index,
+                        bar=bar,
+                        execution_price=stop_execution_price,
+                        cash_reserve=cash,
+                        position=position,
+                        half_cost_rate=half_cost_rate,
+                        exit_reason="stop_loss",
+                    )
+                    trades.append(trade)
+                    same_day_exit_count += index == position.entry_index
+                    position = None
+
+        if position is not None and pending_exit is None:
+            exit_reason = _close_signal_reason(
                 index=index,
                 closes=closes,
                 bar=bar,
@@ -937,17 +1038,22 @@ def _simulate_strategy(
                 config=config,
             )
             if exit_reason is not None:
-                cash, trade = _close_position(
-                    security_id=security_id,
-                    index=index,
-                    bar=bar,
-                    cash_reserve=cash,
-                    position=position,
-                    half_cost_rate=half_cost_rate,
-                    exit_reason=exit_reason,
-                )
-                trades.append(trade)
-                position = None
+                if config.execute_close_signals_at_next_open and index < end_index:
+                    pending_exit = _PendingExit(reason=exit_reason)
+                else:
+                    cash, trade = _close_position(
+                        security_id=security_id,
+                        index=index,
+                        bar=bar,
+                        execution_price=bar.close_price,
+                        cash_reserve=cash,
+                        position=position,
+                        half_cost_rate=half_cost_rate,
+                        exit_reason=exit_reason,
+                    )
+                    trades.append(trade)
+                    same_day_exit_count += index == position.entry_index
+                    position = None
 
         nav = cash if position is None else cash + position.shares * bar.close_price
         benchmark_value = 1.0 if benchmark_start <= 0 else bar.close_price / benchmark_start
@@ -988,6 +1094,7 @@ def _simulate_strategy(
             security_id=security_id,
             index=end_index,
             bar=final_bar,
+            execution_price=final_bar.close_price,
             cash_reserve=cash,
             position=position,
             half_cost_rate=half_cost_rate,
@@ -1010,6 +1117,11 @@ def _simulate_strategy(
         equity_curve=tuple(equity_curve),
         trades_per_year=entries_per_year,
         threshold_selection=threshold_selection,
+        next_open_exit_count=next_open_exit_count,
+        same_day_exit_count=same_day_exit_count,
+        entry_rejection_count=entry_rejection_count,
+        exit_deferral_count=exit_deferral_count,
+        t_plus_one_deferral_count=t_plus_one_deferral_count,
     )
 
 
@@ -1043,12 +1155,13 @@ def _close_position(
     security_id: str,
     index: int,
     bar: Bar,
+    execution_price: float,
     cash_reserve: float,
     position: _OpenPosition,
     half_cost_rate: float,
     exit_reason: str,
 ) -> tuple[float, ProfitBacktestTrade]:
-    exit_price = max(bar.close_price, 1e-12)
+    exit_price = max(execution_price, 1e-12)
     cash = cash_reserve + position.shares * exit_price * (1.0 - half_cost_rate)
     gross_return = exit_price / position.entry_price - 1.0
     net_return = (
@@ -1089,7 +1202,7 @@ def _position_fraction(
     )
 
 
-def _exit_reason(
+def _close_signal_reason(
     *,
     index: int,
     closes: Sequence[float],
@@ -1101,8 +1214,6 @@ def _exit_reason(
     holding_days = index - position.entry_index
     if holding_days >= parameters.holding_days:
         return "holding_period_reached"
-    if bar.close_price / position.trailing_peak - 1.0 <= -config.stop_loss_pct:
-        return "stop_loss"
     features = _signal_features(index, bars=(), closes=closes, parameters=parameters)
     if features is None:
         return None
@@ -1236,6 +1347,40 @@ def _is_a_share_stock(security_id: str) -> bool:
     return False
 
 
+def _a_share_execution_block_reason(
+    *,
+    security_id: str,
+    side: Literal["BUY", "SELL"],
+    previous_close: float,
+    bar: Bar,
+    config: ProfitSeekingConfig,
+) -> str | None:
+    if not config.block_a_share_one_price_limits or not _is_a_share_stock(security_id):
+        return None
+    if bar.volume <= 0:
+        return "zero_volume_or_suspension"
+    if previous_close <= 0 or bar.close_price <= 0:
+        return "invalid_execution_price"
+    price_spread_ratio = (bar.high_price - bar.low_price) / max(bar.close_price, 1e-12)
+    if price_spread_ratio > 0.0005:
+        return None
+    limit_ratio = _a_share_daily_price_limit_ratio(security_id)
+    daily_return = bar.close_price / previous_close - 1.0
+    tolerance = 0.003
+    if side == "BUY" and daily_return >= limit_ratio - tolerance:
+        return "one_price_limit_up"
+    if side == "SELL" and daily_return <= -limit_ratio + tolerance:
+        return "one_price_limit_down"
+    return None
+
+
+def _a_share_daily_price_limit_ratio(security_id: str) -> float:
+    _exchange, _separator, symbol = security_id.partition(":")
+    if symbol.startswith(("300", "301", "688", "689")):
+        return 0.20
+    return 0.10
+
+
 def _build_result(
     *,
     security_id: str,
@@ -1248,6 +1393,11 @@ def _build_result(
     equity_curve: tuple[ProfitEquityPoint, ...],
     trades_per_year: dict[int, int],
     threshold_selection: ThresholdSelection | None,
+    next_open_exit_count: int,
+    same_day_exit_count: int,
+    entry_rejection_count: int,
+    exit_deferral_count: int,
+    t_plus_one_deferral_count: int,
 ) -> ProfitBacktestResult:
     total_return = equity_curve[-1].net_asset_value / equity_curve[0].net_asset_value - 1.0
     benchmark_total_return = equity_curve[-1].benchmark_value / equity_curve[0].benchmark_value - 1
@@ -1318,10 +1468,20 @@ def _build_result(
             status=status,
             trade_count=len(trades),
             config=config,
+            next_open_exit_count=next_open_exit_count,
+            same_day_exit_count=same_day_exit_count,
+            entry_rejection_count=entry_rejection_count,
+            exit_deferral_count=exit_deferral_count,
+            t_plus_one_deferral_count=t_plus_one_deferral_count,
         ),
         equity_curve=equity_curve,
         trades=trades,
         threshold_selection=threshold_selection,
+        next_open_exit_count=next_open_exit_count,
+        same_day_exit_count=same_day_exit_count,
+        entry_rejection_count=entry_rejection_count,
+        exit_deferral_count=exit_deferral_count,
+        t_plus_one_deferral_count=t_plus_one_deferral_count,
         checksum="pending",
     )
     return result.model_copy(update={"checksum": _result_checksum(result)})
@@ -1380,13 +1540,37 @@ def _result_notes(
     status: ProfitValidationStatus,
     trade_count: int,
     config: ProfitSeekingConfig,
+    next_open_exit_count: int,
+    same_day_exit_count: int,
+    entry_rejection_count: int,
+    exit_deferral_count: int,
+    t_plus_one_deferral_count: int,
 ) -> tuple[str, ...]:
     notes = [
         "收益为扣除简化往返成本后的历史样本外结果，不代表保证未来收益。",
         f"交易次数按每年最大{config.max_trades_per_year}次约束。",
-        f"跟踪止损阈值为{config.stop_loss_pct:.1%}，按收盘价确认退出。",
+        (
+            f"跟踪止损阈值为{config.stop_loss_pct:.1%}；若开盘已越过止损价，"
+            "按开盘价成交，否则按止损触发价成交。"
+        ),
         "入场同时检查动量、趋势、波动、回撤、成交量确认和流动性，避免只凭价格追涨。",
     ]
+    if config.execute_close_signals_at_next_open:
+        notes.append(
+            "收盘后才能确认的持有期、评分和趋势退出信号统一在下一交易日开盘执行，"
+            f"本区间共执行{next_open_exit_count}次。"
+        )
+    if config.apply_a_share_t_plus_one and _is_a_share_stock(security_id):
+        notes.append(
+            "A股个股启用T+1约束，不允许买入当日卖出；"
+            f"检测到的同日退出次数为{same_day_exit_count}，"
+            f"因T+1延迟卖出{t_plus_one_deferral_count}次。"
+        )
+    if config.block_a_share_one_price_limits and _is_a_share_stock(security_id):
+        notes.append(
+            "A股个股启用停牌及一字涨跌停成交阻断："
+            f"拒绝买入{entry_rejection_count}次，延迟卖出{exit_deferral_count}次。"
+        )
     if config.max_short_momentum_for_entry < 1.0:
         notes.append(f"短期动量超过{config.max_short_momentum_for_entry:.0%}视为过热，不追涨入场。")
     if config.max_one_day_return_for_entry < 1.0:
