@@ -182,7 +182,9 @@ class ElectronBackendService:
 
         requires_market_regime = (
             config.apply_a_share_market_regime_filter
-            and security.asset_type is AssetType.STOCK
+            or config.apply_a_share_relative_strength_filter
+        ) and (
+            security.asset_type is AssetType.STOCK
             and security.exchange in {Exchange.SSE, Exchange.SZSE}
         )
         if requires_market_regime:

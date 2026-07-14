@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 
 from china_quant_platform.data import BarsRequest, MarketDataProvider
@@ -15,6 +15,7 @@ from china_quant_platform.strategies.profit_validation import (
     HorizonPreset,
     ProfitValidationReport,
     default_a_share_confirmation_universe,
+    default_a_share_holdout_universe,
     default_a_share_shadow_universe,
     default_a_share_validation_universe,
     default_etf_validation_universe,
@@ -54,6 +55,7 @@ async def validate_profit_universe(
     max_trades_per_year: int = 12,
     history_years: int = 7,
     as_of: datetime | None = None,
+    config_overrides: Mapping[str, object] | None = None,
 ) -> tuple[ProfitValidationReport, tuple[str, ...]]:
     if history_years < 1:
         raise ValueError("history_years must be at least 1")
@@ -68,6 +70,8 @@ async def validate_profit_universe(
         horizon,
         max_trades_per_year,
     )
+    if config_overrides:
+        config = config.model_copy(update=dict(config_overrides))
     parameters = horizon_parameters(horizon)
     minimum_bars = parameters.warmup_bars + config.minimum_validation_bars + config.minimum_oos_bars
     bars_by_security: dict[str, tuple[Bar, ...]] = {}
@@ -91,9 +95,9 @@ async def validate_profit_universe(
             failures.append(
                 f"{member.security_id}: insufficient history {len(bars)}/{minimum_bars} bars"
             )
-    needs_market_regime = config.apply_a_share_market_regime_filter and any(
-        member.asset_type is AssetType.STOCK for member in universe
-    )
+    needs_market_regime = (
+        config.apply_a_share_market_regime_filter or config.apply_a_share_relative_strength_filter
+    ) and any(member.asset_type is AssetType.STOCK for member in universe)
     if needs_market_regime and config.market_regime_security_id not in bars_by_security:
         try:
             market_bars = await provider.get_bars(
@@ -167,7 +171,9 @@ def report_summary(
                 "entry_rejection_count": result.entry_rejection_count,
                 "exit_deferral_count": result.exit_deferral_count,
                 "t_plus_one_deferral_count": result.t_plus_one_deferral_count,
+                "break_even_stop_count": result.break_even_stop_count,
                 "market_regime": result.market_regime.to_contract_dict(),
+                "relative_strength": result.relative_strength.to_contract_dict(),
                 "notes": result.notes,
             }
             for result in report.results
@@ -194,11 +200,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--max-trades", type=int, default=12)
     parser.add_argument("--history-years", type=int, default=7)
     parser.add_argument(
+        "--a-share-break-even-activation",
+        type=float,
+        default=None,
+        help=(
+            "Experimental A-share break-even activation ratio, for example 0.02. "
+            "The canonical strategy leaves this disabled."
+        ),
+    )
+    parser.add_argument(
         "--universe",
-        choices=("etf10", "stock10", "stock_confirm10", "stock_shadow10", "mixed10"),
+        choices=(
+            "etf10",
+            "stock10",
+            "stock_confirm10",
+            "stock_shadow10",
+            "stock_holdout10",
+            "mixed10",
+        ),
         default="etf10",
         help=(
-            "Use ten ETFs, the primary/confirmation/shadow A-share pools, "
+            "Use ten ETFs, the primary/confirmation/shadow/holdout A-share pools, "
             "or a five-stock/five-ETF validation pool."
         ),
     )
@@ -215,6 +237,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             universe = default_a_share_confirmation_universe()
         elif args.universe == "stock_shadow10":
             universe = default_a_share_shadow_universe()
+        elif args.universe == "stock_holdout10":
+            universe = default_a_share_holdout_universe()
         elif args.universe == "mixed10":
             universe = default_mixed_validation_universe()
         else:
@@ -226,6 +250,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             strategy_mode=args.strategy_mode,
             max_trades_per_year=max(1, min(args.max_trades, 252)),
             history_years=args.history_years,
+            config_overrides=(
+                {"a_share_break_even_activation_pct": args.a_share_break_even_activation}
+                if args.a_share_break_even_activation is not None
+                else None
+            ),
         )
 
     report, failures = asyncio.run(run())

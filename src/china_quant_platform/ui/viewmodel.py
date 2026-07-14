@@ -1067,8 +1067,9 @@ class ApplicationViewModel(QtCore.QObject):
                 self._state.strategy_controls.max_trades_per_year,
             )
             requires_market_regime = (
-                config.apply_a_share_market_regime_filter and _is_a_share_security_id(security_id)
-            )
+                config.apply_a_share_market_regime_filter
+                or config.apply_a_share_relative_strength_filter
+            ) and _is_a_share_security_id(security_id)
 
             async def load_market_regime() -> tuple[tuple[Bar, ...], tuple[str, ...]]:
                 if not requires_market_regime:
@@ -2050,6 +2051,11 @@ def _profit_analysis_signal(
         MarketRegimeGateStatus.MISSING,
     }:
         return FinalSignal.ABSTAIN
+    if backtest.relative_strength.status in {
+        MarketRegimeGateStatus.BLOCKED,
+        MarketRegimeGateStatus.MISSING,
+    }:
+        return FinalSignal.ABSTAIN
     if (
         pass_like
         and backtest.cost_stress_passed is True
@@ -2084,6 +2090,10 @@ def _profit_abstain_reason(
         return AbstainReason.DATA
     if backtest.market_regime.status is MarketRegimeGateStatus.BLOCKED:
         return AbstainReason.RULE
+    if backtest.relative_strength.status is MarketRegimeGateStatus.MISSING:
+        return AbstainReason.DATA
+    if backtest.relative_strength.status is MarketRegimeGateStatus.BLOCKED:
+        return AbstainReason.RULE
     if forecast.similar_sample_count <= 0:
         return AbstainReason.MODEL_UNCERTAINTY
     if backtest.status is ProfitValidationStatus.FAIL and backtest.excess_return <= 0:
@@ -2102,6 +2112,10 @@ def _profit_raw_signal(
         return "ABSTAIN_A_SHARE_MARKET_REGIME_MISSING"
     if backtest.market_regime.status is MarketRegimeGateStatus.BLOCKED:
         return "ABSTAIN_A_SHARE_MARKET_REGIME_BLOCKED"
+    if backtest.relative_strength.status is MarketRegimeGateStatus.MISSING:
+        return "ABSTAIN_A_SHARE_RELATIVE_STRENGTH_MISSING"
+    if backtest.relative_strength.status is MarketRegimeGateStatus.BLOCKED:
+        return "ABSTAIN_A_SHARE_RELATIVE_STRENGTH_BLOCKED"
     if probabilities.down >= 0.50:
         return f"{mode_prefix}_SELL_OR_REDUCE_BIAS"
     if probabilities.up >= 0.50 and backtest.status is ProfitValidationStatus.PASS:
@@ -2190,6 +2204,12 @@ def _profit_positive_drivers(
                 f"{backtest.market_regime.long_lookback}日动量"
                 f"{(backtest.market_regime.long_momentum or 0.0):.1%}。"
             )
+        if backtest.relative_strength.status is MarketRegimeGateStatus.PASS:
+            values.append(
+                "相对沪深300强弱门槛通过："
+                f"短期{(backtest.relative_strength.short_relative_momentum or 0.0):.1%}，"
+                f"中期{(backtest.relative_strength.long_relative_momentum or 0.0):.1%}。"
+            )
     values.extend(forecast.notes[:2])
     if backtest.total_return > 0:
         values.append(f"样本外扣费净收益 {backtest.total_return:.2%}。")
@@ -2271,6 +2291,13 @@ def _profit_negative_drivers(
         )
     elif backtest.market_regime.status is MarketRegimeGateStatus.MISSING:
         values.append("沪深300市场代理数据不足，无法验证大盘环境，禁止新开A股仓位。")
+    if backtest.relative_strength.status is MarketRegimeGateStatus.BLOCKED:
+        values.append(
+            "个股相对沪深300强弱未通过实验门槛，禁止新开仓；"
+            f"样本内已拒绝{backtest.relative_strength.rejected_entry_count}次候选。"
+        )
+    elif backtest.relative_strength.status is MarketRegimeGateStatus.MISSING:
+        values.append("个股或沪深300样本不足，无法验证相对强弱，禁止新开仓。")
     if forecast.confidence < 0.45:
         values.append(f"预测置信度偏低：{forecast.confidence:.0%}，需要更多相似样本验证。")
     if len(forecast.notes) >= 3:

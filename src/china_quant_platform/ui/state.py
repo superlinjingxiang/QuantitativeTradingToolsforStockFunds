@@ -202,7 +202,10 @@ class BacktestPanelState(DomainModel):
                 f"拒绝买入{result.entry_rejection_count}次；"
                 f"延迟卖出{result.exit_deferral_count}次；"
                 f"市场门槛{result.market_regime.status.value}，"
-                f"拒绝候选{result.market_regime.rejected_entry_count}次"
+                f"拒绝候选{result.market_regime.rejected_entry_count}次；"
+                f"相对强弱{result.relative_strength.status.value}，"
+                f"拒绝候选{result.relative_strength.rejected_entry_count}次；"
+                f"保本止损{result.break_even_stop_count}次"
             ),
             summary=_backtest_summary(result),
             notes=tuple(result.notes),

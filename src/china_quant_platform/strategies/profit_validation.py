@@ -392,6 +392,90 @@ DEFAULT_A_SHARE_SHADOW_UNIVERSE: tuple[DefaultValidationSecurity, ...] = (
 )
 
 
+DEFAULT_A_SHARE_HOLDOUT_UNIVERSE: tuple[DefaultValidationSecurity, ...] = (
+    DefaultValidationSecurity(
+        security_id="SSE:600104",
+        symbol="600104",
+        name="上汽集团",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="holdout_auto",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:600660",
+        symbol="600660",
+        name="福耀玻璃",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="holdout_auto_parts",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:600009",
+        symbol="600009",
+        name="上海机场",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="holdout_transport",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:601006",
+        symbol="601006",
+        name="大秦铁路",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="holdout_railway",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:600019",
+        symbol="600019",
+        name="宝钢股份",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="holdout_steel",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:601166",
+        symbol="601166",
+        name="兴业银行",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="holdout_bank",
+    ),
+    DefaultValidationSecurity(
+        security_id="SSE:600028",
+        symbol="600028",
+        name="中国石化",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SSE,
+        asset_bucket="holdout_energy",
+    ),
+    DefaultValidationSecurity(
+        security_id="SZSE:000725",
+        symbol="000725",
+        name="京东方A",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SZSE,
+        asset_bucket="holdout_display",
+    ),
+    DefaultValidationSecurity(
+        security_id="SZSE:002230",
+        symbol="002230",
+        name="科大讯飞",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SZSE,
+        asset_bucket="holdout_software",
+    ),
+    DefaultValidationSecurity(
+        security_id="SZSE:000895",
+        symbol="000895",
+        name="双汇发展",
+        asset_type=AssetType.STOCK,
+        exchange=Exchange.SZSE,
+        asset_bucket="holdout_food",
+    ),
+)
+
+
 DEFAULT_MIXED_VALIDATION_UNIVERSE: tuple[DefaultValidationSecurity, ...] = (
     *DEFAULT_A_SHARE_VALIDATION_UNIVERSE[:5],
     *(
@@ -449,14 +533,21 @@ class ProfitSeekingConfig(DomainModel):
     minimum_regime_trend_strength: float = Field(default=-1.0, ge=-1, le=1)
     apply_a_share_anti_chase: bool = False
     a_share_max_short_momentum_for_entry: float = Field(default=0.20, gt=0, le=1)
+    a_share_max_long_momentum_for_entry: float = Field(default=1.0, gt=0, le=1)
     a_share_max_one_day_return_for_entry: float = Field(default=0.03, gt=0, le=1)
     a_share_min_volume_confirmation: float | None = Field(default=None, ge=0)
+    a_share_minimum_trend_efficiency: float | None = Field(default=None, ge=0, le=1)
+    a_share_max_annualized_volatility: float | None = Field(default=None, gt=0)
+    a_share_break_even_activation_pct: float | None = Field(default=None, gt=0, le=1)
     apply_a_share_market_regime_filter: bool = False
     market_regime_security_id: NonEmptyString = "SSE:510300"
     market_regime_short_lookback: int = Field(default=21, ge=2)
     market_regime_long_lookback: int = Field(default=63, ge=2)
     market_regime_min_short_momentum: float = Field(default=0.0, ge=-1, le=1)
     market_regime_min_long_momentum: float = Field(default=0.0, ge=-1, le=1)
+    apply_a_share_relative_strength_filter: bool = False
+    a_share_min_relative_short_momentum: float = Field(default=-1.0, ge=-1, le=1)
+    a_share_min_relative_long_momentum: float = Field(default=-1.0, ge=-1, le=1)
     execute_close_signals_at_next_open: bool = False
     apply_a_share_t_plus_one: bool = False
     block_a_share_one_price_limits: bool = False
@@ -538,6 +629,17 @@ class MarketRegimeEvidence(DomainModel):
     rejected_entry_count: int = Field(default=0, ge=0)
 
 
+class RelativeStrengthEvidence(DomainModel):
+    status: MarketRegimeGateStatus
+    benchmark_security_id: NonEmptyString | None = None
+    as_of: date | None = None
+    short_relative_momentum: float | None = None
+    long_relative_momentum: float | None = None
+    minimum_short_relative_momentum: float | None = None
+    minimum_long_relative_momentum: float | None = None
+    rejected_entry_count: int = Field(default=0, ge=0)
+
+
 class ThresholdCandidateResult(DomainModel):
     threshold: float = Field(ge=-1, le=1)
     total_return: float
@@ -613,7 +715,9 @@ class ProfitBacktestResult(DomainModel):
     entry_rejection_count: int = Field(default=0, ge=0)
     exit_deferral_count: int = Field(default=0, ge=0)
     t_plus_one_deferral_count: int = Field(default=0, ge=0)
+    break_even_stop_count: int = Field(default=0, ge=0)
     market_regime: MarketRegimeEvidence
+    relative_strength: RelativeStrengthEvidence
     checksum: NonEmptyString
 
 
@@ -778,6 +882,12 @@ def default_a_share_shadow_universe() -> tuple[DefaultValidationSecurity, ...]:
     """Return the untouched third A-share pool used as a shadow holdout."""
 
     return DEFAULT_A_SHARE_SHADOW_UNIVERSE
+
+
+def default_a_share_holdout_universe() -> tuple[DefaultValidationSecurity, ...]:
+    """Return the untouched fourth A-share pool used for final holdout validation."""
+
+    return DEFAULT_A_SHARE_HOLDOUT_UNIVERSE
 
 
 def default_mixed_validation_universe() -> tuple[DefaultValidationSecurity, ...]:
@@ -1149,6 +1259,7 @@ def _simulate_strategy(
     exit_deferral_count = 0
     t_plus_one_deferral_count = 0
     market_regime_rejection_count = 0
+    relative_strength_rejection_count = 0
     sorted_market_regime_bars = _sorted_bars(
         config.market_regime_security_id,
         market_regime_bars,
@@ -1219,7 +1330,11 @@ def _simulate_strategy(
             pending_entry = None
 
         if position is not None:
-            stop_price = position.trailing_peak * (1.0 - config.stop_loss_pct)
+            stop_price, stop_reason = _active_stop(
+                security_id=security_id,
+                position=position,
+                config=config,
+            )
             if bar.low_price <= stop_price and pending_exit is None:
                 blocked_reason = _a_share_execution_block_reason(
                     security_id=security_id,
@@ -1234,7 +1349,7 @@ def _simulate_strategy(
                     and index <= position.entry_index
                 )
                 if t_plus_one_blocked or blocked_reason is not None:
-                    pending_exit = _PendingExit(reason="stop_loss")
+                    pending_exit = _PendingExit(reason=stop_reason)
                     exit_deferral_count += 1
                     t_plus_one_deferral_count += int(t_plus_one_blocked)
                 else:
@@ -1247,7 +1362,7 @@ def _simulate_strategy(
                         cash_reserve=cash,
                         position=position,
                         half_cost_rate=half_cost_rate,
-                        exit_reason="stop_loss",
+                        exit_reason=stop_reason,
                     )
                     trades.append(trade)
                     same_day_exit_count += index == position.entry_index
@@ -1331,13 +1446,26 @@ def _simulate_strategy(
                     market_regime_bars=sorted_market_regime_bars,
                     config=config,
                 )
-                if market_regime.status in {
+                relative_strength = _relative_strength_evidence(
+                    security_id=security_id,
+                    features=features,
+                    market_regime=market_regime,
+                    config=config,
+                )
+                market_passed = market_regime.status in {
                     MarketRegimeGateStatus.NOT_APPLICABLE,
                     MarketRegimeGateStatus.PASS,
-                }:
+                }
+                relative_strength_passed = relative_strength.status in {
+                    MarketRegimeGateStatus.NOT_APPLICABLE,
+                    MarketRegimeGateStatus.PASS,
+                }
+                if market_passed and relative_strength_passed:
                     pending_entry = _PendingEntry(features=features)
-                else:
+                if not market_passed:
                     market_regime_rejection_count += 1
+                if not relative_strength_passed:
+                    relative_strength_rejection_count += 1
 
     if position is not None:
         final_bar = bars[end_index]
@@ -1357,6 +1485,24 @@ def _simulate_strategy(
                 update={"net_asset_value": max(cash, 1e-12)}
             )
 
+    final_market_regime = _market_regime_evidence(
+        security_id=security_id,
+        as_of=bars[end_index].trade_date,
+        market_regime_bars=sorted_market_regime_bars,
+        config=config,
+    )
+    final_features = _signal_features(
+        end_index,
+        bars=bars,
+        closes=closes,
+        parameters=parameters,
+    )
+    final_relative_strength = _relative_strength_evidence(
+        security_id=security_id,
+        features=final_features,
+        market_regime=final_market_regime,
+        config=config,
+    )
     return _build_result(
         security_id=security_id,
         bars=bars,
@@ -1373,12 +1519,12 @@ def _simulate_strategy(
         entry_rejection_count=entry_rejection_count,
         exit_deferral_count=exit_deferral_count,
         t_plus_one_deferral_count=t_plus_one_deferral_count,
-        market_regime=_market_regime_evidence(
-            security_id=security_id,
-            as_of=bars[end_index].trade_date,
-            market_regime_bars=sorted_market_regime_bars,
-            config=config,
-        ).model_copy(update={"rejected_entry_count": market_regime_rejection_count}),
+        market_regime=final_market_regime.model_copy(
+            update={"rejected_entry_count": market_regime_rejection_count}
+        ),
+        relative_strength=final_relative_strength.model_copy(
+            update={"rejected_entry_count": relative_strength_rejection_count}
+        ),
     )
 
 
@@ -1405,6 +1551,28 @@ def _open_position(
         position_fraction=position_fraction,
         trailing_peak=entry_price,
     ), cash - allocated_cash
+
+
+def _active_stop(
+    *,
+    security_id: str,
+    position: _OpenPosition,
+    config: ProfitSeekingConfig,
+) -> tuple[float, str]:
+    trailing_stop = position.trailing_peak * (1.0 - config.stop_loss_pct)
+    activation = config.a_share_break_even_activation_pct
+    if (
+        activation is None
+        or not _is_a_share_stock(security_id)
+        or position.trailing_peak < position.entry_price * (1.0 + activation)
+    ):
+        return trailing_stop, "stop_loss"
+
+    half_cost_rate = config.round_trip_cost_bps / 20_000.0
+    break_even_stop = position.entry_price * (1.0 + half_cost_rate) / (1.0 - half_cost_rate)
+    if break_even_stop > trailing_stop:
+        return break_even_stop, "break_even_stop"
+    return trailing_stop, "stop_loss"
 
 
 def _close_position(
@@ -1515,10 +1683,21 @@ def _entry_signal_passes(
         if use_a_share_limits
         else config.max_short_momentum_for_entry
     )
+    max_long_momentum = config.a_share_max_long_momentum_for_entry if use_a_share_limits else 1.0
     min_volume_confirmation = (
         config.a_share_min_volume_confirmation
         if use_a_share_limits and config.a_share_min_volume_confirmation is not None
         else config.min_volume_confirmation
+    )
+    minimum_trend_efficiency = (
+        config.a_share_minimum_trend_efficiency
+        if use_a_share_limits and config.a_share_minimum_trend_efficiency is not None
+        else config.minimum_trend_efficiency
+    )
+    max_annualized_volatility = (
+        config.a_share_max_annualized_volatility
+        if use_a_share_limits and config.a_share_max_annualized_volatility is not None
+        else config.max_annual_volatility
     )
     return (
         features.score >= threshold
@@ -1526,11 +1705,12 @@ def _entry_signal_passes(
         and features.short_momentum > 0
         and features.short_momentum <= max_short_momentum
         and features.long_momentum > 0
+        and features.long_momentum <= max_long_momentum
         and features.trend_strength > 0
-        and features.trend_efficiency >= config.minimum_trend_efficiency
+        and features.trend_efficiency >= minimum_trend_efficiency
         and features.regime_momentum >= config.minimum_regime_momentum
         and features.regime_trend_strength >= config.minimum_regime_trend_strength
-        and features.annualized_volatility <= config.max_annual_volatility
+        and features.annualized_volatility <= max_annualized_volatility
         and features.drawdown >= -0.35
         and features.volume_ratio >= min_volume_confirmation
         and features.liquidity_score >= config.min_liquidity_confirmation
@@ -1544,7 +1724,10 @@ def _market_regime_evidence(
     market_regime_bars: Sequence[Bar],
     config: ProfitSeekingConfig,
 ) -> MarketRegimeEvidence:
-    if not config.apply_a_share_market_regime_filter or not _is_a_share_stock(security_id):
+    requires_benchmark = (
+        config.apply_a_share_market_regime_filter or config.apply_a_share_relative_strength_filter
+    )
+    if not requires_benchmark or not _is_a_share_stock(security_id):
         return MarketRegimeEvidence(
             status=MarketRegimeGateStatus.NOT_APPLICABLE,
             short_lookback=0,
@@ -1576,7 +1759,7 @@ def _market_regime_evidence(
 
     short_momentum = current.close_price / short_base - 1.0
     long_momentum = current.close_price / long_base - 1.0
-    passed = (
+    passed = not config.apply_a_share_market_regime_filter or (
         short_momentum >= config.market_regime_min_short_momentum
         and long_momentum >= config.market_regime_min_long_momentum
     )
@@ -1588,6 +1771,45 @@ def _market_regime_evidence(
         long_lookback=config.market_regime_long_lookback,
         short_momentum=short_momentum,
         long_momentum=long_momentum,
+    )
+
+
+def _relative_strength_evidence(
+    *,
+    security_id: str,
+    features: ProfitSignalFeatures | None,
+    market_regime: MarketRegimeEvidence,
+    config: ProfitSeekingConfig,
+) -> RelativeStrengthEvidence:
+    if not config.apply_a_share_relative_strength_filter or not _is_a_share_stock(security_id):
+        return RelativeStrengthEvidence(status=MarketRegimeGateStatus.NOT_APPLICABLE)
+    if (
+        features is None
+        or market_regime.short_momentum is None
+        or market_regime.long_momentum is None
+    ):
+        return RelativeStrengthEvidence(
+            status=MarketRegimeGateStatus.MISSING,
+            benchmark_security_id=config.market_regime_security_id,
+            as_of=market_regime.as_of,
+            minimum_short_relative_momentum=config.a_share_min_relative_short_momentum,
+            minimum_long_relative_momentum=config.a_share_min_relative_long_momentum,
+        )
+
+    short_relative_momentum = features.short_momentum - market_regime.short_momentum
+    long_relative_momentum = features.long_momentum - market_regime.long_momentum
+    passed = (
+        short_relative_momentum >= config.a_share_min_relative_short_momentum
+        and long_relative_momentum >= config.a_share_min_relative_long_momentum
+    )
+    return RelativeStrengthEvidence(
+        status=MarketRegimeGateStatus.PASS if passed else MarketRegimeGateStatus.BLOCKED,
+        benchmark_security_id=config.market_regime_security_id,
+        as_of=features.as_of,
+        short_relative_momentum=short_relative_momentum,
+        long_relative_momentum=long_relative_momentum,
+        minimum_short_relative_momentum=config.a_share_min_relative_short_momentum,
+        minimum_long_relative_momentum=config.a_share_min_relative_long_momentum,
     )
 
 
@@ -1715,7 +1937,9 @@ def _build_result(
     exit_deferral_count: int,
     t_plus_one_deferral_count: int,
     market_regime: MarketRegimeEvidence,
+    relative_strength: RelativeStrengthEvidence,
 ) -> ProfitBacktestResult:
+    break_even_stop_count = sum(trade.exit_reason == "break_even_stop" for trade in trades)
     total_return = equity_curve[-1].net_asset_value / equity_curve[0].net_asset_value - 1.0
     benchmark_total_return = equity_curve[-1].benchmark_value / equity_curve[0].benchmark_value - 1
     daily_returns = tuple(
@@ -1790,7 +2014,9 @@ def _build_result(
             entry_rejection_count=entry_rejection_count,
             exit_deferral_count=exit_deferral_count,
             t_plus_one_deferral_count=t_plus_one_deferral_count,
+            break_even_stop_count=break_even_stop_count,
             market_regime=market_regime,
+            relative_strength=relative_strength,
         ),
         equity_curve=equity_curve,
         trades=trades,
@@ -1800,7 +2026,9 @@ def _build_result(
         entry_rejection_count=entry_rejection_count,
         exit_deferral_count=exit_deferral_count,
         t_plus_one_deferral_count=t_plus_one_deferral_count,
+        break_even_stop_count=break_even_stop_count,
         market_regime=market_regime,
+        relative_strength=relative_strength,
         checksum="pending",
     )
     return result.model_copy(update={"checksum": _result_checksum(result)})
@@ -1864,7 +2092,9 @@ def _result_notes(
     entry_rejection_count: int,
     exit_deferral_count: int,
     t_plus_one_deferral_count: int,
+    break_even_stop_count: int,
     market_regime: MarketRegimeEvidence,
+    relative_strength: RelativeStrengthEvidence,
 ) -> tuple[str, ...]:
     notes = [
         "收益为扣除简化往返成本后的历史样本外结果，不代表保证未来收益。",
@@ -1886,6 +2116,13 @@ def _result_notes(
             f"检测到的同日退出次数为{same_day_exit_count}，"
             f"因T+1延迟卖出{t_plus_one_deferral_count}次。"
         )
+    if config.a_share_break_even_activation_pct is not None and _is_a_share_stock(security_id):
+        notes.append(
+            "A股个股仅使用前一交易日已确认最高价启用保本保护："
+            f"浮盈达到{config.a_share_break_even_activation_pct:.1%}后，"
+            "止损抬至覆盖简化双边成本的位置，"
+            f"本区间触发{break_even_stop_count}次。"
+        )
     if config.block_a_share_one_price_limits and _is_a_share_stock(security_id):
         notes.append(
             "A股个股启用停牌及一字涨跌停成交阻断："
@@ -1905,8 +2142,17 @@ def _result_notes(
         notes.append(
             "A股个股额外启用反追涨约束："
             f"单日涨幅不超过{config.a_share_max_one_day_return_for_entry:.0%}，"
-            f"短期动量不超过{config.a_share_max_short_momentum_for_entry:.0%}。"
+            f"短期动量不超过{config.a_share_max_short_momentum_for_entry:.0%}，"
+            f"中期动量不超过{config.a_share_max_long_momentum_for_entry:.0%}。"
         )
+        if config.a_share_minimum_trend_efficiency is not None:
+            notes.append(
+                f"A股趋势效率低于{config.a_share_minimum_trend_efficiency:.0%}时不新开仓。"
+            )
+        if config.a_share_max_annualized_volatility is not None:
+            notes.append(
+                f"A股信号期年化波动超过{config.a_share_max_annualized_volatility:.0%}时不新开仓。"
+            )
     if config.apply_a_share_market_regime_filter and _is_a_share_stock(security_id):
         if market_regime.status is MarketRegimeGateStatus.PASS:
             notes.append(
@@ -1925,6 +2171,24 @@ def _result_notes(
             notes.append("沪深300代理历史不足，市场环境不可验证，当前不新开A股仓位。")
         notes.append(
             f"样本区间内市场环境门槛共拒绝{market_regime.rejected_entry_count}次候选入场。"
+        )
+    if config.apply_a_share_relative_strength_filter and _is_a_share_stock(security_id):
+        if relative_strength.status is MarketRegimeGateStatus.PASS:
+            notes.append(
+                "A股相对强弱门槛通过：相对沪深300代理的"
+                f"短期强弱{relative_strength.short_relative_momentum:.1%}，"
+                f"中期强弱{relative_strength.long_relative_momentum:.1%}。"
+            )
+        elif relative_strength.status is MarketRegimeGateStatus.BLOCKED:
+            notes.append(
+                "A股相对强弱门槛阻断：相对沪深300代理的"
+                f"短期强弱{relative_strength.short_relative_momentum:.1%}，"
+                f"中期强弱{relative_strength.long_relative_momentum:.1%}。"
+            )
+        else:
+            notes.append("沪深300代理或个股历史不足，相对强弱不可验证，当前不新开仓。")
+        notes.append(
+            f"样本区间内相对强弱门槛共拒绝{relative_strength.rejected_entry_count}次候选入场。"
         )
     if config.target_annual_volatility is not None:
         notes.append(
@@ -2217,23 +2481,61 @@ def _insufficient_history_result(
         market_regime=MarketRegimeEvidence(
             status=(
                 MarketRegimeGateStatus.MISSING
-                if config.apply_a_share_market_regime_filter and _is_a_share_stock(security_id)
+                if (
+                    config.apply_a_share_market_regime_filter
+                    or config.apply_a_share_relative_strength_filter
+                )
+                and _is_a_share_stock(security_id)
                 else MarketRegimeGateStatus.NOT_APPLICABLE
             ),
             security_id=(
                 config.market_regime_security_id
-                if config.apply_a_share_market_regime_filter and _is_a_share_stock(security_id)
+                if (
+                    config.apply_a_share_market_regime_filter
+                    or config.apply_a_share_relative_strength_filter
+                )
+                and _is_a_share_stock(security_id)
                 else None
             ),
             short_lookback=(
                 config.market_regime_short_lookback
-                if config.apply_a_share_market_regime_filter and _is_a_share_stock(security_id)
+                if (
+                    config.apply_a_share_market_regime_filter
+                    or config.apply_a_share_relative_strength_filter
+                )
+                and _is_a_share_stock(security_id)
                 else 0
             ),
             long_lookback=(
                 config.market_regime_long_lookback
-                if config.apply_a_share_market_regime_filter and _is_a_share_stock(security_id)
+                if (
+                    config.apply_a_share_market_regime_filter
+                    or config.apply_a_share_relative_strength_filter
+                )
+                and _is_a_share_stock(security_id)
                 else 0
+            ),
+        ),
+        relative_strength=RelativeStrengthEvidence(
+            status=(
+                MarketRegimeGateStatus.MISSING
+                if config.apply_a_share_relative_strength_filter and _is_a_share_stock(security_id)
+                else MarketRegimeGateStatus.NOT_APPLICABLE
+            ),
+            benchmark_security_id=(
+                config.market_regime_security_id
+                if config.apply_a_share_relative_strength_filter and _is_a_share_stock(security_id)
+                else None
+            ),
+            minimum_short_relative_momentum=(
+                config.a_share_min_relative_short_momentum
+                if config.apply_a_share_relative_strength_filter and _is_a_share_stock(security_id)
+                else None
+            ),
+            minimum_long_relative_momentum=(
+                config.a_share_min_relative_long_momentum
+                if config.apply_a_share_relative_strength_filter and _is_a_share_stock(security_id)
+                else None
             ),
         ),
         checksum="pending",

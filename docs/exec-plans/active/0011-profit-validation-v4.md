@@ -1,4 +1,4 @@
-# ExecPlan 0011：盈利验证 V4-V7 风险暴露、执行真实性与市场环境
+# ExecPlan 0011：盈利验证 V4-V8 候选研究与独立验证
 
 ## 目标
 
@@ -23,7 +23,12 @@
 - [x] 对 A 股个股启用按时点计算的沪深300ETF 21/63 日动量门槛，代理缺失时失败关闭。
 - [x] 增加确认十 A 股和影子十 A 股固定池，并保证与正式池互不重叠。
 - [x] 锁定 V7 后复跑正式、确认、影子、ETF 和混合五组验证池。
-- [x] Ruff、mypy、282项Python回归、发布审计、Vitest 1项、Vite和Playwright 2项通过。
+- [x] 审计前三个 A 股池的 186 笔交易，定位浮盈回吐、评分破坏和趋势破坏退出问题。
+- [x] 增加按时点相对强弱证据、可选入场质量条件和费后保本止损实验能力。
+- [x] 仅在开发区间比较候选，并用第四组互斥十 A 股池进行最终留出验证。
+- [x] 因 2% 保本候选在留出池中降低平均收益、Sharpe、成本压力和滚动稳定性，拒绝发布正式 V8。
+- [x] 验证相对强弱阻断与四个决策模块、手动账户共用同一策略链；ETF路径不变。
+- [x] Ruff、mypy、289项Python回归、发布审计、Vitest 1项、Vite构建和Playwright 2项通过。
 
 ## 当前证据
 
@@ -39,8 +44,11 @@
 - 十 ETF V7：2/10 PASS，平均收益 18.30%，但平均超额 -13.93%。
 - 混合十标的 V7：2/10 PASS，平均收益 8.89%，平均超额 -6.70%。
 - 股票三池均未通过，ETF和混合池聚合状态为 WATCH，真实执行继续被门禁阻断。
+- 第四留出十 A 股 V7：0/10 PASS，平均收益 -2.85%，平均回撤 -12.22%。
+- 第四留出十 A 股 2% 保本候选：0/10 PASS，平均收益 -3.18%，平均回撤 -9.72%。
+- 候选只改善了部分回撤，却降低平均收益、平均 Sharpe、成本压力通过数和滚动正收益比例，未晋级；默认版本保持 V7。
 
-V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`；V5 A 股反追涨记录保留为历史对照；V6 执行模型见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`；V7 市场门槛、五组结果和数据校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`。
+V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`；V5 A 股反追涨记录保留为历史对照；V6 执行模型见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`；V7 市场门槛、五组结果和数据校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`；V8 候选审计、第四组留出和拒绝晋级结论见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`。
 
 ## 剩余工作
 
@@ -48,6 +56,7 @@ V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-0
 - [x] 覆盖日线可识别的一字涨跌停、停牌和 A 股 T+1 路径。
 - [x] 增加按时点市场环境过滤和代理缺失失败关闭。
 - [x] 用两个互不重叠的固定股票池验证锁定后的 V7，结果仍未达到盈利门槛。
+- [x] 使用第四组未参与调参的股票池验证相对强弱/保本止损候选，并在证据变差时保持 V7 默认配置。
 - [ ] 覆盖盘口排队、容量、部分成交和冲击成本压力路径。
 - [ ] 按 ETF 产品类别映射 T+0/T+1 交易制度。
 - [ ] 运行至少一个完整市场状态周期和更多滚动起点。
