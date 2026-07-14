@@ -45,3 +45,8 @@
 - Vitest：`1 passed`。
 - Vite 生产构建：通过；ECharts 图表分包仍有超过 500kB 的非阻断体积告警。
 - Playwright：`2 passed`，覆盖无需硬刷新渲染和价格/涨跌幅/成交量三层行情图。
+
+## 文档整理
+
+- 新增 `PROJECT_STATUS_2026-07-14.md`，集中说明 7 月 11 日至 14 日的 FastAPI/Vue/Redis 迁移、行情与交互改造、账户输入联动、策略 V2-V7 演进、真实验证结果和当前风险。
+- README 和文档索引已指向新的状态总览；`PROJECT_STATUS_2026-07-02.md` 继续保留为历史快照。

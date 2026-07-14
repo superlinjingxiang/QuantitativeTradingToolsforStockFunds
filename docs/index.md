@@ -24,6 +24,7 @@
 
 ## 近期记录
 
+- 截至 2026-07-14 的项目状态总览：PROJECT_STATUS_2026-07-14.md
 - 2026-07-14 代码变更：CHANGELOG_2026-07-14.md
 - 短线策略 V7 市场环境与独立股票池验证：research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md
 - 2026-07-13 代码变更：CHANGELOG_2026-07-13.md
