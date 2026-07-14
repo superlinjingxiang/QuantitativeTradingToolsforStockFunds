@@ -195,11 +195,14 @@ class BacktestPanelState(DomainModel):
                 )
             ),
             execution_realism=(
+                "止损无日内先后前视；"
                 f"次日开盘退出{result.next_open_exit_count}次；"
                 f"同日退出{result.same_day_exit_count}次；"
                 f"T+1延迟{result.t_plus_one_deferral_count}次；"
                 f"拒绝买入{result.entry_rejection_count}次；"
-                f"延迟卖出{result.exit_deferral_count}次"
+                f"延迟卖出{result.exit_deferral_count}次；"
+                f"市场门槛{result.market_regime.status.value}，"
+                f"拒绝候选{result.market_regime.rejected_entry_count}次"
             ),
             summary=_backtest_summary(result),
             notes=tuple(result.notes),
@@ -819,7 +822,7 @@ def _core_indicators_from_strategy(report: AnalysisReport) -> tuple[str, ...]:
     if "short_term" in report.strategy_id:
         indicators = ["短中期动量", "成交量确认", "波动/回撤", "相似区间预测", "样本外回测"]
         if _is_a_share_stock_id(report.security_id):
-            indicators.insert(1, "A股3%/20%反追涨")
+            indicators.insert(1, "A股3%/15%反追涨")
             indicators.insert(2, "次日开盘/T+1/涨跌停约束")
         return tuple(indicators)
     return ("动量", "趋势", "波动", "回撤", "样本外回测")

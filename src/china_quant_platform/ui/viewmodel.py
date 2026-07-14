@@ -44,6 +44,7 @@ from china_quant_platform.knowledge import KnowledgeCenter
 from china_quant_platform.market import MarketOverview, build_market_overview
 from china_quant_platform.strategies.profit_validation import (
     HorizonPreset,
+    MarketRegimeGateStatus,
     ProfitBacktestResult,
     ProfitSeekingConfig,
     ProfitValidationStatus,
@@ -156,6 +157,7 @@ class _OnlineSecurityData:
     security_id: str
     bars: tuple[Bar, ...]
     decision_bars: tuple[Bar, ...]
+    market_regime_bars: tuple[Bar, ...]
     quote: Quote
     data_health: DataHealth
 
@@ -1059,22 +1061,63 @@ class ApplicationViewModel(QtCore.QObject):
                 end_time=end_time,
                 adjustment=AdjustmentMode.FORWARD,
             )
-            bars_result, decision_bars_result, quote = await asyncio.gather(
+            config = _profit_strategy_config(
+                self._state.strategy_controls.mode,
+                self._state.strategy_controls.horizon,
+                self._state.strategy_controls.max_trades_per_year,
+            )
+            requires_market_regime = (
+                config.apply_a_share_market_regime_filter and _is_a_share_security_id(security_id)
+            )
+
+            async def load_market_regime() -> tuple[tuple[Bar, ...], tuple[str, ...]]:
+                if not requires_market_regime:
+                    return (), ()
+                try:
+                    values = await _run_provider_operation(
+                        lambda: provider.get_bars(
+                            BarsRequest(
+                                security_id=config.market_regime_security_id,
+                                interval=BarInterval.DAILY,
+                                start_time=decision_start_time,
+                                end_time=end_time,
+                                adjustment=AdjustmentMode.FORWARD,
+                            )
+                        )
+                    )
+                except BaseException as error:  # noqa: BLE001
+                    return (), (f"A股市场环境数据获取失败：{error}",)
+                market_bars = tuple(values)
+                if len(market_bars) <= config.market_regime_long_lookback:
+                    return market_bars, (
+                        "A股市场环境历史不足，当前禁止新开A股仓位："
+                        f"{len(market_bars)}/{config.market_regime_long_lookback + 1} bars。",
+                    )
+                return market_bars, ()
+
+            bars_result, decision_bars_result, quote, market_result = await asyncio.gather(
                 _run_provider_operation(lambda: provider.get_bars(request)),
                 _run_provider_operation(lambda: provider.get_bars(decision_request)),
                 _run_provider_operation(lambda: provider.get_quote(security_id)),
+                load_market_regime(),
             )
             bars = tuple(bars_result)
             decision_bars = tuple(decision_bars_result)
-            issue_text = () if bars else ("联网行情已连接，但历史K线为空。",)
+            market_regime_bars, market_issues = market_result
+            issue_text = (() if bars else ("联网行情已连接，但历史K线为空。",)) + market_issues
             return _OnlineSecurityData(
                 security_id=security_id,
                 bars=bars,
                 decision_bars=decision_bars or bars,
+                market_regime_bars=market_regime_bars,
                 quote=quote,
                 data_health=DataHealth(
-                    status=DataHealthStatus.HEALTHY if bars else DataHealthStatus.DEGRADED,
-                    block_signal=False,
+                    status=(
+                        DataHealthStatus.HEALTHY
+                        if bars and not market_issues
+                        else DataHealthStatus.DEGRADED
+                    ),
+                    block_signal=requires_market_regime and bool(market_issues),
                     as_of=self._clock(),
                     issues=issue_text,
                 ),
@@ -1236,6 +1279,7 @@ class ApplicationViewModel(QtCore.QObject):
                 result.decision_bars,
                 config=config,
                 include_walk_forward=True,
+                market_regime_bars=result.market_regime_bars,
             )
             analysis = _analysis_report_from_profit_backtest(
                 security=security,
@@ -1904,7 +1948,7 @@ def _analysis_report_from_profit_backtest(
     strategy_version = (
         "profit-validation-long-v3"
         if mode is StrategyMode.LONG_TERM
-        else "profit-validation-short-v6"
+        else "profit-validation-short-v7"
     )
     return AnalysisReport(
         security_id=security.security_id,
@@ -1921,7 +1965,7 @@ def _analysis_report_from_profit_backtest(
         positive_drivers=_profit_positive_drivers(security, backtest, forecast, mode),
         negative_drivers=_profit_negative_drivers(backtest, data_health, forecast),
         model_version=forecast.model_version,
-        rule_version="rules-profit-validation-short-v6"
+        rule_version="rules-profit-validation-short-v7"
         if mode is StrategyMode.SHORT_TERM
         else "rules-profit-validation-long-v3",
         data_snapshot_id=f"profit-validation:{len(bars)}-daily-bars",
@@ -1978,7 +2022,7 @@ def _strategy_id_for_horizon(horizon: HorizonPreset) -> str:
 def _strategy_version_for_horizon(horizon: HorizonPreset) -> str:
     if horizon in {HorizonPreset.SIX_MONTHS, HorizonPreset.ONE_YEAR}:
         return "profit-validation-long-v3"
-    return "profit-validation-short-v6"
+    return "profit-validation-short-v7"
 
 
 def _profit_analysis_signal(
@@ -2001,6 +2045,11 @@ def _profit_analysis_signal(
         return FinalSignal.SELL
     if probabilities.down >= 0.48 and p50 <= 0:
         return FinalSignal.REDUCE
+    if backtest.market_regime.status in {
+        MarketRegimeGateStatus.BLOCKED,
+        MarketRegimeGateStatus.MISSING,
+    }:
+        return FinalSignal.ABSTAIN
     if (
         pass_like
         and backtest.cost_stress_passed is True
@@ -2031,6 +2080,10 @@ def _profit_abstain_reason(
         return AbstainReason.DATA
     if backtest.status is ProfitValidationStatus.INSUFFICIENT_HISTORY:
         return AbstainReason.INSUFFICIENT_HISTORY
+    if backtest.market_regime.status is MarketRegimeGateStatus.MISSING:
+        return AbstainReason.DATA
+    if backtest.market_regime.status is MarketRegimeGateStatus.BLOCKED:
+        return AbstainReason.RULE
     if forecast.similar_sample_count <= 0:
         return AbstainReason.MODEL_UNCERTAINTY
     if backtest.status is ProfitValidationStatus.FAIL and backtest.excess_return <= 0:
@@ -2045,6 +2098,10 @@ def _profit_raw_signal(
 ) -> str:
     probabilities = forecast.direction_probabilities
     mode_prefix = "SHORT_TERM" if mode is StrategyMode.SHORT_TERM else "LONG_TERM"
+    if backtest.market_regime.status is MarketRegimeGateStatus.MISSING:
+        return "ABSTAIN_A_SHARE_MARKET_REGIME_MISSING"
+    if backtest.market_regime.status is MarketRegimeGateStatus.BLOCKED:
+        return "ABSTAIN_A_SHARE_MARKET_REGIME_BLOCKED"
     if probabilities.down >= 0.50:
         return f"{mode_prefix}_SELL_OR_REDUCE_BIAS"
     if probabilities.up >= 0.50 and backtest.status is ProfitValidationStatus.PASS:
@@ -2062,6 +2119,13 @@ def _profit_market_regime(
     backtest: ProfitBacktestResult,
     forecast: IntervalForecastResult,
 ) -> str:
+    regime = backtest.market_regime
+    if regime.status is MarketRegimeGateStatus.PASS:
+        return f"A_SHARE_MARKET_GATE_PASS_{regime.short_lookback}D_{regime.long_lookback}D"
+    if regime.status is MarketRegimeGateStatus.BLOCKED:
+        return f"A_SHARE_MARKET_GATE_BLOCKED_{regime.short_lookback}D_{regime.long_lookback}D"
+    if regime.status is MarketRegimeGateStatus.MISSING:
+        return "A_SHARE_MARKET_GATE_MISSING"
     probabilities = forecast.direction_probabilities
     if probabilities.down >= 0.55:
         return "RISK_OFF_DOWNSIDE_DOMINANT"
@@ -2113,8 +2177,19 @@ def _profit_positive_drivers(
         else "长线模式：偏重63-252日趋势、相对强弱和波动稳定性。"
     )
     if mode is StrategyMode.SHORT_TERM and _is_a_share_security(security):
-        values.append("A股个股启用反追涨约束：单日涨幅不超过3%，21日动量不超过20%。")
-        values.append("回测按收盘信号次日开盘执行，并应用A股T+1、停牌和一字涨跌停成交阻断。")
+        values.append("A股个股启用反追涨约束：单日涨幅不超过3%，21日动量不超过15%。")
+        values.append(
+            "回测按收盘信号次日开盘执行，止损不使用未知日内先后顺序，"
+            "并应用A股T+1、停牌和一字涨跌停成交阻断。"
+        )
+        if backtest.market_regime.status is MarketRegimeGateStatus.PASS:
+            values.append(
+                "沪深300市场门槛通过："
+                f"{backtest.market_regime.short_lookback}日动量"
+                f"{(backtest.market_regime.short_momentum or 0.0):.1%}，"
+                f"{backtest.market_regime.long_lookback}日动量"
+                f"{(backtest.market_regime.long_momentum or 0.0):.1%}。"
+            )
     values.extend(forecast.notes[:2])
     if backtest.total_return > 0:
         values.append(f"样本外扣费净收益 {backtest.total_return:.2%}。")
@@ -2189,6 +2264,13 @@ def _profit_negative_drivers(
     forecast: IntervalForecastResult,
 ) -> tuple[str, ...]:
     values: list[str] = []
+    if backtest.market_regime.status is MarketRegimeGateStatus.BLOCKED:
+        values.append(
+            "沪深300的21日与63日动量未同时为正，市场门槛阻断A股新开仓；"
+            f"样本内已拒绝{backtest.market_regime.rejected_entry_count}次候选。"
+        )
+    elif backtest.market_regime.status is MarketRegimeGateStatus.MISSING:
+        values.append("沪深300市场代理数据不足，无法验证大盘环境，禁止新开A股仓位。")
     if forecast.confidence < 0.45:
         values.append(f"预测置信度偏低：{forecast.confidence:.0%}，需要更多相似样本验证。")
     if len(forecast.notes) >= 3:
@@ -2300,6 +2382,15 @@ def _is_a_share_security(security: SecurityRef) -> bool:
         return security.asset_type is AssetType.STOCK and symbol.startswith(
             ("000", "001", "002", "003", "300", "301")
         )
+    return False
+
+
+def _is_a_share_security_id(security_id: str) -> bool:
+    exchange, _separator, symbol = security_id.partition(":")
+    if exchange == Exchange.SSE.value:
+        return symbol.startswith(("600", "601", "603", "605", "688", "689"))
+    if exchange == Exchange.SZSE.value:
+        return symbol.startswith(("000", "001", "002", "003", "300", "301"))
     return False
 
 

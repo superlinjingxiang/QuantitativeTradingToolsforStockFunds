@@ -9,11 +9,13 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from china_quant_platform.data import BarsRequest, MarketDataProvider
-from china_quant_platform.domain import AdjustmentMode, Bar, BarInterval
+from china_quant_platform.domain import AdjustmentMode, AssetType, Bar, BarInterval
 from china_quant_platform.strategies.profit_validation import (
     DefaultValidationSecurity,
     HorizonPreset,
     ProfitValidationReport,
+    default_a_share_confirmation_universe,
+    default_a_share_shadow_universe,
     default_a_share_validation_universe,
     default_etf_validation_universe,
     default_mixed_validation_universe,
@@ -89,6 +91,32 @@ async def validate_profit_universe(
             failures.append(
                 f"{member.security_id}: insufficient history {len(bars)}/{minimum_bars} bars"
             )
+    needs_market_regime = config.apply_a_share_market_regime_filter and any(
+        member.asset_type is AssetType.STOCK for member in universe
+    )
+    if needs_market_regime and config.market_regime_security_id not in bars_by_security:
+        try:
+            market_bars = await provider.get_bars(
+                BarsRequest(
+                    security_id=config.market_regime_security_id,
+                    interval=BarInterval.DAILY,
+                    start_time=start_time,
+                    end_time=end_time,
+                    adjustment=AdjustmentMode.FORWARD,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - provider exceptions vary.
+            failures.append(
+                f"{config.market_regime_security_id}: market regime unavailable: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        else:
+            bars_by_security[config.market_regime_security_id] = tuple(market_bars)
+            if len(market_bars) <= config.market_regime_long_lookback:
+                failures.append(
+                    f"{config.market_regime_security_id}: market regime history "
+                    f"{len(market_bars)}/{config.market_regime_long_lookback + 1} bars"
+                )
     report = run_profit_validation_lab(
         bars_by_security,
         config=config,
@@ -139,6 +167,7 @@ def report_summary(
                 "entry_rejection_count": result.entry_rejection_count,
                 "exit_deferral_count": result.exit_deferral_count,
                 "t_plus_one_deferral_count": result.t_plus_one_deferral_count,
+                "market_regime": result.market_regime.to_contract_dict(),
                 "notes": result.notes,
             }
             for result in report.results
@@ -166,9 +195,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--history-years", type=int, default=7)
     parser.add_argument(
         "--universe",
-        choices=("etf10", "stock10", "mixed10"),
+        choices=("etf10", "stock10", "stock_confirm10", "stock_shadow10", "mixed10"),
         default="etf10",
-        help="Use ten ETFs, ten A-shares, or a five-stock/five-ETF validation pool.",
+        help=(
+            "Use ten ETFs, the primary/confirmation/shadow A-share pools, "
+            "or a five-stock/five-ETF validation pool."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -179,6 +211,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     async def run() -> tuple[ProfitValidationReport, tuple[str, ...]]:
         if args.universe == "stock10":
             universe = default_a_share_validation_universe()
+        elif args.universe == "stock_confirm10":
+            universe = default_a_share_confirmation_universe()
+        elif args.universe == "stock_shadow10":
+            universe = default_a_share_shadow_universe()
         elif args.universe == "mixed10":
             universe = default_mixed_validation_universe()
         else:

@@ -26,12 +26,14 @@ from china_quant_platform.decision.hub import DecisionHub
 from china_quant_platform.decision.models import DecisionRequest
 from china_quant_platform.domain import (
     AdjustmentMode,
+    AssetType,
     Bar,
     BarInterval,
     DataHealth,
     DataHealthStatus,
     DataUnavailable,
     DomainError,
+    Exchange,
     Quote,
     RecordQualityStatus,
     SecurityRef,
@@ -123,6 +125,11 @@ class ElectronBackendService:
         resolved = self._resolve_security(query, allow_online=True)
         security = resolved.security
         controls = _strategy_controls_from_payload(payload)
+        config = _profit_strategy_config(
+            controls.mode,
+            controls.horizon,
+            controls.max_trades_per_year,
+        )
         interval = _interval_from_payload(payload.get("interval"))
         range_preset = _range_from_payload(payload.get("range"))
         adjustment = _adjustment_from_payload(payload.get("adjustment"))
@@ -135,6 +142,7 @@ class ElectronBackendService:
         health_issues: list[str] = []
         chart_bars: tuple[Bar, ...] = ()
         decision_bars: tuple[Bar, ...] = ()
+        market_regime_bars: tuple[Bar, ...] = ()
         quote: Quote | None = None
 
         try:
@@ -172,6 +180,38 @@ class ElectronBackendService:
             health_issues.append(f"策略日线获取失败：{_short_error(error)}")
             decision_bars = chart_bars if interval is BarInterval.DAILY else ()
 
+        requires_market_regime = (
+            config.apply_a_share_market_regime_filter
+            and security.asset_type is AssetType.STOCK
+            and security.exchange in {Exchange.SSE, Exchange.SZSE}
+        )
+        if requires_market_regime:
+            try:
+                market_regime_bars = tuple(
+                    asyncio.run(
+                        self._provider.get_bars(
+                            BarsRequest(
+                                security_id=config.market_regime_security_id,
+                                interval=BarInterval.DAILY,
+                                start_time=decision_start,
+                                end_time=now,
+                                adjustment=AdjustmentMode.FORWARD,
+                            )
+                        )
+                    )
+                )
+            except BaseException as error:  # noqa: BLE001
+                health_issues.append(f"A股市场环境数据获取失败：{_short_error(error)}")
+            if len(market_regime_bars) <= config.market_regime_long_lookback:
+                health_issues.append(
+                    "A股市场环境历史不足，当前禁止新开A股仓位："
+                    f"{len(market_regime_bars)}/{config.market_regime_long_lookback + 1} bars。"
+                )
+        market_regime_ready = (
+            not requires_market_regime
+            or len(market_regime_bars) > config.market_regime_long_lookback
+        )
+
         try:
             quote = asyncio.run(self._provider.get_quote(security.security_id))
         except BaseException as error:  # noqa: BLE001
@@ -184,7 +224,7 @@ class ElectronBackendService:
         points = tuple(ChartPointState.from_bar(bar) for bar in sorted(chart_bars, key=_bar_time))
         data_health = DataHealth(
             status=DataHealthStatus.HEALTHY if not health_issues else DataHealthStatus.DEGRADED,
-            block_signal=not decision_bars or not points,
+            block_signal=(not decision_bars or not points or not market_regime_ready),
             as_of=now,
             issues=tuple(health_issues),
         )
@@ -195,16 +235,12 @@ class ElectronBackendService:
         chart_signals: tuple[ChartSignalMarkerState, ...] = ()
         if decision_bars:
             try:
-                config = _profit_strategy_config(
-                    controls.mode,
-                    controls.horizon,
-                    controls.max_trades_per_year,
-                )
                 profit_backtest = run_profit_strategy_backtest(
                     security.security_id,
                     decision_bars,
                     config=config,
                     include_walk_forward=True,
+                    market_regime_bars=market_regime_bars,
                 )
                 report = _analysis_report_from_profit_backtest(
                     security=security,
