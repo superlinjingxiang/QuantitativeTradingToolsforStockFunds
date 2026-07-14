@@ -128,6 +128,16 @@ mixed10
 - Vite 生产构建：通过，保留 ECharts 分包超过 500kB 的非阻断体积告警。
 - Playwright：`2 passed`。
 
+## 十二、资产分层门禁与当前研究结论
+
+- 后续复核的 63 日大盘强势门槛、21 日回撤介入和 126 日 ETF 趋势确认均未晋级，正式短线公式继续为 `profit-validation-short-v7`。
+- A 股个股增加证据门禁：本标的样本外状态未 PASS 时，策略不得给出新增仓位；即使局部收益、成本压力或滚动正收益比例较好，也不能借 HOLD 让空仓账户买入。
+- 明确下跌风险仍优先输出 SELL/REDUCE，用于已有持仓管理；ETF 不套用 A 股个股门禁，继续按自身样本外、滚动前推、成本和校准证据判断。
+- 右侧四个模块和手动账户继续使用同一策略结果。界面会同时显示多项支持、风险、失效和阻断原因，不另写一套账户策略。
+- 当前最诚实的结论是：ETF 有局部可研究证据；A 股个股时序策略尚未达到新增仓位门槛，下一步应补横截面排名、行业/基本面、容量压力和模拟盘成交偏差。
+
+本轮工程门禁为 Ruff、mypy、`290 passed` Python 全量回归、`RELEASE_AUDIT_OK`、Vitest `1 passed`、Vite 构建和 Playwright `2 passed`。FastAPI TestClient 仍保留 1 条上游弃用警告，ECharts 分包仍保留非阻断体积告警。
+
 ## 相关文档
 
 - `CHANGELOG_2026-07-11.md`：FastAPI、Vue、Redis 和 Electron 迁移。
@@ -136,6 +146,7 @@ mixed10
 - `CHANGELOG_2026-07-14.md`：盈利验证 V7。
 - `research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`：V7 方法、逐标的结果和校验和。
 - `research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`：相对强弱/保本止损候选、第四组留出验证和拒绝晋级结论。
+- `research/SHORT_TERM_STRATEGY_ASSET_CLASS_GATE_2026-07-14.md`：资产分层门禁、强市场/回撤介入候选否决和十 ETF 复核。
 - `architecture/ARCHITECTURE.md`：当前系统架构。
 - `design/CACHE_AND_ELECTRON_TRANSITION.md`：缓存、陈旧数据与桌面壳边界。
 - `design/STRATEGY_MODEL_SPEC.md`：策略和决策门禁规范。

@@ -815,7 +815,12 @@ def _asset_scope_from_strategy(report: AnalysisReport) -> str:
     if "long_term" in report.strategy_id:
         return "A股、ETF、指数、黄金/债券/海外ETF；优先长期日线样本。"
     if "short_term" in report.strategy_id:
-        return "A股、ETF、指数、行业主题、黄金/债券/海外ETF；优先高流动性标的。"
+        if _is_a_share_stock_id(report.security_id):
+            return (
+                "A股个股单标的研究；必须通过本标的样本外、滚动前推、成本与大盘门槛，"
+                "不替代横截面选股或基本面证据。"
+            )
+        return "场内ETF、指数、行业主题、黄金/债券/跨境ETF；优先高流动性标的。"
     return "A股、ETF、指数、基金等可取得K线/净值的标的。"
 
 

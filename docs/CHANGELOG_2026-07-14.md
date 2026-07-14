@@ -71,3 +71,25 @@
 - Vitest：`1 passed`。
 - Vite 生产构建：通过；ECharts 图表分包仍有超过 500kB 的非阻断体积告警。
 - Playwright：`2 passed`，覆盖无需硬刷新渲染和价格/涨跌幅/成交量三层行情图。
+
+## 资产分层门禁与后续候选复核
+
+- 复核 63 日大盘强势门槛、21 日回撤介入和 126 日 ETF 趋势确认，均未同时满足收益、Sharpe、交易成本、滚动参与率和新池泛化要求，因此不发布 V8。
+- 新十股池中，63 日大盘动量 6% 候选把平均收益从 +2.14% 降到 +0.02%，正收益标的从 4 只降到 2 只。
+- 21 日回撤介入候选虽降低回撤，但在原 30 股和新十股池的滚动参与率仅约 16.3% 和 7.6%，不能证明结果可重复。
+- 十 ETF 复跑为 2/10 PASS、平均收益 +18.30%、平均最大回撤 -10.45%，但平均超额 -13.93%，整体继续为 WATCH。
+- 新增资产分层决策规则 `rules-profit-validation-short-asset-gate-v1`：A 股个股未通过本标的样本外证据时阻止新增仓位；明确下跌时仍允许 SELL/REDUCE 管理已有持仓；ETF 按自身证据独立判断。
+- 手动账户仍只消费当前 `FinalSignal` 和仓位上限。A 股非 PASS 即使局部收益或滚动指标较好，也不能通过 HOLD 间接触发空仓买入。
+- Vue 右侧“操作与风险”和“决策证据”改为同时展示多项支持、风险、失效和阻断原因，减少单条文字造成的误解。
+
+详细候选协议、跨池结果、ETF 校验和与金融边界见 `docs/research/SHORT_TERM_STRATEGY_ASSET_CLASS_GATE_2026-07-14.md`。
+
+## 资产分层门禁工程验证
+
+- Ruff format、Ruff lint、mypy：通过。
+- 聚焦策略、决策与账户测试：`49 passed`。
+- Python 全量回归：`290 passed`；保留 1 条 FastAPI TestClient 上游弃用警告。
+- 发布审计：`RELEASE_AUDIT_OK`。
+- Vitest：`1 passed`。
+- Vite 生产构建：通过；ECharts 图表分包仍有超过 500kB 的非阻断体积告警。
+- Playwright：`2 passed`。

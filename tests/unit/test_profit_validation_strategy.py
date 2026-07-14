@@ -16,6 +16,7 @@ from china_quant_platform.domain import (
     BarInterval,
     DataHealth,
     DataHealthStatus,
+    DirectionProbabilities,
     FinalSignal,
     RecordQualityStatus,
 )
@@ -808,6 +809,93 @@ def test_relative_strength_block_flows_through_decision_and_account() -> None:
     assert signal is not FinalSignal.BUY_CANDIDATE
     assert account["accountAdvice"] == "暂不新开仓"
     assert account["suggestedAmount"] == "--"
+
+
+def test_a_share_watch_evidence_abstains_but_etf_remains_watch() -> None:
+    stock_bars = make_daily_bars("SSE:600519")
+    etf_bars = make_daily_bars("SSE:513300")
+    market_bars = make_daily_bars("SSE:510300")
+    config = profit_strategy_config("short_term", HorizonPreset.ONE_MONTH, 12)
+    stock_backtest = run_profit_strategy_backtest(
+        "SSE:600519",
+        stock_bars,
+        config=config,
+        market_regime_bars=market_bars,
+    ).model_copy(update={"status": ProfitValidationStatus.WATCH, "excess_return": 0.01})
+    etf_backtest = run_profit_strategy_backtest(
+        "SSE:513300",
+        etf_bars,
+        config=config,
+    ).model_copy(update={"status": ProfitValidationStatus.WATCH, "excess_return": 0.01})
+    neutral_probabilities = DirectionProbabilities(up=0.34, flat=0.33, down=0.33)
+    stock_forecast = forecast_interval_from_bars(stock_bars, horizon_days=21).model_copy(
+        update={"direction_probabilities": neutral_probabilities}
+    )
+    etf_forecast = forecast_interval_from_bars(etf_bars, horizon_days=21).model_copy(
+        update={"direction_probabilities": neutral_probabilities}
+    )
+    data_health = DataHealth(
+        status=DataHealthStatus.HEALTHY,
+        block_signal=False,
+        as_of=datetime(2026, 7, 14, 15, 0, tzinfo=UTC),
+    )
+
+    stock_signal = viewmodel_module._profit_analysis_signal(
+        stock_backtest, data_health, stock_forecast, StrategyMode.SHORT_TERM
+    )
+    etf_signal = viewmodel_module._profit_analysis_signal(
+        etf_backtest, data_health, etf_forecast, StrategyMode.SHORT_TERM
+    )
+
+    assert stock_signal is FinalSignal.ABSTAIN
+    assert etf_signal is FinalSignal.WATCH
+    assert (
+        viewmodel_module._profit_abstain_reason(stock_backtest, data_health, stock_forecast)
+        is viewmodel_module.AbstainReason.EXPECTED_VALUE
+    )
+    assert (
+        viewmodel_module._profit_raw_signal(stock_backtest, stock_forecast, StrategyMode.SHORT_TERM)
+        == "ABSTAIN_A_SHARE_STOCK_EVIDENCE_NOT_PASSED"
+    )
+
+    bullish_stock_backtest = stock_backtest.model_copy(
+        update={
+            "total_return": 0.12,
+            "cost_stress_passed": True,
+            "walk_forward_positive_ratio": 0.70,
+        }
+    )
+    assert (
+        viewmodel_module._profit_analysis_signal(
+            bullish_stock_backtest,
+            data_health,
+            stock_forecast,
+            StrategyMode.SHORT_TERM,
+        )
+        is FinalSignal.ABSTAIN
+    )
+
+    downside_forecast = stock_forecast.model_copy(
+        update={
+            "direction_probabilities": DirectionProbabilities(up=0.20, flat=0.20, down=0.60),
+            "expected_return_quantiles": {"p05": -0.15, "p50": -0.02, "p95": 0.04},
+        }
+    )
+    assert (
+        viewmodel_module._profit_analysis_signal(
+            stock_backtest,
+            data_health,
+            downside_forecast,
+            StrategyMode.SHORT_TERM,
+        )
+        is FinalSignal.SELL
+    )
+    assert (
+        viewmodel_module._profit_raw_signal(
+            stock_backtest, downside_forecast, StrategyMode.SHORT_TERM
+        )
+        == "SHORT_TERM_SELL_OR_REDUCE_BIAS"
+    )
 
 
 def test_score_and_trend_exit_thresholds_are_configurable(

@@ -1966,7 +1966,7 @@ def _analysis_report_from_profit_backtest(
         positive_drivers=_profit_positive_drivers(security, backtest, forecast, mode),
         negative_drivers=_profit_negative_drivers(backtest, data_health, forecast),
         model_version=forecast.model_version,
-        rule_version="rules-profit-validation-short-v7"
+        rule_version="rules-profit-validation-short-asset-gate-v1"
         if mode is StrategyMode.SHORT_TERM
         else "rules-profit-validation-long-v3",
         data_snapshot_id=f"profit-validation:{len(bars)}-daily-bars",
@@ -1975,7 +1975,11 @@ def _analysis_report_from_profit_backtest(
         grade=_effective_reliability_grade(backtest, forecast),
         target_position_limit=_target_position_limit(final_signal, backtest, forecast, mode),
         exit_or_invalidation_conditions=_profit_invalidation_conditions(backtest, mode),
-        abstain_reason=_profit_abstain_reason(backtest, data_health, forecast),
+        abstain_reason=(
+            _profit_abstain_reason(backtest, data_health, forecast)
+            if final_signal is FinalSignal.ABSTAIN
+            else None
+        ),
     )
 
 
@@ -2056,6 +2060,8 @@ def _profit_analysis_signal(
         MarketRegimeGateStatus.MISSING,
     }:
         return FinalSignal.ABSTAIN
+    if _is_a_share_stock_id(backtest.security_id) and not pass_like:
+        return FinalSignal.ABSTAIN
     if (
         pass_like
         and backtest.cost_stress_passed is True
@@ -2096,6 +2102,11 @@ def _profit_abstain_reason(
         return AbstainReason.RULE
     if forecast.similar_sample_count <= 0:
         return AbstainReason.MODEL_UNCERTAINTY
+    if (
+        _is_a_share_stock_id(backtest.security_id)
+        and backtest.status is not ProfitValidationStatus.PASS
+    ):
+        return AbstainReason.EXPECTED_VALUE
     if backtest.status is ProfitValidationStatus.FAIL and backtest.excess_return <= 0:
         return AbstainReason.EXPECTED_VALUE
     return None
@@ -2118,6 +2129,11 @@ def _profit_raw_signal(
         return "ABSTAIN_A_SHARE_RELATIVE_STRENGTH_BLOCKED"
     if probabilities.down >= 0.50:
         return f"{mode_prefix}_SELL_OR_REDUCE_BIAS"
+    if (
+        _is_a_share_stock_id(backtest.security_id)
+        and backtest.status is not ProfitValidationStatus.PASS
+    ):
+        return "ABSTAIN_A_SHARE_STOCK_EVIDENCE_NOT_PASSED"
     if probabilities.up >= 0.50 and backtest.status is ProfitValidationStatus.PASS:
         return f"{mode_prefix}_BUY_CANDIDATE_BIAS"
     if backtest.status is ProfitValidationStatus.PASS:
@@ -2284,6 +2300,14 @@ def _profit_negative_drivers(
     forecast: IntervalForecastResult,
 ) -> tuple[str, ...]:
     values: list[str] = []
+    if (
+        _is_a_share_stock_id(backtest.security_id)
+        and backtest.status is not ProfitValidationStatus.PASS
+    ):
+        values.append(
+            "当前A股个股的单标的样本外与滚动前推证据未通过；"
+            "允许卖出或减仓风控提示，但不支持新增仓位。"
+        )
     if backtest.market_regime.status is MarketRegimeGateStatus.BLOCKED:
         values.append(
             "沪深300的21日与63日动量未同时为正，市场门槛阻断A股新开仓；"
@@ -2400,15 +2424,15 @@ def _profit_invalidation_conditions(
 
 
 def _is_a_share_security(security: SecurityRef) -> bool:
-    exchange, _separator, symbol = security.security_id.partition(":")
+    return security.asset_type is AssetType.STOCK and _is_a_share_stock_id(security.security_id)
+
+
+def _is_a_share_stock_id(security_id: str) -> bool:
+    exchange, _separator, symbol = security_id.partition(":")
     if exchange == Exchange.SSE.value:
-        return security.asset_type is AssetType.STOCK and symbol.startswith(
-            ("600", "601", "603", "605", "688", "689")
-        )
+        return symbol.startswith(("600", "601", "603", "605", "688", "689"))
     if exchange == Exchange.SZSE.value:
-        return security.asset_type is AssetType.STOCK and symbol.startswith(
-            ("000", "001", "002", "003", "300", "301")
-        )
+        return symbol.startswith(("000", "001", "002", "003", "300", "301"))
     return False
 
 
