@@ -2,7 +2,7 @@
 
 ## 文档定位
 
-本文是面向开发和使用者的近期改动摘要，汇总提交 `049bf94` 至 `ca291f0` 的主线变化。规范性需求仍以 `product-specs/`、`technical/`、`design/` 和 `domain/` 下的事实源为准；策略数字以对应研究报告和数据校验和为准。
+本文是面向开发和使用者的近期改动摘要，汇总提交 `049bf94` 至 `8231aec` 的主线变化。规范性需求仍以 `product-specs/`、`technical/`、`design/` 和 `domain/` 下的事实源为准；策略数字以对应研究报告和数据校验和为准。
 
 当前平台仍是量化研究、回测和模拟验证工具，不连接券商真实账户，不执行真实下单，也不承诺未来收益。
 
@@ -99,7 +99,7 @@
 - 手动账户与同一DecisionHub链联动：空仓服从最终门禁，已有仓位不会因证据不足的WATCH自动被解释为清仓；明确SELL/REDUCE仍优先用于已有仓位风险管理。
 - 2026-07-17复跑的最近组合快照为2026-06-24信号、2026-06-25执行，入选159915和516160，总研究仓位约61.02%。
 
-完整证据和复现命令见 `research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`。
+完整回测证据和复现命令见 `research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`；组合证据契约、DecisionHub 门禁和账户同链语义见 `research/ETF_ROTATION_DECISION_INTEGRATION_2026-07-17.md`。
 
 ## 九点一、预测区间校准 V2
 
@@ -146,6 +146,8 @@
 - `08a70c1`：A 股和 ETF 资产分层证据门禁。
 - `5360c26`：固定十 ETF 组合轮动候选、目标波动和滚动折验证。
 - `ca291f0`：预测区间独立样本、持有期隔离、三分类 Brier 和 DecisionHub 门禁。
+- `79e3627`：近期平台、界面、荐股、账户和策略状态汇总。
+- `8231aec`：ETF 组合证据契约、当前快照、DecisionHub 门禁、四模块展示和账户同链联动。
 
 详细记录：
 
