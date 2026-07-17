@@ -38,6 +38,7 @@ from china_quant_platform.strategies.etf_rotation import (
     cost_turnover_sensitivity,
 )
 from china_quant_platform.strategies.etf_rotation_validation import (
+    EtfRotationAllocationSnapshot,
     EtfRotationBacktestConfig,
     EtfRotationBacktestResult,
     EtfRotationEquityPoint,
@@ -45,6 +46,7 @@ from china_quant_platform.strategies.etf_rotation_validation import (
     EtfRotationValidationReport,
     EtfRotationValidationStatus,
     EtfRotationWalkForwardFold,
+    build_current_etf_rotation_allocation,
     run_etf_rotation_backtest,
     validate_etf_rotation_strategy,
     walk_forward_validate_etf_rotation,
@@ -118,6 +120,7 @@ __all__ = [
     "EtfRotationStrategy",
     "EtfSignalFeatures",
     "EtfUniverseMember",
+    "EtfRotationAllocationSnapshot",
     "EtfRotationBacktestConfig",
     "EtfRotationBacktestResult",
     "EtfRotationEquityPoint",
@@ -152,6 +155,7 @@ __all__ = [
     "ValidationDataSnapshot",
     "WalkForwardFoldResult",
     "cost_turnover_sensitivity",
+    "build_current_etf_rotation_allocation",
     "default_a_share_validation_universe",
     "default_a_share_confirmation_universe",
     "default_a_share_holdout_universe",

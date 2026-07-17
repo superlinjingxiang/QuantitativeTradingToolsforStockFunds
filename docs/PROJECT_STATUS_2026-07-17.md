@@ -95,7 +95,9 @@
 - 全样本可评估段收益+94.46%、年化+16.35%、最大回撤-22.22%、Sharpe 1.04、超额+48.79%，7个滚动窗口全部正收益。
 - 最后25%时间留出收益+43.64%、超额+16.78%、最大回撤-11.89%、45bp压力收益+38.35%，但只有1个完整滚动窗口，因此状态为WATCH。
 - 股票5日无跟随退出和股票横截面动量均在独立样本失效，没有进入正式V7。
-- 组合候选当前只用于研究报告，尚未接入单标的四个决策模块、模拟盘或真实下单。
+- 组合候选已作为结构化附加证据接入单标的四个决策模块和DecisionHub：展示组合状态、横截面排名和研究仓位，但不覆盖单标的概率预测。留出段WATCH、缓存旧值或未入选均不能许可新增仓位，仍未进入模拟盘或真实下单。
+- 手动账户与同一DecisionHub链联动：空仓服从最终门禁，已有仓位不会因证据不足的WATCH自动被解释为清仓；明确SELL/REDUCE仍优先用于已有仓位风险管理。
+- 2026-07-17复跑的最近组合快照为2026-06-24信号、2026-06-25执行，入选159915和516160，总研究仓位约61.02%。
 
 完整证据和复现命令见 `research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`。
 
@@ -115,7 +117,7 @@
 最近一次完整工程门禁记录为：
 
 - Ruff format、Ruff lint、mypy：通过。
-- Python 全量回归：`300 passed`，保留 1 条 FastAPI TestClient 上游弃用警告。
+- Python 全量回归：`306 passed`，保留 1 条 FastAPI TestClient 上游弃用警告。
 - 发布审计：`RELEASE_AUDIT_OK`。
 - Vitest：`1 passed`。
 - Vite 生产构建：通过，ECharts 分包仍有超过 500kB 的非阻断体积告警。
@@ -156,5 +158,6 @@
 - `research/SHORT_TERM_STRATEGY_ASSET_CLASS_GATE_2026-07-14.md`：A 股/ETF 分层决策边界。
 - `research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`：ETF组合候选、失败股票候选、时间留出和滚动折门槛。
 - `research/FORECAST_INTERVAL_VALIDATION_V2_2026-07-17.md`：预测标签去重、持有期隔离、两组十标的校准结果和复现命令。
+- `research/ETF_ROTATION_DECISION_INTEGRATION_2026-07-17.md`：组合证据契约、DecisionHub门禁、账户同链语义和最新组合快照。
 - `exec-plans/active/0008-fastapi-vue-redis-refactor.md`：现代化迁移计划。
 - `exec-plans/active/0011-profit-validation-v4.md`：策略验证与剩余工作。

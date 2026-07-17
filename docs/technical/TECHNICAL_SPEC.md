@@ -554,6 +554,7 @@ AnalysisReport {
 security, as_of, data_health,  
 strategy_id, strategy_version, horizon, market_regime,  
 direction_probabilities, expected_return_quantiles, expected_drawdown,  
+forecast_validation?, portfolio_strategy_evidence?,
 raw_signal, final_signal, grade, validity,  
 target_position_limit, stop_or_exit_conditions,  
 positive_drivers\[\], negative_drivers\[\], abstain_reason?,  
@@ -574,7 +575,7 @@ model_version, rule_version, data_snapshot_id
 ## 15.4 手动账户与未来券商账户适配边界
 
 - 当前 `accountContext` 只接收用户在本机录入的计划资金、可用现金、持仓数量、成本价和风险偏好，不读取券商账户，也不提交订单。
-- 手动账户数据归一化后只消费当前策略生成的 `DecisionReport`、最终信号、等级和目标仓位上限，用于计算市值、盈亏、仓位及建议金额；不得创建第二套方向策略。
+- 手动账户数据归一化后同时保留当前策略原始信号和`DecisionReport`最终门禁。空仓新增必须服从最终信号与可执行仓位上限；已有持仓只在策略明确减仓/卖出或超过研究仓位上限时降低，证据不足产生的WATCH不得解释为强制清仓。账户不得创建第二套方向策略。
 - 未来账户同步应定义 `AccountSnapshotProvider` 或 `BrokerAccountAdapter`，最少返回可用现金、持仓、平均成本、可卖数量、币种、`as_of`、数据来源和质量状态。
 - 券商快照必须先转换为与手动输入相同的账户上下文，再复用现有账户评估函数和决策门禁。适配器不能提升策略等级、不能把 `RESEARCH_ONLY` 改为可执行状态，也不能绕过数据、回测、校准、市场环境或风险阻断。
 - 真实下单、凭据保存、合规授权和人工确认必须另行立项；当前账户适配边界不提供订单提交接口。

@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -20,10 +21,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from china_quant_platform.data import BarsRequest, SecuritySearchResult
+from china_quant_platform.data import BarsRequest, MarketDataProvider, SecuritySearchResult
 from china_quant_platform.data.provider_factory import create_default_market_data_provider
 from china_quant_platform.decision.hub import DecisionHub
-from china_quant_platform.decision.models import DecisionRequest
+from china_quant_platform.decision.models import DecisionReport, DecisionRequest
 from china_quant_platform.domain import (
     AdjustmentMode,
     AssetType,
@@ -34,6 +35,7 @@ from china_quant_platform.domain import (
     DataUnavailable,
     DomainError,
     Exchange,
+    PortfolioStrategyEvidence,
     Quote,
     RecordQualityStatus,
     SecurityRef,
@@ -43,8 +45,20 @@ from china_quant_platform.manual_account import (
     manual_account_from_payload,
 )
 from china_quant_platform.market import build_market_overview
+from china_quant_platform.strategies.etf_rotation_lab import (
+    common_trade_dates,
+    fetch_etf_rotation_history,
+)
+from china_quant_platform.strategies.etf_rotation_validation import (
+    EtfRotationAllocationSnapshot,
+    EtfRotationBacktestConfig,
+    EtfRotationValidationReport,
+    build_current_etf_rotation_allocation,
+    validate_etf_rotation_strategy,
+)
 from china_quant_platform.strategies.profit_validation import (
     ProfitValidationStatus,
+    default_etf_validation_universe,
     run_profit_strategy_backtest,
 )
 from china_quant_platform.strategies.short_candidate_recommendation import (
@@ -86,11 +100,28 @@ class _ResolvedSecurity:
     candidates: tuple[SearchCandidateState, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _EtfRotationResearchCache:
+    expires_at: datetime
+    security_ids: tuple[str, ...]
+    allocation: EtfRotationAllocationSnapshot
+    validation: EtfRotationValidationReport
+
+
 class ElectronBackendService:
-    def __init__(self, env: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        env: Mapping[str, str] | None = None,
+        *,
+        provider: MarketDataProvider | None = None,
+    ) -> None:
         self._env = dict(env or os.environ)
-        self._provider = create_default_market_data_provider(self._env)
+        self._provider = provider or create_default_market_data_provider(self._env)
         self._security_master = build_demo_security_master()
+        self._rotation_cache_lock = threading.Lock()
+        self._rotation_cache: _EtfRotationResearchCache | None = None
+        self._rotation_retry_after: datetime | None = None
+        self._rotation_last_error: str | None = None
 
     def health(self) -> dict[str, Any]:
         return {
@@ -214,6 +245,15 @@ class ElectronBackendService:
             or len(market_regime_bars) > config.market_regime_long_lookback
         )
 
+        portfolio_strategy_evidence: PortfolioStrategyEvidence | None = None
+        if controls.mode is StrategyMode.SHORT_TERM:
+            portfolio_strategy_evidence, portfolio_issue = self._etf_rotation_evidence(
+                security_id=security.security_id,
+                as_of=now,
+            )
+            if portfolio_issue is not None:
+                health_issues.append(portfolio_issue)
+
         try:
             quote = asyncio.run(self._provider.get_quote(security.security_id))
         except BaseException as error:  # noqa: BLE001
@@ -233,6 +273,7 @@ class ElectronBackendService:
 
         analysis = AnalysisPanelState()
         decision = DecisionPanelState()
+        decision_report: DecisionReport | None = None
         backtest = BacktestPanelState(summary="行情已加载，策略样本不足或暂未计算。")
         chart_signals: tuple[ChartSignalMarkerState, ...] = ()
         if decision_bars:
@@ -251,6 +292,7 @@ class ElectronBackendService:
                     bars=decision_bars,
                     backtest=profit_backtest,
                     mode=controls.mode,
+                    portfolio_strategy_evidence=portfolio_strategy_evidence,
                 )
                 request = DecisionRequest(
                     security_id=security.security_id,
@@ -297,10 +339,23 @@ class ElectronBackendService:
         account_assessment = evaluate_manual_account(
             account=manual_account,
             latest_price=quote.latest_price,
-            final_signal=analysis.operation.final_signal,
+            final_signal=(
+                decision_report.final_signal.value
+                if decision_report is not None
+                else analysis.operation.final_signal
+            ),
             grade=analysis.operation.grade,
-            target_position_limit=analysis.operation.target_position_limit,
+            target_position_limit=(
+                decision_report.target_position_limit
+                if decision_report is not None
+                else analysis.operation.target_position_limit
+            ),
             expected_drawdown=analysis.forecast.expected_drawdown,
+            strategy_signal=analysis.operation.final_signal,
+            strategy_target_position_limit=analysis.operation.target_position_limit,
+            decision_readiness=(
+                decision_report.execution_readiness.value if decision_report is not None else None
+            ),
         )
         market_overview = self._market_overview(now)
         latest_change = _quote_change_pct(quote)
@@ -473,6 +528,120 @@ class ElectronBackendService:
             return MarketOverviewPanelState.from_overview(overview)
         except BaseException as error:  # noqa: BLE001
             return MarketOverviewPanelState.failed(_short_error(error))
+
+    def _etf_rotation_evidence(
+        self,
+        *,
+        security_id: str,
+        as_of: datetime,
+    ) -> tuple[PortfolioStrategyEvidence | None, str | None]:
+        universe = default_etf_validation_universe()
+        security_ids = tuple(member.security_id for member in universe)
+        if security_id not in security_ids:
+            return None, None
+        try:
+            cached, refresh_error = self._etf_rotation_research_cache(as_of=as_of)
+        except BaseException as error:  # noqa: BLE001
+            message = f"ETF组合研究证据获取失败：{_short_error(error)}"
+            return (
+                PortfolioStrategyEvidence(
+                    security_id=security_id,
+                    strategy_id="strategy.etf_rotation_portfolio",
+                    strategy_version="etf-rotation-v9",
+                    validation_status="MISSING",
+                    as_of_date=as_of.date(),
+                    failures=(message,),
+                    notes=("fixed_ten_etf_universe", "research_only_no_live_order_path"),
+                ),
+                message,
+            )
+        evidence = _portfolio_evidence_from_rotation_cache(
+            cached,
+            security_id=security_id,
+            stale=refresh_error is not None,
+            refresh_error=refresh_error,
+        )
+        issue = (
+            f"ETF组合研究证据刷新失败，保留上次结果：{refresh_error}"
+            if refresh_error is not None
+            else None
+        )
+        return evidence, issue
+
+    def _etf_rotation_research_cache(
+        self,
+        *,
+        as_of: datetime,
+    ) -> tuple[_EtfRotationResearchCache, str | None]:
+        with self._rotation_cache_lock:
+            cached = self._rotation_cache
+            if cached is not None and as_of < cached.expires_at:
+                return cached, None
+            if (
+                cached is not None
+                and self._rotation_retry_after is not None
+                and as_of < self._rotation_retry_after
+            ):
+                return cached, self._rotation_last_error
+            try:
+                universe = default_etf_validation_universe()
+                security_ids = tuple(member.security_id for member in universe)
+                bars_by_security, failures = asyncio.run(
+                    fetch_etf_rotation_history(
+                        self._provider,
+                        universe=universe,
+                        history_years=9,
+                        as_of=as_of,
+                    )
+                )
+                if failures:
+                    raise DataUnavailable(
+                        "固定十ETF取数不完整：" + "；".join(failures[:3]),
+                        retryable=True,
+                    )
+                dates = common_trade_dates(
+                    bars_by_security,
+                    security_ids=security_ids,
+                )
+                config = EtfRotationBacktestConfig()
+                minimum_dates = config.formation_lookback_bars + config.walk_forward_window_bars + 2
+                if len(dates) < minimum_dates:
+                    raise DataUnavailable(
+                        f"固定十ETF共同历史不足：{len(dates)}/{minimum_dates}",
+                        retryable=True,
+                    )
+                oos_start = dates[int(len(dates) * 0.75)]
+                validation = validate_etf_rotation_strategy(
+                    bars_by_security,
+                    security_ids=security_ids,
+                    config=config,
+                    evaluation_start=oos_start,
+                )
+                allocation = build_current_etf_rotation_allocation(
+                    bars_by_security,
+                    security_ids=security_ids,
+                    config=config,
+                )
+                ttl_seconds = _positive_env_int(
+                    self._env.get("CQP_ETF_ROTATION_CACHE_SECONDS"),
+                    default=1800,
+                )
+                refreshed = _EtfRotationResearchCache(
+                    expires_at=as_of + timedelta(seconds=ttl_seconds),
+                    security_ids=security_ids,
+                    allocation=allocation,
+                    validation=validation,
+                )
+                self._rotation_cache = refreshed
+                self._rotation_retry_after = None
+                self._rotation_last_error = None
+                return refreshed, None
+            except BaseException as error:  # noqa: BLE001
+                self._rotation_retry_after = as_of + timedelta(seconds=30)
+                self._rotation_last_error = _short_error(error)
+                if cached is not None:
+                    return cached, self._rotation_last_error
+                raise
 
     @staticmethod
     def _empty_state(message: str) -> dict[str, Any]:
@@ -698,6 +867,68 @@ def _quote_change_pct(quote: Quote) -> float | None:
     if quote.previous_close <= 0:
         return None
     return quote.latest_price / quote.previous_close - 1.0
+
+
+def _portfolio_evidence_from_rotation_cache(
+    cached: _EtfRotationResearchCache,
+    *,
+    security_id: str,
+    stale: bool,
+    refresh_error: str | None,
+) -> PortfolioStrategyEvidence:
+    allocation = cached.allocation
+    validation = cached.validation
+    ranked_security_ids = tuple(allocation.momentum_scores)
+    rank = (
+        ranked_security_ids.index(security_id) + 1 if security_id in ranked_security_ids else None
+    )
+    failures = (refresh_error,) if refresh_error else ()
+    notes = tuple(
+        dict.fromkeys(
+            (
+                *validation.notes,
+                "fixed_ten_etf_universe",
+                "signal_prior_close_execution_next_open",
+                "research_only_no_live_order_path",
+            )
+        )
+    )
+    return PortfolioStrategyEvidence(
+        security_id=security_id,
+        strategy_id="strategy.etf_rotation_portfolio",
+        strategy_version="etf-rotation-v9",
+        validation_status=validation.status.value,
+        as_of_date=allocation.as_of_date,
+        signal_date=allocation.signal_date,
+        execution_date=allocation.execution_date,
+        selected_security_ids=allocation.selected_security_ids,
+        current_security_selected=security_id in allocation.selected_security_ids,
+        current_security_rank=rank,
+        current_security_momentum=allocation.momentum_scores.get(security_id),
+        target_position_fraction=allocation.target_position_fraction,
+        current_security_target_fraction=allocation.target_weights.get(security_id, 0.0),
+        bars_until_next_rebalance=allocation.bars_until_next_rebalance,
+        base_total_return=validation.base.total_return,
+        stress_total_return=validation.stress.total_return,
+        excess_return=validation.base.excess_return,
+        max_drawdown=validation.base.max_drawdown,
+        sharpe_ratio=validation.base.sharpe_ratio,
+        walk_forward_fold_count=len(validation.walk_forward_folds),
+        required_walk_forward_fold_count=validation.config.minimum_walk_forward_folds,
+        walk_forward_positive_ratio=validation.walk_forward_positive_ratio,
+        walk_forward_excess_ratio=validation.walk_forward_excess_ratio,
+        stale=stale,
+        failures=failures,
+        notes=notes,
+    )
+
+
+def _positive_env_int(value: str | None, *, default: int) -> int:
+    try:
+        parsed = int(value) if value is not None else default
+    except ValueError:
+        parsed = default
+    return max(1, parsed)
 
 
 def _bar_time(bar: Bar) -> datetime:

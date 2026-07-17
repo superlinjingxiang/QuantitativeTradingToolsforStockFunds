@@ -71,6 +71,19 @@
 
 本轮验证：Ruff format、Ruff lint、mypy、300项Python全量回归和发布审计全部通过；保留1条FastAPI TestClient上游弃用警告。
 
+## ETF组合证据与账户同链联动
+
+- `AnalysisReport`新增结构化`portfolio_strategy_evidence`，固定十ETF可展示V9验证状态、信号/执行日、入选代码、横截面排名、动量、研究仓位和滚动折证据。
+- 当前组合快照复用V9回测同一路径，不另写一套当日排名公式；仍为前收盘信号、次日开盘执行。
+- DecisionHub增加组合策略门禁：WATCH、缓存旧值或未入选只允许研究观察，不能成为新增仓位许可。
+- 手动账户改为同时读取当前策略和最终DecisionHub门禁。空仓服从最终门禁；已有持仓不会因为证据不足的WATCH被误判为强制清仓，明确SELL/REDUCE仍保留风险优先级。
+- 右侧当前策略、预期走势和操作风险增加组合参照；明确横截面组合排名不替代单标的方向概率。
+- 固定十ETF证据默认保留30分钟，刷新失败时显示旧值状态；分析缓存Schema升级到v3。
+
+2026-07-17真实复跑仍为1318个共同交易日、0/10失败；全样本收益+94.46%、回撤-22.22%，最终25%留出收益+43.64%、超额+16.78%，但只有1/3个滚动窗口，因此保持WATCH。最近组合快照为2026-06-24信号、2026-06-25执行，入选159915和516160，总研究仓位约61.02%。详细记录见`research/ETF_ROTATION_DECISION_INTEGRATION_2026-07-17.md`。
+
+本轮最终门禁：Ruff、mypy、Python `306 passed`、Vitest `1 passed`、Vite生产构建通过。ECharts分包体积警告和FastAPI TestClient上游弃用警告均为已记录的非阻断项。
+
 ## 对应提交
 
 - `049bf94`：FastAPI、Vue、Redis 与 Electron 兼容迁移。

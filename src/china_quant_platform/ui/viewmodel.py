@@ -36,6 +36,7 @@ from china_quant_platform.domain import (
     Exchange,
     FinalSignal,
     ForecastValidationEvidence,
+    PortfolioStrategyEvidence,
     Quote,
     SecurityRef,
     SecurityStatus,
@@ -1938,6 +1939,7 @@ def _analysis_report_from_profit_backtest(
     bars: tuple[Bar, ...],
     backtest: ProfitBacktestResult,
     mode: StrategyMode,
+    portfolio_strategy_evidence: PortfolioStrategyEvidence | None = None,
 ) -> AnalysisReport:
     parameters = horizon_parameters(backtest.horizon)
     forecast = forecast_interval_from_bars(
@@ -1978,6 +1980,7 @@ def _analysis_report_from_profit_backtest(
         expected_return_quantiles=_profit_expected_return_quantiles(backtest, forecast),
         expected_drawdown=forecast.expected_drawdown,
         forecast_validation=_forecast_validation_evidence(forecast),
+        portfolio_strategy_evidence=portfolio_strategy_evidence,
         grade=_effective_reliability_grade(backtest, forecast),
         target_position_limit=_target_position_limit(final_signal, backtest, forecast, mode),
         exit_or_invalidation_conditions=_profit_invalidation_conditions(backtest, mode),

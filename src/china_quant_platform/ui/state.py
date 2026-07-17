@@ -341,6 +341,7 @@ class StrategyPanelState(DomainModel):
     model_version: str = "--"
     rule_version: str = "--"
     data_snapshot_id: str = "--"
+    portfolio_context: str = "--"
 
 
 class ForecastPanelState(DomainModel):
@@ -352,6 +353,7 @@ class ForecastPanelState(DomainModel):
     confidence_note: str = "--"
     model_version: str = "--"
     is_abstain: bool = False
+    cross_sectional_context: str = "--"
 
 
 class OperationPanelState(DomainModel):
@@ -364,6 +366,7 @@ class OperationPanelState(DomainModel):
     negative_drivers: tuple[str, ...] = ()
     exit_or_invalidation_conditions: tuple[str, ...] = ()
     abstain_reason: str | None = None
+    portfolio_context: str = "--"
 
 
 class DecisionPanelState(DomainModel):
@@ -430,6 +433,7 @@ class AnalysisPanelState(DomainModel):
             model_version=report.model_version,
             rule_version=report.rule_version,
             data_snapshot_id=report.data_snapshot_id,
+            portfolio_context=_portfolio_strategy_summary(report),
         )
         forecast = ForecastPanelState(
             direction_label=_direction_label(report),
@@ -440,6 +444,7 @@ class AnalysisPanelState(DomainModel):
             confidence_note=_confidence_note(strategy_summary),
             model_version=report.model_version,
             is_abstain=report.final_signal is FinalSignal.ABSTAIN,
+            cross_sectional_context=_portfolio_forecast_context(report),
         )
         operation = OperationPanelState(
             final_signal=report.final_signal.value,
@@ -453,6 +458,7 @@ class AnalysisPanelState(DomainModel):
             abstain_reason=(
                 report.abstain_reason.value if report.abstain_reason is not None else None
             ),
+            portfolio_context=_portfolio_operation_context(report),
         )
         return cls(report=report, strategy=strategy, forecast=forecast, operation=operation)
 
@@ -864,6 +870,57 @@ def _validation_metrics_from_report(report: AnalysisReport) -> str:
     if hints:
         return "；".join(hints[:2])
     return "校准样本不足或暂未生成。"
+
+
+def _portfolio_strategy_summary(report: AnalysisReport) -> str:
+    evidence = report.portfolio_strategy_evidence
+    if evidence is None:
+        return "当前标的不适用固定十ETF组合证据。"
+    if evidence.signal_date is None:
+        return f"ETF轮动{evidence.validation_status}；固定池数据尚未完整生成。"
+    selected = "/".join(
+        security_id.split(":")[-1] for security_id in evidence.selected_security_ids
+    )
+    cache_note = "；缓存旧值" if evidence.stale else ""
+    return (
+        f"ETF轮动V9 {evidence.validation_status}；信号日{evidence.signal_date.isoformat()}；"
+        f"候选{selected or '空仓'}；总研究仓位{evidence.target_position_fraction:.1%}"
+        f"{cache_note}"
+    )
+
+
+def _portfolio_forecast_context(report: AnalysisReport) -> str:
+    evidence = report.portfolio_strategy_evidence
+    if evidence is None:
+        return "单标的概率预测独立计算。"
+    rank = (
+        f"横截面第{evidence.current_security_rank}名"
+        if evidence.current_security_rank
+        else "未获正动量排名"
+    )
+    momentum = (
+        f"，252日动量{evidence.current_security_momentum:.1%}"
+        if evidence.current_security_momentum is not None
+        else ""
+    )
+    return f"{rank}{momentum}；组合排名不替代单标的概率区间。"
+
+
+def _portfolio_operation_context(report: AnalysisReport) -> str:
+    evidence = report.portfolio_strategy_evidence
+    if evidence is None:
+        return "--"
+    selected = "已入选" if evidence.current_security_selected else "未入选"
+    next_rebalance = (
+        f"约{evidence.bars_until_next_rebalance}个交易日后复核"
+        if evidence.bars_until_next_rebalance is not None
+        else "等待完整固定池数据"
+    )
+    return (
+        f"{selected}组合候选；当前标的研究权重"
+        f"{evidence.current_security_target_fraction:.1%}；{next_rebalance}；"
+        f"验证状态{evidence.validation_status}。"
+    )
 
 
 def _grade_description(grade: str | None) -> str:

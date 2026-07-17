@@ -63,6 +63,32 @@ class EtfRotationRebalanceEvent(DomainModel):
     target_position_fraction: float = Field(ge=0, le=1)
 
 
+class EtfRotationAllocationSnapshot(DomainModel):
+    as_of_date: date
+    signal_date: date
+    execution_date: date
+    selected_security_ids: tuple[NonEmptyString, ...]
+    momentum_scores: dict[str, float]
+    target_position_fraction: float = Field(ge=0, le=1)
+    target_weights: dict[str, float]
+    bars_since_rebalance: int = Field(ge=0)
+    bars_until_next_rebalance: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def validate_allocation(self) -> Self:
+        if set(self.target_weights) != set(self.selected_security_ids):
+            raise ValueError("target_weights must match selected_security_ids")
+        if any(weight < 0 or weight > 1 for weight in self.target_weights.values()):
+            raise ValueError("target weights must be between zero and one")
+        if not math.isclose(
+            sum(self.target_weights.values()),
+            self.target_position_fraction,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("target weights must sum to target_position_fraction")
+        return self
+
+
 class EtfRotationBacktestResult(DomainModel):
     evaluation_start: date
     evaluation_end: date
@@ -100,6 +126,59 @@ class EtfRotationValidationReport(DomainModel):
     walk_forward_positive_ratio: float = Field(ge=0, le=1)
     walk_forward_excess_ratio: float = Field(ge=0, le=1)
     notes: tuple[NonEmptyString, ...]
+
+
+def build_current_etf_rotation_allocation(
+    bars_by_security: Mapping[str, Sequence[Bar]],
+    *,
+    security_ids: Sequence[str],
+    config: EtfRotationBacktestConfig | None = None,
+) -> EtfRotationAllocationSnapshot:
+    """Return the latest scheduled allocation from the same path as the backtest."""
+
+    active_config = config or EtfRotationBacktestConfig()
+    identifiers = tuple(dict.fromkeys(security_ids))
+    result = run_etf_rotation_backtest(
+        bars_by_security,
+        security_ids=identifiers,
+        config=active_config,
+    )
+    if not result.rebalances:
+        raise ValueError("ETF rotation has no completed rebalance event")
+    latest = result.rebalances[-1]
+    common_dates = sorted(
+        set.intersection(
+            *(
+                {bar.trade_date for bar in bars_by_security[security_id]}
+                for security_id in identifiers
+            )
+        )
+    )
+    execution_index = common_dates.index(latest.execution_date)
+    as_of_index = common_dates.index(result.evaluation_end)
+    bars_since_rebalance = as_of_index - execution_index
+    bars_until_next_rebalance = max(
+        1,
+        active_config.rebalance_interval_bars - bars_since_rebalance,
+    )
+    per_security_weight = (
+        latest.target_position_fraction / len(latest.selected_security_ids)
+        if latest.selected_security_ids
+        else 0.0
+    )
+    return EtfRotationAllocationSnapshot(
+        as_of_date=result.evaluation_end,
+        signal_date=latest.signal_date,
+        execution_date=latest.execution_date,
+        selected_security_ids=latest.selected_security_ids,
+        momentum_scores=latest.momentum_scores,
+        target_position_fraction=latest.target_position_fraction,
+        target_weights={
+            security_id: per_security_weight for security_id in latest.selected_security_ids
+        },
+        bars_since_rebalance=bars_since_rebalance,
+        bars_until_next_rebalance=bars_until_next_rebalance,
+    )
 
 
 def run_etf_rotation_backtest(

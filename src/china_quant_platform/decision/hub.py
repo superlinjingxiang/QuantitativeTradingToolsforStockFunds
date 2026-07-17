@@ -52,6 +52,7 @@ class DecisionHub:
         gates = (
             _data_gate(analysis_report),
             _analysis_gate(analysis_report),
+            _portfolio_strategy_gate(analysis_report),
             _profitability_gate(request, profitability, out_of_sample_passed),
             _calibration_gate(request, analysis_report, profitability),
             _cost_stress_gate(cost_stress_passed),
@@ -86,6 +87,56 @@ class DecisionHub:
             negative_evidence=_negative_evidence(gates, analysis_report, profitability, simulation),
             caveats=_caveats(final_signal, readiness),
         )
+
+
+def _portfolio_strategy_gate(analysis_report: AnalysisReport) -> EvidenceGate:
+    evidence = analysis_report.portfolio_strategy_evidence
+    if evidence is None:
+        return EvidenceGate(
+            gate_id="portfolio-strategy",
+            name="组合策略证据",
+            status=EvidenceGateStatus.PASS,
+            reasons=("当前标的不适用组合策略附加门禁。",),
+        )
+    status = evidence.validation_status.upper()
+    if status in {"MISSING", "INSUFFICIENT_HISTORY"}:
+        reasons = evidence.failures or ("组合策略历史或固定池数据不足。",)
+        return EvidenceGate(
+            gate_id="portfolio-strategy",
+            name="组合策略证据",
+            status=EvidenceGateStatus.MISSING,
+            reasons=reasons,
+        )
+    if status == "FAIL":
+        return EvidenceGate(
+            gate_id="portfolio-strategy",
+            name="组合策略证据",
+            status=EvidenceGateStatus.FAIL,
+            reasons=("组合策略最终时间留出验证未通过。", *evidence.failures),
+        )
+    selection_text = (
+        f"当前标的已入选，研究目标权重{evidence.current_security_target_fraction:.1%}。"
+        if evidence.current_security_selected
+        else "当前标的未进入最近一次组合候选，研究目标权重为0。"
+    )
+    if status == "WATCH" or evidence.stale or not evidence.current_security_selected:
+        warning_reasons = [selection_text]
+        if status == "WATCH":
+            warning_reasons.append("ETF组合证据仍为WATCH，不能把历史轮动结果升级为新增仓位许可。")
+        if evidence.stale:
+            warning_reasons.append("组合证据来自上一次成功缓存，等待最新固定池刷新。")
+        return EvidenceGate(
+            gate_id="portfolio-strategy",
+            name="组合策略证据",
+            status=EvidenceGateStatus.WARN,
+            reasons=tuple(warning_reasons),
+        )
+    return EvidenceGate(
+        gate_id="portfolio-strategy",
+        name="组合策略证据",
+        status=EvidenceGateStatus.PASS,
+        reasons=(selection_text,),
+    )
 
 
 def profitability_from_backtest(

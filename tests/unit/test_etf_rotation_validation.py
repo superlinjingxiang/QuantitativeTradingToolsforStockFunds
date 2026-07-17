@@ -10,6 +10,7 @@ from china_quant_platform.domain import AdjustmentMode, Bar, BarInterval, Record
 from china_quant_platform.strategies.etf_rotation_validation import (
     EtfRotationBacktestConfig,
     EtfRotationValidationStatus,
+    build_current_etf_rotation_allocation,
     run_etf_rotation_backtest,
     validate_etf_rotation_strategy,
 )
@@ -91,6 +92,26 @@ def test_rotation_applies_volatility_target_and_position_bounds(
         if event.selected_security_ids
     )
     assert 0.25 <= result.average_position_fraction <= 1.0
+
+
+def test_current_allocation_reuses_latest_scheduled_rebalance(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    security_ids = tuple(etf_bars)
+    backtest = run_etf_rotation_backtest(etf_bars, security_ids=security_ids)
+    snapshot = build_current_etf_rotation_allocation(
+        etf_bars,
+        security_ids=security_ids,
+    )
+
+    latest_rebalance = backtest.rebalances[-1]
+    assert snapshot.as_of_date == backtest.evaluation_end
+    assert snapshot.signal_date == latest_rebalance.signal_date
+    assert snapshot.execution_date == latest_rebalance.execution_date
+    assert snapshot.selected_security_ids == latest_rebalance.selected_security_ids
+    assert snapshot.momentum_scores == latest_rebalance.momentum_scores
+    assert sum(snapshot.target_weights.values()) == pytest.approx(snapshot.target_position_fraction)
+    assert 1 <= snapshot.bars_until_next_rebalance <= 21
 
 
 def test_stress_cost_cannot_improve_rotation_return(

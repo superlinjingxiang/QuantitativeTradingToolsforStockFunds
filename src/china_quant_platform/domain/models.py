@@ -201,6 +201,51 @@ class ForecastValidationEvidence(DomainModel):
     direction_brier_score: float | None = Field(default=None, ge=0)
 
 
+class PortfolioStrategyEvidence(DomainModel):
+    security_id: SecurityId
+    strategy_id: StrategyId
+    strategy_version: NonEmptyString
+    validation_status: NonEmptyString
+    as_of_date: date
+    signal_date: date | None = None
+    execution_date: date | None = None
+    selected_security_ids: tuple[SecurityId, ...] = ()
+    current_security_selected: bool = False
+    current_security_rank: int | None = Field(default=None, ge=1)
+    current_security_momentum: float | None = None
+    target_position_fraction: float = Field(default=0.0, ge=0, le=1)
+    current_security_target_fraction: float = Field(default=0.0, ge=0, le=1)
+    bars_until_next_rebalance: int | None = Field(default=None, ge=1)
+    base_total_return: float | None = None
+    stress_total_return: float | None = None
+    excess_return: float | None = None
+    max_drawdown: float | None = Field(default=None, le=0)
+    sharpe_ratio: float | None = None
+    walk_forward_fold_count: int = Field(default=0, ge=0)
+    required_walk_forward_fold_count: int = Field(default=1, ge=1)
+    walk_forward_positive_ratio: float | None = Field(default=None, ge=0, le=1)
+    walk_forward_excess_ratio: float | None = Field(default=None, ge=0, le=1)
+    stale: bool = False
+    failures: tuple[NonEmptyString, ...] = ()
+    notes: tuple[NonEmptyString, ...] = ()
+
+    @model_validator(mode="after")
+    def enforce_portfolio_evidence_consistency(self) -> Self:
+        selected = tuple(dict.fromkeys(self.selected_security_ids))
+        if selected != self.selected_security_ids:
+            raise ValueError("selected_security_ids must be unique")
+        is_selected = self.security_id in selected
+        if is_selected != self.current_security_selected:
+            raise ValueError("current_security_selected must match selected_security_ids")
+        if not is_selected and self.current_security_target_fraction != 0:
+            raise ValueError("unselected securities must have zero target fraction")
+        if self.current_security_target_fraction > self.target_position_fraction:
+            raise ValueError("security target fraction cannot exceed portfolio target fraction")
+        if (self.signal_date is None) != (self.execution_date is None):
+            raise ValueError("signal_date and execution_date must be provided together")
+        return self
+
+
 class AnalysisReport(DomainModel):
     security_id: SecurityId
     as_of: AwareDatetime
@@ -221,6 +266,7 @@ class AnalysisReport(DomainModel):
     expected_return_quantiles: dict[str, float] = Field(default_factory=dict)
     expected_drawdown: float | None = None
     forecast_validation: ForecastValidationEvidence | None = None
+    portfolio_strategy_evidence: PortfolioStrategyEvidence | None = None
     grade: str | None = None
     target_position_limit: float | None = Field(default=None, ge=0, le=1)
     exit_or_invalidation_conditions: tuple[NonEmptyString, ...] = ()

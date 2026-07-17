@@ -12,7 +12,7 @@ from typing import Any
 
 from china_quant_platform.infrastructure.cache_backend import CacheBackend
 
-CACHE_SCHEMA_VERSION = "v2"
+CACHE_SCHEMA_VERSION = "v3"
 
 
 class CachedApplicationService:

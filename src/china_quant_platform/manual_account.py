@@ -40,6 +40,9 @@ def evaluate_manual_account(
     grade: str | None,
     target_position_limit: object,
     expected_drawdown: object = None,
+    strategy_signal: str | None = None,
+    strategy_target_position_limit: object = None,
+    decision_readiness: str | None = None,
 ) -> dict[str, Any]:
     """Translate the current strategy output into account-position advice.
 
@@ -73,8 +76,14 @@ def evaluate_manual_account(
     )
     net_asset = max(planned_capital, market_value + max(0.0, estimated_cash))
     current_weight = market_value / net_asset if net_asset > 0 else 0.0
-    strategy_target_weight = _parse_percent(target_position_limit)
-    signal = str(final_signal or "").upper()
+    decision_target_weight = _parse_percent(target_position_limit)
+    research_target_weight = _parse_percent(
+        target_position_limit
+        if strategy_target_position_limit is None
+        else strategy_target_position_limit
+    )
+    decision_signal = str(final_signal or "").upper()
+    strategy_signal_text = str(strategy_signal or decision_signal).upper()
     grade_text = str(grade or "N").upper()
 
     blockers: list[str] = []
@@ -93,49 +102,72 @@ def evaluate_manual_account(
         advice = "补全账户数据"
         reason = " ".join(blockers)
     elif quantity == 0:
-        if signal in _BUY_SIGNALS and strategy_target_weight > 0:
-            max_position_value = net_asset * strategy_target_weight
+        if decision_signal in _BUY_SIGNALS and decision_target_weight > 0:
+            max_position_value = net_asset * decision_target_weight
             suggested_amount = min(max_position_value, max(0.0, estimated_cash))
             advice = "可小仓试买" if suggested_amount > 0 else "观察"
             reason = (
-                f"当前空仓，直接按当前策略{_signal_label(signal)}和仓位上限"
-                f"{_pct(strategy_target_weight)}折算可买金额；等级{grade_text}仅作证据强弱展示。"
+                f"当前空仓，当前策略通过最终门禁后信号为{_signal_label(decision_signal)}，"
+                f"按可执行仓位上限"
+                f"{_pct(decision_target_weight)}折算可买金额；等级{grade_text}仅作证据强弱展示。"
             )
         else:
             advice = "暂不新开仓"
             reason = (
-                f"当前空仓；当前策略为{_signal_label(signal)}，仓位上限"
-                f"{_pct(strategy_target_weight)}，因此不建议新增仓位。"
+                f"当前策略信号为{_signal_label(strategy_signal_text)}，最终门禁信号为"
+                f"{_signal_label(decision_signal)}，可执行仓位上限"
+                f"{_pct(decision_target_weight)}，因此不建议新增仓位。"
             )
     else:
-        target_value = net_asset * strategy_target_weight
-        if signal in _REDUCE_SIGNALS or strategy_target_weight <= 0:
-            suggested_amount = max(0.0, market_value - target_value)
+        decision_target_value = net_asset * decision_target_weight
+        research_target_value = net_asset * research_target_weight
+        if strategy_signal_text in _REDUCE_SIGNALS or decision_signal in _REDUCE_SIGNALS:
+            suggested_amount = max(0.0, market_value - research_target_value)
             advice = "建议减仓"
             reason = (
-                f"当前策略为{_signal_label(signal)}且仓位上限{_pct(strategy_target_weight)}，"
+                f"当前策略明确为{_signal_label(strategy_signal_text)}，研究仓位上限"
+                f"{_pct(research_target_weight)}，"
                 f"账户模块只按该策略目标降低已有仓位；当前仓位约{_pct(current_weight)}。"
             )
-        elif current_weight > strategy_target_weight + 0.01:
-            suggested_amount = market_value - target_value
+        elif decision_signal in {"WATCH", "ABSTAIN"}:
+            if research_target_weight > 0 and current_weight > research_target_weight + 0.01:
+                suggested_amount = market_value - research_target_value
+                advice = "建议减仓"
+                reason = (
+                    f"最终门禁为{_signal_label(decision_signal)}，不允许新增仓位；当前仓位约"
+                    f"{_pct(current_weight)}，仍高于策略研究仓位上限"
+                    f"{_pct(research_target_weight)}，因此只建议降低超出部分。"
+                )
+            else:
+                advice = "持有观察"
+                reason = (
+                    f"最终门禁为{_signal_label(decision_signal)}，当前不允许新增仓位；"
+                    f"策略没有给出卖出/减仓信号，因此门禁归零不解释为强制清仓。"
+                )
+        elif current_weight > decision_target_weight + 0.01:
+            suggested_amount = market_value - decision_target_value
             advice = "建议减仓"
             reason = (
                 f"当前仓位约{_pct(current_weight)}，高于当前策略仓位上限"
-                f"{_pct(strategy_target_weight)}。"
+                f"{_pct(decision_target_weight)}。"
             )
-        elif signal in _BUY_SIGNALS and current_weight < strategy_target_weight - 0.01:
-            suggested_amount = min(target_value - market_value, max(0.0, estimated_cash))
+        elif decision_signal in _BUY_SIGNALS and current_weight < decision_target_weight - 0.01:
+            suggested_amount = min(
+                decision_target_value - market_value,
+                max(0.0, estimated_cash),
+            )
             advice = "可加仓" if suggested_amount > 0 else "持有"
             reason = (
                 f"当前仓位约{_pct(current_weight)}，低于当前策略仓位上限"
-                f"{_pct(strategy_target_weight)}；策略为{_signal_label(signal)}。"
+                f"{_pct(decision_target_weight)}；最终门禁信号为"
+                f"{_signal_label(decision_signal)}。"
             )
         else:
             advice = "持有观察"
             reason = (
                 f"当前仓位约{_pct(current_weight)}，与当前策略仓位上限"
-                f"{_pct(strategy_target_weight)}基本匹配；"
-                f"策略为{_signal_label(signal)}。"
+                f"{_pct(decision_target_weight)}基本匹配；"
+                f"最终门禁信号为{_signal_label(decision_signal)}。"
             )
 
     signed_amount = _signed_amount(advice, suggested_amount)
@@ -152,7 +184,11 @@ def evaluate_manual_account(
         "unrealizedPnl": _signed_money(unrealized_pnl),
         "unrealizedReturn": _pct(unrealized_return),
         "currentWeight": _pct(current_weight),
-        "targetWeight": _pct(strategy_target_weight),
+        "targetWeight": _pct(decision_target_weight),
+        "strategyTargetWeight": _pct(research_target_weight),
+        "strategySignal": strategy_signal_text or "--",
+        "decisionSignal": decision_signal or "--",
+        "decisionReadiness": str(decision_readiness or "--"),
         "accountAdvice": advice,
         "suggestedAmount": signed_amount,
         "suggestedQuantity": f"{suggested_quantity} 股/份" if suggested_quantity else "--",
@@ -163,7 +199,8 @@ def evaluate_manual_account(
             f"（{_pct(unrealized_return)}），仓位{_pct(current_weight)}。"
         ),
         "disclaimer": (
-            "账户建议由当前策略仓位上限折算而来，不构成真实交易指令；不会读取券商账户或执行下单。"
+            "账户建议由当前策略信号和DecisionHub最终门禁共同折算，不构成真实交易指令；"
+            "不会读取券商账户或执行下单。"
         ),
     }
 

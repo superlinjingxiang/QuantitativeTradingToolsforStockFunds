@@ -55,6 +55,70 @@ def test_watch_signal_does_not_open_new_position() -> None:
     assert result["suggestedAmount"] == "--"
 
 
+def test_decision_gate_blocks_new_position_without_erasing_strategy_context() -> None:
+    result = evaluate_manual_account(
+        account=ManualAccountInput(planned_capital=10_000, available_cash=10_000),
+        latest_price=10,
+        final_signal="WATCH",
+        grade="B",
+        target_position_limit=0.0,
+        strategy_signal="BUY_CANDIDATE",
+        strategy_target_position_limit="10.0%",
+        decision_readiness="RESEARCH_ONLY",
+    )
+
+    assert result["accountAdvice"] == "暂不新开仓"
+    assert result["strategySignal"] == "BUY_CANDIDATE"
+    assert result["decisionSignal"] == "WATCH"
+    assert result["targetWeight"] == "0.0%"
+    assert result["strategyTargetWeight"] == "10.0%"
+    assert "最终门禁信号为观察" in result["reason"]
+
+
+def test_watch_gate_does_not_force_existing_position_to_zero() -> None:
+    result = evaluate_manual_account(
+        account=ManualAccountInput(
+            planned_capital=10_000,
+            available_cash=8_000,
+            holding_quantity=200,
+            average_cost=9.5,
+        ),
+        latest_price=10,
+        final_signal="WATCH",
+        grade="B",
+        target_position_limit=0.0,
+        strategy_signal="HOLD",
+        strategy_target_position_limit="25.0%",
+        decision_readiness="RESEARCH_ONLY",
+    )
+
+    assert result["currentWeight"] == "20.0%"
+    assert result["accountAdvice"] == "持有观察"
+    assert result["suggestedAmount"] == "--"
+    assert "不解释为强制清仓" in result["reason"]
+
+
+def test_strategy_reduce_survives_watch_gate_for_existing_position() -> None:
+    result = evaluate_manual_account(
+        account=ManualAccountInput(
+            planned_capital=10_000,
+            holding_quantity=500,
+            average_cost=10,
+        ),
+        latest_price=10,
+        final_signal="WATCH",
+        grade="C",
+        target_position_limit=0.0,
+        strategy_signal="REDUCE",
+        strategy_target_position_limit="20.0%",
+        decision_readiness="RESEARCH_ONLY",
+    )
+
+    assert result["accountAdvice"] == "建议减仓"
+    assert result["suggestedAmount"] == "建议减仓约3,000.00 元"
+    assert "策略明确为减仓" in result["reason"]
+
+
 def test_zero_planned_capital_blocks_weight_calculation() -> None:
     result = evaluate_manual_account(
         account=ManualAccountInput(holding_quantity=100, average_cost=9.0),

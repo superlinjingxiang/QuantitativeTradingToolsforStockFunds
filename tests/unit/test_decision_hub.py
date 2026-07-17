@@ -26,6 +26,7 @@ from china_quant_platform.domain import (
     Exchange,
     FinalSignal,
     ForecastValidationEvidence,
+    PortfolioStrategyEvidence,
     Quote,
     RecordQualityStatus,
     SecurityRef,
@@ -137,6 +138,42 @@ def forecast_validation() -> ForecastValidationEvidence:
     )
 
 
+def portfolio_evidence(
+    *,
+    validation_status: str = "PASS",
+    selected: bool = True,
+    stale: bool = False,
+) -> PortfolioStrategyEvidence:
+    selected_ids = ("SSE:600519", "SSE:510300") if selected else ("SSE:510300",)
+    return PortfolioStrategyEvidence(
+        security_id="SSE:600519",
+        strategy_id="strategy.etf_rotation_portfolio",
+        strategy_version="etf-rotation-v9",
+        validation_status=validation_status,
+        as_of_date=date(2026, 6, 30),
+        signal_date=date(2026, 6, 27),
+        execution_date=date(2026, 6, 30),
+        selected_security_ids=selected_ids,
+        current_security_selected=selected,
+        current_security_rank=1 if selected else 3,
+        current_security_momentum=0.12,
+        target_position_fraction=0.80,
+        current_security_target_fraction=0.40 if selected else 0.0,
+        bars_until_next_rebalance=18,
+        base_total_return=0.42,
+        stress_total_return=0.35,
+        excess_return=0.11,
+        max_drawdown=-0.12,
+        sharpe_ratio=1.02,
+        walk_forward_fold_count=1 if validation_status == "WATCH" else 3,
+        required_walk_forward_fold_count=3,
+        walk_forward_positive_ratio=1.0,
+        walk_forward_excess_ratio=0.67,
+        stale=stale,
+        notes=("fixture",),
+    )
+
+
 def security() -> SecurityRef:
     return SecurityRef(
         security_id="SSE:600519",
@@ -231,6 +268,39 @@ def test_all_evidence_passes_to_api_candidate_without_real_order_path() -> None:
     assert all(gate.status is EvidenceGateStatus.PASS for gate in report.gates)
     assert report.target_position_limit == 0.05
     assert report.real_order_submission_enabled is False
+
+
+def test_watch_portfolio_evidence_blocks_new_position_upgrade() -> None:
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis().model_copy(
+            update={"portfolio_strategy_evidence": portfolio_evidence(validation_status="WATCH")}
+        ),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    gate = next(item for item in report.gates if item.gate_id == "portfolio-strategy")
+    assert gate.status is EvidenceGateStatus.WARN
+    assert report.final_signal is FinalSignal.WATCH
+    assert report.target_position_limit == 0.0
+    assert any("新增仓位许可" in reason for reason in gate.reasons)
+
+
+def test_unselected_security_is_not_treated_as_portfolio_buy_candidate() -> None:
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis().model_copy(
+            update={"portfolio_strategy_evidence": portfolio_evidence(selected=False)}
+        ),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    gate = next(item for item in report.gates if item.gate_id == "portfolio-strategy")
+    assert gate.status is EvidenceGateStatus.WARN
+    assert report.final_signal is FinalSignal.WATCH
+    assert "未进入" in gate.reasons[0]
 
 
 def test_purged_forecast_calibration_is_included_in_decision_gate() -> None:
