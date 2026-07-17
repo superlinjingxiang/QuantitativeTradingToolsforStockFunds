@@ -99,12 +99,23 @@
 
 完整证据和复现命令见 `research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`。
 
+## 九点一、预测区间校准 V2
+
+- 发现旧21日预测逐日校准存在标签高度重叠，并可能在历史评估时使用尚未完整兑现的近端未来标签。
+- `forecast.similar_regime_interval.v2` 改为按预测期限设置评估步长，并隔离完整持有期的训练尾部；21日预测不再把每天的结果当作独立样本。
+- 方向评分改为上涨/横盘/下跌三分类Brier，21日预测至少需要40个独立校准样本。
+- 第一组十标的最少60个独立样本，平均覆盖82.67%、下破7.00%、Brier 0.1938；第二组最少56个，平均覆盖80.40%、下破9.67%、Brier 0.1987，两组均为HIGH。
+- 结构化校准证据进入预期走势、操作风险和决策门禁；步长/隔离不合格为FAIL，样本或指标不足为MISSING。
+- 缓存模式升级为v2，旧校准结果不会继续作为当前模型证据。账户评估仍只消费当前策略最终信号和仓位上限。
+
+完整方法和逐标的结果见 `research/FORECAST_INTERVAL_VALIDATION_V2_2026-07-17.md`。该结论不改变A股V7盈利验证仍未PASS、ETF组合V9仍为WATCH的状态。
+
 ## 十、工程验证与已知限制
 
 最近一次完整工程门禁记录为：
 
 - Ruff format、Ruff lint、mypy：通过。
-- Python 全量回归：`290 passed`，保留 1 条 FastAPI TestClient 上游弃用警告。
+- Python 全量回归：`300 passed`，保留 1 条 FastAPI TestClient 上游弃用警告。
 - 发布审计：`RELEASE_AUDIT_OK`。
 - Vitest：`1 passed`。
 - Vite 生产构建：通过，ECharts 分包仍有超过 500kB 的非阻断体积告警。
@@ -114,9 +125,10 @@
 
 1. A 股个股时序策略尚未形成跨股票池稳定盈利证据。
 2. V9 ETF组合候选在当前固定池和时间留出为正超额，但留出滚动折数量不足、选择集中，不能表述为已稳定跑赢基准。
-3. 盘口排队、容量、部分成交、冲击成本和完整模拟盘偏差尚未完成。
-4. 手动账户是单标的本地上下文，不是完整多资产券商账户同步。
-5. 缓存改善加载和故障体验，但不能把旧行情变成实时行情。
+3. 预测校准V2通过两组历史样本，但仍需监控新市场状态和模拟盘中的覆盖/Brier漂移。
+4. 盘口排队、容量、部分成交、冲击成本和完整模拟盘偏差尚未完成。
+5. 手动账户是单标的本地上下文，不是完整多资产券商账户同步。
+6. 缓存改善加载和故障体验，但不能把旧行情变成实时行情。
 
 ## 十一、提交范围与详细文档
 
@@ -141,5 +153,6 @@
 - `research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`：候选参数和独立留出否决。
 - `research/SHORT_TERM_STRATEGY_ASSET_CLASS_GATE_2026-07-14.md`：A 股/ETF 分层决策边界。
 - `research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`：ETF组合候选、失败股票候选、时间留出和滚动折门槛。
+- `research/FORECAST_INTERVAL_VALIDATION_V2_2026-07-17.md`：预测标签去重、持有期隔离、两组十标的校准结果和复现命令。
 - `exec-plans/active/0008-fastapi-vue-redis-refactor.md`：现代化迁移计划。
 - `exec-plans/active/0011-profit-validation-v4.md`：策略验证与剩余工作。

@@ -82,13 +82,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--horizon-days", type=int, default=21)
     parser.add_argument("--history-years", type=int, default=6)
     parser.add_argument("--round-trip-cost-bps", type=float, default=15.0)
+    parser.add_argument(
+        "--security-ids",
+        default="",
+        help="Comma-separated fixed security ids; defaults to the documented universe.",
+    )
+    parser.add_argument("--include-results", action="store_true")
     args = parser.parse_args(argv)
+    security_ids = (
+        tuple(value.strip() for value in args.security_ids.split(",") if value.strip())
+        or DEFAULT_INTERVAL_FORECAST_SECURITY_IDS
+    )
 
     from china_quant_platform.data import create_default_market_data_provider
 
     async def run() -> IntervalForecastValidationReport:
         return await validate_default_interval_forecast_universe(
             create_default_market_data_provider(),
+            security_ids=security_ids,
             horizon_days=args.horizon_days,
             history_years=args.history_years,
             round_trip_cost_bps=args.round_trip_cost_bps,
@@ -97,7 +108,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = asyncio.run(run())
     print(
         json.dumps(
-            report.model_dump(mode="json", exclude={"results"}),
+            report.model_dump(
+                mode="json",
+                exclude=set() if args.include_results else {"results"},
+            ),
             ensure_ascii=False,
             indent=2,
         )

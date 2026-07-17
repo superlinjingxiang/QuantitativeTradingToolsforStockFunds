@@ -25,3 +25,17 @@
 ```
 
 详细方法与结果见 `research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`。
+
+## 预测区间校准 V2
+
+- 修复21日预测逐日校准造成的标签重叠和有效样本虚高。
+- 历史评估时隔离完整持有期，训练只使用当时已经兑现的标签，消除近端未来标签泄漏。
+- 方向校准改为上涨/横盘/下跌三分类Brier，增加按期限缩放的最少独立样本门槛。
+- `AnalysisReport` 新增结构化 `forecast_validation`，DecisionHub会对重叠、样本不足、覆盖率、下破率和Brier给出PASS/MISSING/FAIL。
+- 模型版本升级为 `forecast.similar_regime_interval.v2`，缓存键升级到模式版本 `v2`，旧分析结果不会伪装成当前校准证据。
+- 两组各十个真实标的完整取数：第一组平均覆盖82.67%、下破7.00%、三分类Brier 0.1938；第二组平均覆盖80.40%、下破9.67%、Brier 0.1987，聚合可靠性均为HIGH。
+- 账户评估仍复用当前策略最终信号和仓位上限，没有增加第二套买卖策略。
+
+详细方法、逐标的结果和复现命令见 `research/FORECAST_INTERVAL_VALIDATION_V2_2026-07-17.md`。校准通过只说明预测证据更可信，不代表策略能够保证盈利。
+
+本轮验证：Ruff format、Ruff lint、mypy、300项Python全量回归和发布审计全部通过；保留1条FastAPI TestClient上游弃用警告。

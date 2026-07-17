@@ -111,6 +111,34 @@
       ],
       "description": "预期回撤。"
     },
+    "forecast_validation": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "sample_count": {"type": "integer", "minimum": 0},
+        "required_sample_count": {"type": "integer", "minimum": 1},
+        "candidate_count": {"type": "integer", "minimum": 0},
+        "evaluation_stride": {"type": "integer", "minimum": 1},
+        "training_embargo": {"type": "integer", "minimum": 0},
+        "interval_coverage": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "downside_breach_rate": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "direction_brier_score": {"type": ["number", "null"], "minimum": 0}
+      },
+      "required": [
+        "sample_count",
+        "required_sample_count",
+        "candidate_count",
+        "evaluation_stride",
+        "training_embargo",
+        "interval_coverage",
+        "downside_breach_rate",
+        "direction_brier_score"
+      ],
+      "additionalProperties": false,
+      "description": "清除持有期重叠后的预测校准证据。"
+    },
     "raw_signal": {
       "type": "string",
       "description": "风险处理前的原始策略信号。"

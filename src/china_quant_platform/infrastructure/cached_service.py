@@ -12,6 +12,8 @@ from typing import Any
 
 from china_quant_platform.infrastructure.cache_backend import CacheBackend
 
+CACHE_SCHEMA_VERSION = "v2"
+
 
 class CachedApplicationService:
     """Preserve one business service while adding hot-cache behavior."""
@@ -87,7 +89,7 @@ class CachedApplicationService:
 def _cache_key(namespace: str, payload: Mapping[str, Any]) -> str:
     normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:32]
-    return f"{namespace}:v1:{digest}"
+    return f"{namespace}:{CACHE_SCHEMA_VERSION}:{digest}"
 
 
 def _with_cache_metadata(

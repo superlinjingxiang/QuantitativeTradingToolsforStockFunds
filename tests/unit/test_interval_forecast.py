@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import math
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 from china_quant_platform.data import BarsRequest
 from china_quant_platform.domain import AdjustmentMode, Bar, BarInterval, RecordQualityStatus
 from china_quant_platform.forecasting import (
     forecast_interval_from_bars,
+    required_independent_validation_samples,
     validate_interval_forecast_universe,
+)
+from china_quant_platform.forecasting.interval import (
+    _FeatureVector,
+    _HistoricalOutcome,
+    _validate_interval_forecasts,
 )
 from china_quant_platform.forecasting.lab import validate_default_interval_forecast_universe
 
@@ -35,6 +42,9 @@ def test_interval_forecast_uses_similar_samples_for_probabilities_and_quantiles(
     assert forecast.expected_drawdown <= forecast.expected_return_quantiles["p95"]
     assert forecast.validation is not None
     assert forecast.validation.sample_count > 0
+    assert forecast.validation.candidate_count >= forecast.validation.sample_count
+    assert forecast.validation.evaluation_stride == 21
+    assert forecast.validation.training_embargo == 21
     assert forecast.validation.interval_coverage is not None
     assert 0.0 <= forecast.validation.interval_coverage <= 1.0
     assert forecast.validation.direction_brier_score is not None
@@ -43,6 +53,40 @@ def test_interval_forecast_uses_similar_samples_for_probabilities_and_quantiles(
     assert forecast.validation.upper_tail_adjustment >= 0.0
     assert "历史相似样本" in forecast.notes[0]
     assert any("滚动校准" in note for note in forecast.notes)
+
+
+def test_interval_validation_purges_unavailable_overlapping_labels() -> None:
+    outcomes = _identical_feature_outcomes(62)
+    changed_overlap = tuple(
+        replace(outcome, future_return=-0.40) if 41 <= index < 61 else outcome
+        for index, outcome in enumerate(outcomes)
+    )
+
+    baseline = _validate_interval_forecasts(
+        outcomes=outcomes,
+        horizon_days=21,
+        min_samples=40,
+        max_similar_samples=90,
+    )
+    changed = _validate_interval_forecasts(
+        outcomes=changed_overlap,
+        horizon_days=21,
+        min_samples=40,
+        max_similar_samples=90,
+    )
+
+    assert baseline is not None
+    assert changed is not None
+    assert baseline == changed
+    assert baseline.sample_count == 1
+    assert baseline.training_embargo == 21
+
+
+def test_required_independent_validation_samples_scales_with_horizon() -> None:
+    assert required_independent_validation_samples(21) == 40
+    assert required_independent_validation_samples(63) == 14
+    assert required_independent_validation_samples(126) == 7
+    assert required_independent_validation_samples(252) == 5
 
 
 def test_interval_forecast_degrades_when_history_is_insufficient() -> None:
@@ -162,3 +206,25 @@ class _LabProvider:
         if request.security_id not in self._bars_by_security:
             raise KeyError(request.security_id)
         return list(self._bars_by_security[request.security_id])
+
+
+def _identical_feature_outcomes(count: int) -> tuple[_HistoricalOutcome, ...]:
+    features = _FeatureVector(
+        short_momentum=0.02,
+        medium_momentum=0.04,
+        long_momentum=0.08,
+        trend_strength=0.03,
+        slope_score=0.20,
+        volatility=0.18,
+        drawdown=-0.04,
+        volume_ratio=1.10,
+        rsi_score=0.10,
+    )
+    return tuple(
+        _HistoricalOutcome(
+            features=features,
+            future_return=0.02,
+            future_drawdown=-0.01,
+        )
+        for _index in range(count)
+    )

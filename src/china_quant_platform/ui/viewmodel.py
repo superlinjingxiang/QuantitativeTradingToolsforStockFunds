@@ -35,11 +35,16 @@ from china_quant_platform.domain import (
     DomainError,
     Exchange,
     FinalSignal,
+    ForecastValidationEvidence,
     Quote,
     SecurityRef,
     SecurityStatus,
 )
-from china_quant_platform.forecasting import IntervalForecastResult, forecast_interval_from_bars
+from china_quant_platform.forecasting import (
+    IntervalForecastResult,
+    forecast_interval_from_bars,
+    required_independent_validation_samples,
+)
 from china_quant_platform.knowledge import KnowledgeCenter
 from china_quant_platform.market import MarketOverview, build_market_overview
 from china_quant_platform.strategies.profit_validation import (
@@ -1972,6 +1977,7 @@ def _analysis_report_from_profit_backtest(
         data_snapshot_id=f"profit-validation:{len(bars)}-daily-bars",
         expected_return_quantiles=_profit_expected_return_quantiles(backtest, forecast),
         expected_drawdown=forecast.expected_drawdown,
+        forecast_validation=_forecast_validation_evidence(forecast),
         grade=_effective_reliability_grade(backtest, forecast),
         target_position_limit=_target_position_limit(final_signal, backtest, forecast, mode),
         exit_or_invalidation_conditions=_profit_invalidation_conditions(backtest, mode),
@@ -2194,6 +2200,24 @@ def _profit_expected_return_quantiles(
     return {}
 
 
+def _forecast_validation_evidence(
+    forecast: IntervalForecastResult,
+) -> ForecastValidationEvidence | None:
+    validation = forecast.validation
+    if validation is None:
+        return None
+    return ForecastValidationEvidence(
+        sample_count=validation.sample_count,
+        required_sample_count=required_independent_validation_samples(forecast.horizon),
+        candidate_count=validation.candidate_count,
+        evaluation_stride=validation.evaluation_stride,
+        training_embargo=validation.training_embargo,
+        interval_coverage=validation.interval_coverage,
+        downside_breach_rate=validation.downside_breach_rate,
+        direction_brier_score=validation.direction_brier_score,
+    )
+
+
 def _profit_positive_drivers(
     security: SecurityRef,
     backtest: ProfitBacktestResult,
@@ -2227,6 +2251,7 @@ def _profit_positive_drivers(
                 f"中期{(backtest.relative_strength.long_relative_momentum or 0.0):.1%}。"
             )
     values.extend(forecast.notes[:2])
+    values.extend(note for note in forecast.notes if "滚动校准" in note)
     if backtest.total_return > 0:
         values.append(f"样本外扣费净收益 {backtest.total_return:.2%}。")
     if backtest.excess_return > 0:
@@ -2329,6 +2354,17 @@ def _profit_negative_drivers(
     if forecast.validation is None:
         values.append("预测区间缺少滚动校准证据，暂不宜作为单独操作依据。")
     elif forecast.validation.interval_coverage is not None:
+        required_samples = required_independent_validation_samples(forecast.horizon)
+        if forecast.validation.sample_count < required_samples:
+            values.append(
+                "清除重叠后的独立校准样本不足："
+                f"{forecast.validation.sample_count}/{required_samples}。"
+            )
+        if (
+            forecast.validation.evaluation_stride < forecast.horizon
+            or forecast.validation.training_embargo < forecast.horizon
+        ):
+            values.append("预测校准未完整清除持有期重叠，禁止据此提高等级或仓位。")
         if forecast.validation.interval_coverage < 0.70:
             values.append(f"预测区间历史覆盖率偏低：{forecast.validation.interval_coverage:.0%}。")
         if (
@@ -2382,7 +2418,9 @@ def _forecast_validation_passes(forecast: IntervalForecastResult) -> bool:
     if validation is None:
         return False
     return (
-        validation.sample_count >= 40
+        validation.sample_count >= required_independent_validation_samples(forecast.horizon)
+        and validation.evaluation_stride >= forecast.horizon
+        and validation.training_embargo >= forecast.horizon
         and validation.interval_coverage is not None
         and validation.interval_coverage >= 0.68
         and validation.downside_breach_rate is not None

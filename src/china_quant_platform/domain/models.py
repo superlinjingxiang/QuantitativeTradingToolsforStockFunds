@@ -190,6 +190,17 @@ class DirectionProbabilities(DomainModel):
         return self
 
 
+class ForecastValidationEvidence(DomainModel):
+    sample_count: int = Field(ge=0)
+    required_sample_count: int = Field(ge=1)
+    candidate_count: int = Field(ge=0)
+    evaluation_stride: int = Field(ge=1)
+    training_embargo: int = Field(ge=0)
+    interval_coverage: float | None = Field(default=None, ge=0, le=1)
+    downside_breach_rate: float | None = Field(default=None, ge=0, le=1)
+    direction_brier_score: float | None = Field(default=None, ge=0)
+
+
 class AnalysisReport(DomainModel):
     security_id: SecurityId
     as_of: AwareDatetime
@@ -209,6 +220,7 @@ class AnalysisReport(DomainModel):
     data_snapshot_id: DataSnapshotId
     expected_return_quantiles: dict[str, float] = Field(default_factory=dict)
     expected_drawdown: float | None = None
+    forecast_validation: ForecastValidationEvidence | None = None
     grade: str | None = None
     target_position_limit: float | None = Field(default=None, ge=0, le=1)
     exit_or_invalidation_conditions: tuple[NonEmptyString, ...] = ()

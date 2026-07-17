@@ -12,7 +12,7 @@ from china_quant_platform.domain import Bar, DirectionProbabilities
 from china_quant_platform.domain.base import DomainModel
 from china_quant_platform.domain.identifiers import ModelVersion, NonEmptyString
 
-SIMILAR_REGIME_INTERVAL_MODEL: ModelVersion = "forecast.similar_regime_interval.v1"
+SIMILAR_REGIME_INTERVAL_MODEL: ModelVersion = "forecast.similar_regime_interval.v2"
 DEFAULT_INTERVAL_FORECAST_SECURITY_IDS: tuple[NonEmptyString, ...] = (
     "SSE:600519",
     "SSE:600036",
@@ -41,6 +41,9 @@ DEFAULT_INTERVAL_FORECAST_SECURITY_IDS: tuple[NonEmptyString, ...] = (
 
 class IntervalForecastValidation(DomainModel):
     sample_count: int = Field(ge=0)
+    candidate_count: int = Field(default=0, ge=0)
+    evaluation_stride: int = Field(default=1, ge=1)
+    training_embargo: int = Field(default=0, ge=0)
     interval_coverage: float | None = Field(default=None, ge=0, le=1)
     downside_breach_rate: float | None = Field(default=None, ge=0, le=1)
     direction_brier_score: float | None = Field(default=None, ge=0)
@@ -74,6 +77,8 @@ class IntervalForecastValidationReport(DomainModel):
     horizon: int = Field(ge=1)
     security_count: int = Field(ge=0)
     validated_security_count: int = Field(ge=0)
+    minimum_validation_sample_count: int = Field(default=0, ge=0)
+    average_validation_sample_count: float | None = Field(default=None, ge=0)
     average_interval_coverage: float | None = Field(default=None, ge=0, le=1)
     average_downside_breach_rate: float | None = Field(default=None, ge=0, le=1)
     average_direction_brier_score: float | None = Field(default=None, ge=0)
@@ -190,6 +195,7 @@ def forecast_interval_from_bars(
     regime_score = _regime_score(current)
     validation = _validate_interval_forecasts(
         outcomes=tuple(outcomes),
+        horizon_days=horizon_days,
         min_samples=min_samples,
         max_similar_samples=max_similar_samples,
     )
@@ -203,11 +209,13 @@ def forecast_interval_from_bars(
     ]
     if validation is not None and validation.interval_coverage is not None:
         notes.append(
-            "滚动校准："
-            f"{validation.sample_count}次；"
+            "清除重叠后的滚动校准："
+            f"{validation.sample_count}个独立时点/"
+            f"{validation.candidate_count}个候选时点；"
+            f"步长{validation.evaluation_stride}日；"
             f"区间覆盖{validation.interval_coverage:.0%}；"
             f"下破率{validation.downside_breach_rate or 0.0:.0%}；"
-            f"方向Brier {validation.direction_brier_score or 0.0:.3f}。"
+            f"三分类Brier {validation.direction_brier_score or 0.0:.3f}。"
         )
     quantiles = _calibrated_quantiles(distribution.quantiles, validation)
     if validation is not None and quantiles != distribution.quantiles:
@@ -258,6 +266,7 @@ def validate_interval_forecast_universe(
         )
     )
     validations = tuple(item.validation for item in results if item.validation is not None)
+    validation_sample_counts = tuple(item.sample_count for item in validations)
     coverage = _average_optional(item.interval_coverage for item in validations)
     downside = _average_optional(item.downside_breach_rate for item in validations)
     brier = _average_optional(item.direction_brier_score for item in validations)
@@ -266,6 +275,8 @@ def validate_interval_forecast_universe(
     upper_adjustment = _average_optional(item.upper_tail_adjustment for item in validations)
     label = _validation_reliability_label(
         validated_count=len(validations),
+        horizon_days=horizon_days,
+        minimum_sample_count=min(validation_sample_counts, default=0),
         coverage=coverage,
         downside=downside,
         brier=brier,
@@ -275,8 +286,11 @@ def validate_interval_forecast_universe(
     ]
     if coverage is not None:
         notes.append(
+            "校准已清除持有期重叠并只统计不重叠时点；"
+            f"最少{min(validation_sample_counts, default=0)}个、"
+            f"平均{_mean(validation_sample_counts):.1f}个有效样本，"
             f"平均区间覆盖{coverage:.0%}，平均下破率{(downside or 0.0):.0%}，"
-            f"平均方向Brier {(brier or 0.0):.3f}。"
+            f"平均三分类Brier {(brier or 0.0):.3f}。"
         )
     else:
         notes.append("有效校准样本不足，暂不能形成跨标的可靠性判断。")
@@ -284,6 +298,10 @@ def validate_interval_forecast_universe(
         horizon=horizon_days,
         security_count=len(results),
         validated_security_count=len(validations),
+        minimum_validation_sample_count=min(validation_sample_counts, default=0),
+        average_validation_sample_count=(
+            _mean(validation_sample_counts) if validation_sample_counts else None
+        ),
         average_interval_coverage=coverage,
         average_downside_breach_rate=downside,
         average_direction_brier_score=brier,
@@ -402,13 +420,22 @@ def _forecast_distribution(
 def _validate_interval_forecasts(
     *,
     outcomes: Sequence[_HistoricalOutcome],
+    horizon_days: int,
     min_samples: int,
     max_similar_samples: int,
-    max_validation_points: int = 80,
+    max_validation_points: int = 1260,
 ) -> IntervalForecastValidation | None:
-    if len(outcomes) < min_samples + 10:
+    if horizon_days < 1:
+        raise ValueError("horizon_days must be at least 1")
+    first_eligible = min_samples + horizon_days - 1
+    if len(outcomes) <= first_eligible:
         return None
-    start = max(min_samples, len(outcomes) - max_validation_points)
+    start = max(first_eligible, len(outcomes) - max_validation_points)
+    stride = horizon_days
+    alignment = (len(outcomes) - 1 - start) % stride
+    evaluation_indices = tuple(range(start + alignment, len(outcomes), stride))
+    if not evaluation_indices:
+        return None
     covered = 0
     downside_breaches = 0
     brier_sum = 0.0
@@ -416,11 +443,14 @@ def _validate_interval_forecasts(
     lower_shortfalls: list[float] = []
     upper_shortfalls: list[float] = []
     evaluated = 0
-    for index in range(start, len(outcomes)):
+    for index in evaluation_indices:
         actual = outcomes[index]
+        # At origin ``index`` only labels ending no later than that origin are known.
+        # The embargo removes the latest ``horizon_days - 1`` overlapping outcomes.
+        training_end = index - horizon_days + 1
         distribution = _forecast_distribution(
             current=actual.features,
-            outcomes=outcomes[:index],
+            outcomes=outcomes[:training_end],
             min_samples=min_samples,
             max_similar_samples=max_similar_samples,
         )
@@ -435,8 +465,13 @@ def _validate_interval_forecasts(
             downside_breaches += 1
         lower_shortfalls.append(max(p05 - actual.future_return, 0.0))
         upper_shortfalls.append(max(actual.future_return - p95, 0.0))
-        outcome_up = 1.0 if actual.future_return > 0.003 else 0.0
-        brier_sum += (distribution.direction_probabilities.up - outcome_up) ** 2
+        probabilities = distribution.direction_probabilities
+        observed = _direction_outcome(actual.future_return)
+        brier_sum += (
+            (probabilities.up - observed[0]) ** 2
+            + (probabilities.flat - observed[1]) ** 2
+            + (probabilities.down - observed[2]) ** 2
+        ) / 3.0
         median_abs_sum += abs(p50 - actual.future_return)
         evaluated += 1
 
@@ -444,6 +479,9 @@ def _validate_interval_forecasts(
         return None
     return IntervalForecastValidation(
         sample_count=evaluated,
+        candidate_count=len(outcomes) - start,
+        evaluation_stride=stride,
+        training_embargo=horizon_days,
         interval_coverage=covered / evaluated,
         downside_breach_rate=downside_breaches / evaluated,
         direction_brier_score=brier_sum / evaluated,
@@ -479,17 +517,42 @@ def _average_optional(values: Iterable[float | None]) -> float | None:
 def _validation_reliability_label(
     *,
     validated_count: int,
+    horizon_days: int,
+    minimum_sample_count: int,
     coverage: float | None,
     downside: float | None,
     brier: float | None,
 ) -> str:
-    if validated_count < 3 or coverage is None or downside is None or brier is None:
+    required_samples = required_independent_validation_samples(horizon_days)
+    if (
+        validated_count < 3
+        or minimum_sample_count < required_samples
+        or coverage is None
+        or downside is None
+        or brier is None
+    ):
         return "INSUFFICIENT"
     if coverage >= 0.78 and downside <= 0.12 and brier <= 0.22:
         return "HIGH"
     if coverage >= 0.68 and downside <= 0.22 and brier <= 0.30:
         return "MEDIUM"
     return "LOW"
+
+
+def required_independent_validation_samples(horizon_days: int) -> int:
+    """Return the minimum number of non-overlapping forecast checks for a horizon."""
+
+    if horizon_days < 1:
+        raise ValueError("horizon_days must be at least 1")
+    return max(5, min(40, math.ceil(840 / horizon_days)))
+
+
+def _direction_outcome(future_return: float) -> tuple[float, float, float]:
+    if future_return > 0.003:
+        return (1.0, 0.0, 0.0)
+    if future_return < -0.003:
+        return (0.0, 0.0, 1.0)
+    return (0.0, 1.0, 0.0)
 
 
 def _direction_probabilities(

@@ -53,7 +53,7 @@ class DecisionHub:
             _data_gate(analysis_report),
             _analysis_gate(analysis_report),
             _profitability_gate(request, profitability, out_of_sample_passed),
-            _calibration_gate(request, profitability),
+            _calibration_gate(request, analysis_report, profitability),
             _cost_stress_gate(cost_stress_passed),
             _simulation_gate(request, simulation),
             _real_order_gate(),
@@ -242,8 +242,62 @@ def _risk_adjusted_benchmark_passed(
 
 def _calibration_gate(
     request: DecisionRequest,
+    analysis_report: AnalysisReport,
     profitability: ProfitabilityEvidence | None,
 ) -> EvidenceGate:
+    forecast_validation = analysis_report.forecast_validation
+    if forecast_validation is not None:
+        structural_reasons: list[str] = []
+        missing_reasons: list[str] = []
+        metric_reasons: list[str] = []
+        if forecast_validation.evaluation_stride < analysis_report.horizon:
+            structural_reasons.append("预测校准步长小于持有期，评估时点仍存在重叠。")
+        if forecast_validation.training_embargo < analysis_report.horizon:
+            structural_reasons.append("预测校准隔离期小于持有期，训练标签可能尚未完整兑现。")
+        if forecast_validation.sample_count < forecast_validation.required_sample_count:
+            missing_reasons.append(
+                "不重叠预测校准样本不足："
+                f"{forecast_validation.sample_count}/"
+                f"{forecast_validation.required_sample_count}。"
+            )
+        if forecast_validation.interval_coverage is None:
+            missing_reasons.append("缺少预测区间覆盖率。")
+        elif forecast_validation.interval_coverage < request.min_forecast_interval_coverage:
+            metric_reasons.append(
+                "预测区间覆盖率低于门槛："
+                f"{forecast_validation.interval_coverage:.1%}/"
+                f"{request.min_forecast_interval_coverage:.1%}。"
+            )
+        if forecast_validation.downside_breach_rate is None:
+            missing_reasons.append("缺少预测区间下破率。")
+        elif forecast_validation.downside_breach_rate > request.max_forecast_downside_breach_rate:
+            metric_reasons.append(
+                "预测下沿被跌破的比例超出门槛："
+                f"{forecast_validation.downside_breach_rate:.1%}/"
+                f"{request.max_forecast_downside_breach_rate:.1%}。"
+            )
+        if forecast_validation.direction_brier_score is None:
+            missing_reasons.append("缺少上涨/横盘/下跌三分类Brier分数。")
+        elif forecast_validation.direction_brier_score > request.max_forecast_direction_brier_score:
+            metric_reasons.append(
+                "三分类方向Brier分数超出门槛："
+                f"{forecast_validation.direction_brier_score:.4f}/"
+                f"{request.max_forecast_direction_brier_score:.4f}。"
+            )
+        if structural_reasons or metric_reasons:
+            return EvidenceGate(
+                gate_id="calibration",
+                name="概率校准",
+                status=EvidenceGateStatus.FAIL,
+                reasons=tuple((*structural_reasons, *metric_reasons, *missing_reasons)),
+            )
+        if missing_reasons:
+            return EvidenceGate(
+                gate_id="calibration",
+                name="概率校准",
+                status=EvidenceGateStatus.MISSING,
+                reasons=tuple(missing_reasons),
+            )
     if profitability is None:
         return EvidenceGate(
             gate_id="calibration",
@@ -268,11 +322,16 @@ def _calibration_gate(
                 f"{request.max_brier_score:.4f}。",
             ),
         )
+    success_reason = (
+        "预测区间已清除持有期重叠，且区间覆盖、下破率、三分类Brier和回测概率校准证据通过。"
+        if forecast_validation is not None
+        else "概率校准证据通过。"
+    )
     return EvidenceGate(
         gate_id="calibration",
         name="概率校准",
         status=EvidenceGateStatus.PASS,
-        reasons=("概率校准证据通过。",),
+        reasons=(success_reason,),
     )
 
 

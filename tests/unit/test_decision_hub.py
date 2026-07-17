@@ -25,6 +25,7 @@ from china_quant_platform.domain import (
     DirectionProbabilities,
     Exchange,
     FinalSignal,
+    ForecastValidationEvidence,
     Quote,
     RecordQualityStatus,
     SecurityRef,
@@ -53,7 +54,11 @@ def request() -> DecisionRequest:
     return DecisionRequest(security_id="SSE:600519", as_of=as_of())
 
 
-def analysis(final_signal: FinalSignal = FinalSignal.BUY_CANDIDATE) -> AnalysisReport:
+def analysis(
+    final_signal: FinalSignal = FinalSignal.BUY_CANDIDATE,
+    *,
+    forecast_validation: ForecastValidationEvidence | None = None,
+) -> AnalysisReport:
     return AnalysisReport(
         security_id="SSE:600519",
         as_of=as_of(),
@@ -73,6 +78,7 @@ def analysis(final_signal: FinalSignal = FinalSignal.BUY_CANDIDATE) -> AnalysisR
         data_snapshot_id="snapshot-001",
         expected_return_quantiles={"p05": -0.02, "p50": 0.03, "p95": 0.08},
         expected_drawdown=-0.04,
+        forecast_validation=forecast_validation,
         grade="B",
         target_position_limit=0.05,
         exit_or_invalidation_conditions=("trend break",),
@@ -115,6 +121,19 @@ def simulation() -> SimulationEvidence:
         threshold_breach_count=0,
         max_abs_slippage_pct=0.002,
         checksum="simulation-fixture",
+    )
+
+
+def forecast_validation() -> ForecastValidationEvidence:
+    return ForecastValidationEvidence(
+        sample_count=60,
+        required_sample_count=40,
+        candidate_count=1260,
+        evaluation_stride=21,
+        training_embargo=21,
+        interval_coverage=0.82,
+        downside_breach_rate=0.08,
+        direction_brier_score=0.19,
     )
 
 
@@ -212,6 +231,53 @@ def test_all_evidence_passes_to_api_candidate_without_real_order_path() -> None:
     assert all(gate.status is EvidenceGateStatus.PASS for gate in report.gates)
     assert report.target_position_limit == 0.05
     assert report.real_order_submission_enabled is False
+
+
+def test_purged_forecast_calibration_is_included_in_decision_gate() -> None:
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis(forecast_validation=forecast_validation()),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    gate = next(item for item in report.gates if item.gate_id == "calibration")
+    assert gate.status is EvidenceGateStatus.PASS
+    assert "清除持有期重叠" in gate.reasons[0]
+
+
+def test_insufficient_independent_forecast_samples_block_execution_upgrade() -> None:
+    evidence = forecast_validation().model_copy(update={"sample_count": 20})
+
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis(forecast_validation=evidence),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    gate = next(item for item in report.gates if item.gate_id == "calibration")
+    assert gate.status is EvidenceGateStatus.MISSING
+    assert "20/40" in gate.reasons[0]
+    assert report.final_signal is FinalSignal.WATCH
+
+
+def test_overlapping_forecast_calibration_fails_evidence_gate() -> None:
+    evidence = forecast_validation().model_copy(
+        update={"evaluation_stride": 1, "training_embargo": 0}
+    )
+
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis(forecast_validation=evidence),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    gate = next(item for item in report.gates if item.gate_id == "calibration")
+    assert gate.status is EvidenceGateStatus.FAIL
+    assert any("重叠" in reason for reason in gate.reasons)
+    assert report.final_signal is FinalSignal.WATCH
 
 
 def test_risk_adjusted_benchmark_path_can_pass_without_positive_excess() -> None:

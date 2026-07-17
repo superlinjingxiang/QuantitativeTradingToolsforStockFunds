@@ -19,6 +19,7 @@ from china_quant_platform.forecasting.interval import (
     IntervalForecastValidationReport,
     SecurityIntervalValidation,
     forecast_interval_from_bars,
+    required_independent_validation_samples,
     validate_interval_forecast_universe,
 )
 
@@ -39,5 +40,6 @@ __all__ = [
     "calibration_metrics",
     "expected_calibration_error",
     "forecast_interval_from_bars",
+    "required_independent_validation_samples",
     "validate_interval_forecast_universe",
 ]
