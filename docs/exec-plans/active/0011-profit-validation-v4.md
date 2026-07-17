@@ -32,6 +32,11 @@
 - [x] 将A股个股未PASS时的新增仓位结论改为ABSTAIN，保留SELL/REDUCE风险优先级；ETF继续按独立证据判断。
 - [x] 右侧操作风险和决策证据一次展示多项支持、风险、失效及阻断原因；账户继续消费同一最终信号。
 - [x] Ruff、mypy、290项Python回归、发布审计、Vitest 1项、Vite构建和Playwright 2项通过。
+- [x] 验证5日无跟随退出候选；因正式池、影子池和十ETF收益变差而拒绝。
+- [x] 验证股票横截面动量候选；因三个股票时间留出和第四股票池显著亏损而判定过拟合。
+- [x] 在开发段比较63/126/252日ETF轮动候选并锁定252日正绝对动量、前2名、21日调仓和20%目标波动规则。
+- [x] 新增组合级ETF次日开盘回测、15bp/45bp成本、滚动前推和至少3折硬门槛。
+- [x] 使用固定十ETF真实数据完成全样本和最终25%时间留出；留出段因只有1个完整滚动窗口保持WATCH。
 
 ## 当前证据
 
@@ -54,8 +59,10 @@
 - 21日回撤介入候选在30股与新增十股池的滚动参与率仅约16.3%与7.6%，未晋级。
 - 十ETF最新复跑仍为2/10 PASS、平均收益18.30%、平均回撤-10.45%、平均超额-13.93%，证明ETF有局部证据但不具备普遍超额。
 - 决策规则采用资产分层门禁；策略本体继续为V7，不发布V8。
+- 组合ETF轮动候选全样本收益+94.46%、最大回撤-22.22%、7/7滚动窗口为正；最终25%时间留出收益+43.64%、超额+16.78%、最大回撤-11.89%、45bp压力收益+38.35%。
+- 最终时间留出只有1个完整252日滚动窗口，未满足至少3折要求，因此组合候选状态为WATCH，未接入当前单标的建议，也未升级PAPER_READY。
 
-V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`；V5 A 股反追涨记录保留为历史对照；V6 执行模型见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`；V7 市场门槛、五组结果和数据校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`；V8 候选审计、第四组留出和拒绝晋级结论见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`。
+V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`；V5 A 股反追涨记录保留为历史对照；V6 执行模型见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`；V7 市场门槛、五组结果和数据校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`；V8 候选审计、第四组留出和拒绝晋级结论见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`；V9 ETF组合候选、失败股票候选和时间留出结果见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`。
 
 ## 剩余工作
 
