@@ -43,13 +43,13 @@
 - 验收条件：`docs/quality/ACCEPTANCE_CRITERIA.md`
 - 测试矩阵：`docs/quality/TEST_MATRIX.md`
 - 需求追踪：`docs/TRACEABILITY.md`
-- 近期改动与当前状态：`docs/PROJECT_STATUS_2026-07-14.md`
+- 近期改动与当前状态：`docs/PROJECT_STATUS_2026-07-17.md`
 
 ## 当前状态
 
 规格基线：V1.0，日期为2026年6月28日。
 
-最新工程进度快照见：`docs/PROJECT_STATUS_2026-07-14.md`。该文档汇总 FastAPI/Vue/Redis 迁移、行情与交互改造、账户输入联动、短线策略 V2-V7、真实十标的验证结果和当前风险。
+最新工程进度快照见：`docs/PROJECT_STATUS_2026-07-17.md`。该文档汇总 FastAPI/Vue/Redis 迁移、行情与交互改造、荐股池、账户输入联动、短线策略 V2-V7、V8 候选否决、资产分层门禁和当前风险。`docs/PROJECT_STATUS_2026-07-14.md` 保留为历史快照。
 
 2026年7月11日已完成 FastAPI + Vue + Redis 兼容迁移：Vue 成为 Electron 默认前端，FastAPI 复用现有 Python 业务服务，Redis 不可用时自动降级到内存缓存。近期改动、验证结果、运行边界和后续风险见：`docs/CHANGELOG_2026-07-11.md`。
 
