@@ -67,7 +67,7 @@ def etf_bars() -> dict[str, tuple[Bar, ...]]:
     return {f"SSE:51{rank:04d}": _bars(f"SSE:51{rank:04d}", rank=rank) for rank in range(10)}
 
 
-def test_rejected_dual_horizon_candidate_is_not_the_production_default() -> None:
+def test_research_candidates_are_not_the_production_default() -> None:
     config = EtfRotationBacktestConfig()
 
     assert config.signal_model is EtfMomentumSignalModel.SINGLE_HORIZON
@@ -182,6 +182,88 @@ def test_dual_horizon_requires_shorter_confirmation_window() -> None:
         )
 
 
+def test_skip_recent_month_uses_t_minus_21_as_the_ranking_endpoint(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    identifiers = tuple(etf_bars)
+    security_id = identifiers[0]
+    changed_bars = list(etf_bars[security_id])
+    initial_close = changed_bars[0].close_price
+    for index in range(232, 253):
+        changed_bars[index] = changed_bars[index].model_copy(
+            update={
+                "open_price": initial_close * 0.51,
+                "high_price": initial_close * 0.52,
+                "low_price": initial_close * 0.49,
+                "close_price": initial_close * 0.50,
+            }
+        )
+    candidate_bars = dict(etf_bars)
+    candidate_bars[security_id] = tuple(changed_bars)
+
+    baseline = run_etf_rotation_backtest(candidate_bars, security_ids=identifiers)
+    skipped = run_etf_rotation_backtest(
+        candidate_bars,
+        security_ids=identifiers,
+        config=EtfRotationBacktestConfig(signal_model=EtfMomentumSignalModel.SKIP_RECENT_MONTH),
+    )
+
+    assert security_id not in baseline.rebalances[0].selected_security_ids
+    assert security_id in skipped.rebalances[0].selected_security_ids
+    assert skipped.rebalances[0].momentum_scores[security_id] == pytest.approx(
+        etf_bars[security_id][231].close_price / etf_bars[security_id][0].close_price - 1.0
+    )
+
+
+def test_skip_recent_month_ranking_ignores_the_excluded_21_bars(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    config = EtfRotationBacktestConfig(signal_model=EtfMomentumSignalModel.SKIP_RECENT_MONTH)
+    identifiers = tuple(etf_bars)
+    baseline = run_etf_rotation_backtest(
+        etf_bars,
+        security_ids=identifiers,
+        config=config,
+    )
+    mutated = {
+        security_id: tuple(
+            bar
+            if index <= 231 or index > 252
+            else bar.model_copy(
+                update={
+                    "open_price": bar.open_price * 4,
+                    "high_price": bar.high_price * 4,
+                    "low_price": bar.low_price * 4,
+                    "close_price": bar.close_price * 4,
+                }
+            )
+            for index, bar in enumerate(bars)
+        )
+        for security_id, bars in etf_bars.items()
+    }
+    changed = run_etf_rotation_backtest(
+        mutated,
+        security_ids=identifiers,
+        config=config,
+    )
+
+    assert (
+        changed.rebalances[0].selected_security_ids == baseline.rebalances[0].selected_security_ids
+    )
+    assert changed.rebalances[0].momentum_scores == baseline.rebalances[0].momentum_scores
+
+
+def test_skip_recent_month_requires_a_shorter_skip_window() -> None:
+    with pytest.raises(
+        ValueError,
+        match="skip_recent_bars must be shorter",
+    ):
+        EtfRotationBacktestConfig(
+            signal_model=EtfMomentumSignalModel.SKIP_RECENT_MONTH,
+            skip_recent_bars=252,
+        )
+
+
 def test_compact_report_identifies_the_research_signal_model(
     etf_bars: dict[str, tuple[Bar, ...]],
 ) -> None:
@@ -198,6 +280,7 @@ def test_compact_report_identifies_the_research_signal_model(
         "model": "DUAL_HORIZON_CONSENSUS",
         "formation_lookback_bars": 252,
         "confirmation_lookback_bars": 126,
+        "skip_recent_bars": 21,
     }
 
 

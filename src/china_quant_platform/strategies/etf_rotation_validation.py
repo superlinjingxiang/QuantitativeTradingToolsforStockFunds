@@ -26,12 +26,14 @@ class EtfRotationValidationStatus(StrEnum):
 class EtfMomentumSignalModel(StrEnum):
     SINGLE_HORIZON = "SINGLE_HORIZON"
     DUAL_HORIZON_CONSENSUS = "DUAL_HORIZON_CONSENSUS"
+    SKIP_RECENT_MONTH = "SKIP_RECENT_MONTH"
 
 
 class EtfRotationBacktestConfig(DomainModel):
     signal_model: EtfMomentumSignalModel = EtfMomentumSignalModel.SINGLE_HORIZON
     formation_lookback_bars: int = Field(default=252, ge=20)
     confirmation_lookback_bars: int = Field(default=126, ge=20)
+    skip_recent_bars: int = Field(default=21, ge=1)
     volatility_lookback_bars: int = Field(default=63, ge=20)
     rebalance_interval_bars: int = Field(default=21, ge=1)
     max_positions: int = Field(default=2, ge=1)
@@ -61,6 +63,11 @@ class EtfRotationBacktestConfig(DomainModel):
             raise ValueError(
                 "confirmation_lookback_bars must be shorter than formation_lookback_bars"
             )
+        if (
+            self.signal_model is EtfMomentumSignalModel.SKIP_RECENT_MONTH
+            and self.skip_recent_bars >= self.formation_lookback_bars
+        ):
+            raise ValueError("skip_recent_bars must be shorter than formation_lookback_bars")
         return self
 
 
@@ -525,8 +532,11 @@ def _positive_momentum_scores(
 ) -> list[tuple[float, str]]:
     scores = []
     for security_id in identifiers:
+        formation_end_index = signal_index
+        if config.signal_model is EtfMomentumSignalModel.SKIP_RECENT_MONTH:
+            formation_end_index -= config.skip_recent_bars
         formation_return = (
-            indexed[security_id][dates[signal_index]].close_price
+            indexed[security_id][dates[formation_end_index]].close_price
             / indexed[security_id][dates[signal_index - config.formation_lookback_bars]].close_price
             - 1.0
         )

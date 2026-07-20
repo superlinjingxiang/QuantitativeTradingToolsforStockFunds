@@ -189,6 +189,7 @@ def _compact_rotation_report(report: Mapping[str, object]) -> dict[str, object]:
             "model": config["signal_model"],
             "formation_lookback_bars": config["formation_lookback_bars"],
             "confirmation_lookback_bars": config["confirmation_lookback_bars"],
+            "skip_recent_bars": config["skip_recent_bars"],
         },
         "base": {key: base[key] for key in metric_keys},
         "stress": {key: stress[key] for key in metric_keys},

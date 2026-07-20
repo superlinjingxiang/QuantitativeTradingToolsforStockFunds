@@ -67,6 +67,14 @@ Redis可选热缓存 + 内存降级 + Parquet历史缓存 + 多数据源
 - 最后 30% 留出相对等权基准为 -2.03%，100 万元最大参与率升至 1.8749%，支持资金明显缩小。
 - 候选拒绝晋级，仅保留为显式研究开关；当前策略、右侧四模块、DecisionHub 和手动账户仍使用 V10 单周期默认。
 
+### V12 跳过最近一月候选
+
+- 候选在读取结果前固定为`t-252`至`t-21`动量排名，来源是经典prior (2-12) momentum的研究动机，不把国外股票因子定义当作中国ETF盈利证明。
+- 开发段Sharpe由1.103小幅升至1.109，最大回撤由-21.54%改善至-20.49%，平均调仓换手由35.06%降至34.45%。
+- 但净收益由V10的+46.91%降至+45.52%，45bp压力收益由+44.41%降至+43.07%，未满足预注册门槛。
+- 候选在开发段停止，没有读取全样本、最后20%/25%/30%留出、容量或当前持仓，也没有搜索其他跳过窗口。
+- 研究开关保留用于复现；当前策略、右侧四模块、DecisionHub 和手动账户仍使用 V10 单周期默认。
+
 ## 四、ETF 容量与冲击成本
 
 2026-07-20 新增 `etf-capacity-impact-v1`，当前 V10 已升级为 `etf-capacity-impact-v2`：
@@ -120,7 +128,7 @@ Redis可选热缓存 + 内存降级 + Parquet历史缓存 + 多数据源
 
 ## 六、工程质量状态
 
-- Python：325 项全量回归通过。
+- Python：328 项全量回归通过。
 - Ruff format、Ruff lint、mypy：通过。
 - 发布审计：通过。
 - Vitest：1 项通过。
@@ -142,6 +150,8 @@ Redis可选热缓存 + 内存降级 + Parquet历史缓存 + 多数据源
 - `CHANGELOG_2026-07-20.md`
 - `research/SHORT_TERM_STRATEGY_VALIDATION_V10_TURNOVER_2026-07-20.md`
 - `research/SHORT_TERM_STRATEGY_V11_DUAL_HORIZON_CANDIDATE_2026-07-20.md`
+- `research/SHORT_TERM_STRATEGY_V12_SKIP_MONTH_PREREGISTRATION_2026-07-20.md`
+- `research/SHORT_TERM_STRATEGY_V12_SKIP_MONTH_CANDIDATE_2026-07-20.md`
 - `research/ETF_CAPACITY_IMPACT_VALIDATION_2026-07-20.md`
 - `research/ETF_ROTATION_DECISION_INTEGRATION_2026-07-17.md`
 - `research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`
@@ -162,7 +172,9 @@ Redis可选热缓存 + 内存降级 + Parquet历史缓存 + 多数据源
 | 2026-07-20 | `cbcc3cf` | 同步状态、变更记录、ADR、任务、追踪矩阵和研究证据。 |
 | 2026-07-20 | `71cade3` | V10 按目标权重差额调仓，贯通真实换手、费用、容量 V2、DecisionHub 和多时间切片复测。 |
 | 2026-07-20 | `e421ce0` | 汇总近期平台、策略、预测、容量、账户和工程质量状态。 |
-| 2026-07-20 | 本轮研究 | 复核双周期动量确认候选并因证据退步拒绝晋级；生产默认保持V10。 |
+| 2026-07-20 | `43061ce` | 复核双周期动量确认候选并因证据退步拒绝晋级；生产默认保持V10。 |
+| 2026-07-20 | `140a2db` | 在读取结果前预注册固定21日跳过窗口、开发段和停止门槛。 |
+| 2026-07-20 | 本轮研究 | V12在开发段因净收益和压力收益下降停止；未读取最终留出或容量。 |
 
 ## 十、怎样理解当前结果
 
