@@ -44,6 +44,8 @@
 - 测试矩阵：`docs/quality/TEST_MATRIX.md`
 - 需求追踪：`docs/TRACEABILITY.md`
 - 近期改动与当前状态：`docs/PROJECT_STATUS_2026-07-20.md`
+- 2026-07-20 变更记录：`docs/CHANGELOG_2026-07-20.md`
+- ETF容量与冲击成本证据：`docs/research/ETF_CAPACITY_IMPACT_VALIDATION_2026-07-20.md`
 
 ## 当前状态
 

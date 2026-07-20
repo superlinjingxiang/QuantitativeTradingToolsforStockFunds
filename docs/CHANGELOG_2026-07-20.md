@@ -6,6 +6,15 @@
 
 当前平台仍是研究、回测和模拟验证工具，不连接真实券商，不执行真实下单，也不承诺未来收益。
 
+## 近期主线摘要
+
+- 应用形态已稳定为 Vue 3 + FastAPI，Electron 负责桌面承载；Redis 不可用时自动降级到内存缓存，历史行情继续使用 Parquet。
+- 市场指数、荐股池、自选和历史浏览支持启动恢复、后台刷新与失败保留上次成功数据。
+- 荐股池只给出普通 A 股账户可买标的，按评分降序显示，并复用统一的 T+0/T+1 产品分类。
+- 手动账户评估只消费当前策略和 DecisionHub 的最终结果，不创建另一套买卖算法。
+- A 股短线主线保持 V7；多个独立股票池未通过，因此新增仓位继续失败关闭。
+- 概率区间升级为去重、持有期隔离的 V2；ETF 组合增加 V9 时间留出验证、组合门禁和本轮容量证据。
+
 ## ETF 容量和冲击成本
 
 - 新增 `strategies.etf_capacity_validation`。
@@ -84,4 +93,12 @@
 ## 对应提交
 
 - `c2b4562`：ETF 容量/冲击成本审计、交易制度分类、DecisionHub 与账户同链门禁。
+- `cbcc3cf`：同步项目状态、研究报告、架构/技术/回测规范、ADR、任务和追踪矩阵。
 
+## GitHub 交付检查
+
+- 分支：`main`
+- 远程仓库：`git@github.com:superlinjingxiang/QuantitativeTradingToolsforStockFunds.git`
+- 文档入口：`README.md`、`docs/PROJECT_STATUS_2026-07-20.md`、本文件。
+- 策略证据入口：`docs/research/ETF_CAPACITY_IMPACT_VALIDATION_2026-07-20.md`。
+- 尚未解除的阻断：ETF 最终留出滚动折不足、A 股跨池证据不足、模拟盘成交偏差缺失、无真实券商执行路径。
