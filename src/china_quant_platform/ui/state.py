@@ -882,10 +882,16 @@ def _portfolio_strategy_summary(report: AnalysisReport) -> str:
         security_id.split(":")[-1] for security_id in evidence.selected_security_ids
     )
     cache_note = "；缓存旧值" if evidence.stale else ""
+    capacity_note = (
+        f"；容量{evidence.capacity_status}"
+        f"（{evidence.capacity_reference_capital / 10_000:.1f}万元）"
+        if evidence.capacity_reference_capital is not None
+        else f"；容量{evidence.capacity_status}"
+    )
     return (
         f"ETF轮动V9 {evidence.validation_status}；信号日{evidence.signal_date.isoformat()}；"
         f"候选{selected or '空仓'}；总研究仓位{evidence.target_position_fraction:.1%}"
-        f"{cache_note}"
+        f"{capacity_note}{cache_note}"
     )
 
 
@@ -916,10 +922,24 @@ def _portfolio_operation_context(report: AnalysisReport) -> str:
         if evidence.bars_until_next_rebalance is not None
         else "等待完整固定池数据"
     )
+    capacity = (
+        f"容量{evidence.capacity_status}，最大ADV参与率"
+        f"{evidence.capacity_max_participation_rate:.2%}，模型成本"
+        f"{evidence.capacity_estimated_round_trip_cost_bps:.1f}bp"
+        if evidence.capacity_max_participation_rate is not None
+        and evidence.capacity_estimated_round_trip_cost_bps is not None
+        else f"容量{evidence.capacity_status}"
+    )
+    capacity_limit = (
+        f"，目标容量约{evidence.capacity_max_supported_capital / 10_000:.1f}万元"
+        if evidence.capacity_max_supported_capital is not None
+        else ""
+    )
     return (
         f"{selected}组合候选；当前标的研究权重"
         f"{evidence.current_security_target_fraction:.1%}；{next_rebalance}；"
-        f"验证状态{evidence.validation_status}。"
+        f"验证状态{evidence.validation_status}；交易制度{evidence.trading_system}；"
+        f"{capacity}{capacity_limit}。"
     )
 
 

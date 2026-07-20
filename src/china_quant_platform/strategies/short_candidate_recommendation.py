@@ -13,6 +13,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from china_quant_platform.domain import AssetType, Bar, Quote, SecurityRef
+from china_quant_platform.strategies.etf_capacity_validation import (
+    EtfTradingSystem,
+    classify_etf_trading_system,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -481,12 +485,11 @@ def _trading_system(member: RecommendationUniverseMember) -> dict[str, Any]:
             "detail": "默认荐股池不应推荐美股直连标的；请改用境内跨境ETF替代。",
         }
     if member.asset_type == AssetType.ETF.value:
-        t0_prefixes = ("511", "513", "518")
-        if member.symbol.startswith(t0_prefixes) or member.bucket in {
-            "海外ETF",
-            "债券ETF",
-            "商品ETF",
-        }:
+        system = classify_etf_trading_system(
+            member.security_id,
+            asset_bucket=member.bucket,
+        )
+        if system is EtfTradingSystem.T_PLUS_ZERO:
             return {
                 "label": "T+0",
                 "isT0": True,
@@ -495,11 +498,12 @@ def _trading_system(member: RecommendationUniverseMember) -> dict[str, Any]:
                     "需以交易所和券商规则确认。"
                 ),
             }
-        return {
-            "label": "T+1",
-            "isT0": False,
-            "detail": "普通A股宽基/行业ETF先按T+1保守处理。",
-        }
+        if system is EtfTradingSystem.T_PLUS_ONE:
+            return {
+                "label": "T+1",
+                "isT0": False,
+                "detail": "普通A股宽基/行业ETF先按T+1保守处理。",
+            }
     return {
         "label": "需确认",
         "isT0": False,

@@ -10,6 +10,11 @@ from datetime import UTC, date, datetime, timedelta
 
 from china_quant_platform.data import BarsRequest, MarketDataProvider
 from china_quant_platform.domain import AdjustmentMode, Bar, BarInterval
+from china_quant_platform.strategies.etf_capacity_validation import (
+    EtfCapacityAuditReport,
+    audit_etf_rotation_capacity,
+    classify_etf_trading_system,
+)
 from china_quant_platform.strategies.etf_rotation_validation import (
     EtfRotationBacktestConfig,
     EtfRotationValidationReport,
@@ -85,6 +90,7 @@ def validation_summary(
     oos_start: date,
     full: EtfRotationValidationReport,
     oos: EtfRotationValidationReport,
+    capacity: EtfCapacityAuditReport,
     failures: Sequence[str] = (),
 ) -> dict[str, object]:
     return {
@@ -97,11 +103,80 @@ def validation_summary(
         "failures": list(failures),
         "full": full.to_contract_dict(),
         "oos25": oos.to_contract_dict(),
+        "capacity": capacity.to_contract_dict(),
         "execution_boundary": {
             "signal": "prior_close",
             "execution": "next_open",
             "order_path": "research_only",
         },
+    }
+
+
+def compact_validation_summary(summary: Mapping[str, object]) -> dict[str, object]:
+    """Return the decision-relevant metrics without equity-curve payloads."""
+
+    full = summary["full"]
+    oos = summary["oos25"]
+    capacity = summary["capacity"]
+    if not isinstance(full, dict) or not isinstance(oos, dict) or not isinstance(capacity, dict):
+        raise TypeError("validation summary contains invalid report payloads")
+    return {
+        "provider": summary["provider"],
+        "security_ids": summary["security_ids"],
+        "common_date_count": summary["common_date_count"],
+        "common_start": summary["common_start"],
+        "common_end": summary["common_end"],
+        "oos_start": summary["oos_start"],
+        "failures": summary["failures"],
+        "full": _compact_rotation_report(full),
+        "oos25": _compact_rotation_report(oos),
+        "capacity": {
+            "model_version": capacity["config"]["model_version"],
+            "as_of_date": capacity["as_of_date"],
+            "reference_scenario": capacity["reference_scenario"],
+            "scenarios": capacity["scenarios"],
+            "maximum_supported_capital": capacity["maximum_supported_capital"],
+            "hard_maximum_supported_capital": capacity["hard_maximum_supported_capital"],
+            "trading_systems": capacity["trading_systems"],
+            "notes": capacity["notes"],
+        },
+        "execution_boundary": summary["execution_boundary"],
+    }
+
+
+def _compact_rotation_report(report: Mapping[str, object]) -> dict[str, object]:
+    base = report["base"]
+    stress = report["stress"]
+    folds = report["walk_forward_folds"]
+    if (
+        not isinstance(base, dict)
+        or not isinstance(stress, dict)
+        or not isinstance(folds, (list, tuple))
+    ):
+        raise TypeError("rotation report contains invalid backtest payloads")
+    metric_keys = (
+        "evaluation_start",
+        "evaluation_end",
+        "total_return",
+        "annualized_return",
+        "max_drawdown",
+        "sharpe_ratio",
+        "equal_weight_benchmark_return",
+        "excess_return",
+        "rebalance_count",
+        "active_rebalance_count",
+        "average_position_fraction",
+        "round_trip_cost_bps",
+        "selection_counts",
+    )
+    return {
+        "status": report["status"],
+        "base": {key: base[key] for key in metric_keys},
+        "stress": {key: stress[key] for key in metric_keys},
+        "walk_forward_fold_count": len(folds),
+        "walk_forward_positive_ratio": report["walk_forward_positive_ratio"],
+        "walk_forward_excess_ratio": report["walk_forward_excess_ratio"],
+        "notes": report["notes"],
     }
 
 
@@ -111,6 +186,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--history-years", type=int, default=9)
     parser.add_argument("--oos-fraction", type=float, default=0.25)
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Print decision-relevant metrics without equity curves and rebalance details.",
+    )
     args = parser.parse_args(argv)
     if not 0.1 <= args.oos_fraction <= 0.5:
         parser.error("--oos-fraction must be between 0.1 and 0.5")
@@ -144,21 +224,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         config=config,
         evaluation_start=oos_start,
     )
-    print(
-        json.dumps(
-            validation_summary(
-                provider_id=provider.provider_id,
-                security_ids=security_ids,
-                common_dates=dates,
-                oos_start=oos_start,
-                full=full,
-                oos=oos,
-                failures=failures,
-            ),
-            ensure_ascii=False,
-            indent=2,
-        )
+    capacity = audit_etf_rotation_capacity(
+        bars_by_security,
+        rebalances=full.base.rebalances,
+        trading_system_by_security={
+            member.security_id: classify_etf_trading_system(
+                member.security_id,
+                asset_bucket=member.asset_bucket,
+            )
+            for member in universe
+        },
     )
+    summary = validation_summary(
+        provider_id=provider.provider_id,
+        security_ids=security_ids,
+        common_dates=dates,
+        oos_start=oos_start,
+        full=full,
+        oos=oos,
+        capacity=capacity,
+        failures=failures,
+    )
+    if args.compact:
+        summary = compact_validation_summary(summary)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 
 

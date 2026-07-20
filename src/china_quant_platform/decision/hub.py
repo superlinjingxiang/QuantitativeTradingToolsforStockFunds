@@ -114,17 +114,46 @@ def _portfolio_strategy_gate(analysis_report: AnalysisReport) -> EvidenceGate:
             status=EvidenceGateStatus.FAIL,
             reasons=("组合策略最终时间留出验证未通过。", *evidence.failures),
         )
+    capacity_status = evidence.capacity_status.upper()
+    capacity_reason = _portfolio_capacity_reason(analysis_report)
+    if evidence.trading_system.upper() == "UNKNOWN":
+        return EvidenceGate(
+            gate_id="portfolio-strategy",
+            name="组合策略证据",
+            status=EvidenceGateStatus.MISSING,
+            reasons=("当前ETF交易制度未确认，容量与执行门禁失败关闭。",),
+        )
+    if capacity_status == "MISSING":
+        return EvidenceGate(
+            gate_id="portfolio-strategy",
+            name="组合策略证据",
+            status=EvidenceGateStatus.MISSING,
+            reasons=(capacity_reason,),
+        )
+    if capacity_status == "FAIL":
+        return EvidenceGate(
+            gate_id="portfolio-strategy",
+            name="组合策略证据",
+            status=EvidenceGateStatus.FAIL,
+            reasons=(capacity_reason,),
+        )
     selection_text = (
         f"当前标的已入选，研究目标权重{evidence.current_security_target_fraction:.1%}。"
         if evidence.current_security_selected
         else "当前标的未进入最近一次组合候选，研究目标权重为0。"
     )
-    if status == "WATCH" or evidence.stale or not evidence.current_security_selected:
+    if (
+        status == "WATCH"
+        or capacity_status == "WATCH"
+        or evidence.stale
+        or not evidence.current_security_selected
+    ):
         warning_reasons = [selection_text]
         if status == "WATCH":
             warning_reasons.append("ETF组合证据仍为WATCH，不能把历史轮动结果升级为新增仓位许可。")
         if evidence.stale:
             warning_reasons.append("组合证据来自上一次成功缓存，等待最新固定池刷新。")
+        warning_reasons.append(capacity_reason)
         return EvidenceGate(
             gate_id="portfolio-strategy",
             name="组合策略证据",
@@ -135,7 +164,34 @@ def _portfolio_strategy_gate(analysis_report: AnalysisReport) -> EvidenceGate:
         gate_id="portfolio-strategy",
         name="组合策略证据",
         status=EvidenceGateStatus.PASS,
-        reasons=(selection_text,),
+        reasons=(selection_text, capacity_reason),
+    )
+
+
+def _portfolio_capacity_reason(analysis_report: AnalysisReport) -> str:
+    evidence = analysis_report.portfolio_strategy_evidence
+    if evidence is None:
+        return "当前标的不适用组合容量审计。"
+    if (
+        evidence.capacity_reference_capital is None
+        or evidence.capacity_max_participation_rate is None
+        or evidence.capacity_estimated_round_trip_cost_bps is None
+    ):
+        return (
+            f"组合容量证据{evidence.capacity_status}："
+            f"{evidence.capacity_missing_observation_count}笔调仓缺少有效成交额。"
+        )
+    capacity_limit = (
+        f"，目标容量约{evidence.capacity_max_supported_capital / 10_000:.1f}万元"
+        if evidence.capacity_max_supported_capital is not None
+        else ""
+    )
+    return (
+        f"容量{evidence.capacity_status}：资金假设"
+        f"{evidence.capacity_reference_capital / 10_000:.1f}万元，最大ADV参与率"
+        f"{evidence.capacity_max_participation_rate:.2%}，模型往返成本"
+        f"{evidence.capacity_estimated_round_trip_cost_bps:.1f}bp"
+        f"{capacity_limit}；交易制度{evidence.trading_system}。"
     )
 
 

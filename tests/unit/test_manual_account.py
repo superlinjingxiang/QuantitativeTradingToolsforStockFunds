@@ -167,3 +167,45 @@ def test_risk_profile_does_not_change_current_strategy_target() -> None:
     assert result["targetWeight"] == "5.0%"
     assert result["suggestedAmount"] == "可操作约500.00 元"
     assert "当前策略" in result["reason"]
+
+
+def test_failed_capacity_evidence_blocks_new_position() -> None:
+    result = evaluate_manual_account(
+        account=ManualAccountInput(planned_capital=100_000, available_cash=100_000),
+        latest_price=2.5,
+        final_signal="BUY_CANDIDATE",
+        grade="B",
+        target_position_limit="10.0%",
+        capacity_status="FAIL",
+        capacity_limit=40_000,
+        trading_system="T+0",
+    )
+
+    assert result["accountAdvice"] == "暂不新开仓"
+    assert result["suggestedAmount"] == "--"
+    assert result["capacityStatus"] == "FAIL"
+    assert result["tradingSystem"] == "T+0"
+    assert "超过ETF组合" in result["reason"]
+
+
+def test_capacity_failure_prevents_add_without_forcing_existing_sale() -> None:
+    result = evaluate_manual_account(
+        account=ManualAccountInput(
+            planned_capital=100_000,
+            available_cash=90_000,
+            holding_quantity=4_000,
+            average_cost=2.4,
+        ),
+        latest_price=2.5,
+        final_signal="BUY_CANDIDATE",
+        grade="B",
+        target_position_limit="25.0%",
+        capacity_status="WATCH",
+        capacity_limit=200_000,
+        trading_system="T+1",
+    )
+
+    assert result["currentWeight"] == "10.0%"
+    assert result["accountAdvice"] == "持有观察"
+    assert result["suggestedAmount"] == "--"
+    assert "不因此被强制卖出" in result["reason"]

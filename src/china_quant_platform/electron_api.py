@@ -45,6 +45,12 @@ from china_quant_platform.manual_account import (
     manual_account_from_payload,
 )
 from china_quant_platform.market import build_market_overview
+from china_quant_platform.strategies.etf_capacity_validation import (
+    EtfCapacityAuditReport,
+    assess_etf_capacity_scenario,
+    audit_etf_rotation_capacity,
+    classify_etf_trading_system,
+)
 from china_quant_platform.strategies.etf_rotation_lab import (
     common_trade_dates,
     fetch_etf_rotation_history,
@@ -106,6 +112,7 @@ class _EtfRotationResearchCache:
     security_ids: tuple[str, ...]
     allocation: EtfRotationAllocationSnapshot
     validation: EtfRotationValidationReport
+    capacity: EtfCapacityAuditReport
 
 
 class ElectronBackendService:
@@ -250,6 +257,11 @@ class ElectronBackendService:
             portfolio_strategy_evidence, portfolio_issue = self._etf_rotation_evidence(
                 security_id=security.security_id,
                 as_of=now,
+                reference_capital=(
+                    manual_account.planned_capital
+                    if manual_account is not None and manual_account.planned_capital > 0
+                    else 1_000_000.0
+                ),
             )
             if portfolio_issue is not None:
                 health_issues.append(portfolio_issue)
@@ -355,6 +367,21 @@ class ElectronBackendService:
             strategy_target_position_limit=analysis.operation.target_position_limit,
             decision_readiness=(
                 decision_report.execution_readiness.value if decision_report is not None else None
+            ),
+            capacity_status=(
+                portfolio_strategy_evidence.capacity_status
+                if portfolio_strategy_evidence is not None
+                else None
+            ),
+            capacity_limit=(
+                portfolio_strategy_evidence.capacity_max_supported_capital
+                if portfolio_strategy_evidence is not None
+                else None
+            ),
+            trading_system=(
+                portfolio_strategy_evidence.trading_system
+                if portfolio_strategy_evidence is not None
+                else None
             ),
         )
         market_overview = self._market_overview(now)
@@ -534,6 +561,7 @@ class ElectronBackendService:
         *,
         security_id: str,
         as_of: datetime,
+        reference_capital: float,
     ) -> tuple[PortfolioStrategyEvidence | None, str | None]:
         universe = default_etf_validation_universe()
         security_ids = tuple(member.security_id for member in universe)
@@ -543,6 +571,7 @@ class ElectronBackendService:
             cached, refresh_error = self._etf_rotation_research_cache(as_of=as_of)
         except BaseException as error:  # noqa: BLE001
             message = f"ETF组合研究证据获取失败：{_short_error(error)}"
+            member = next(item for item in universe if item.security_id == security_id)
             return (
                 PortfolioStrategyEvidence(
                     security_id=security_id,
@@ -550,6 +579,10 @@ class ElectronBackendService:
                     strategy_version="etf-rotation-v9",
                     validation_status="MISSING",
                     as_of_date=as_of.date(),
+                    trading_system=classify_etf_trading_system(
+                        security_id,
+                        asset_bucket=member.asset_bucket,
+                    ).value,
                     failures=(message,),
                     notes=("fixed_ten_etf_universe", "research_only_no_live_order_path"),
                 ),
@@ -560,6 +593,7 @@ class ElectronBackendService:
             security_id=security_id,
             stale=refresh_error is not None,
             refresh_error=refresh_error,
+            reference_capital=reference_capital,
         )
         issue = (
             f"ETF组合研究证据刷新失败，保留上次结果：{refresh_error}"
@@ -622,6 +656,18 @@ class ElectronBackendService:
                     security_ids=security_ids,
                     config=config,
                 )
+                trading_systems = {
+                    member.security_id: classify_etf_trading_system(
+                        member.security_id,
+                        asset_bucket=member.asset_bucket,
+                    )
+                    for member in universe
+                }
+                capacity = audit_etf_rotation_capacity(
+                    bars_by_security,
+                    rebalances=validation.base.rebalances,
+                    trading_system_by_security=trading_systems,
+                )
                 ttl_seconds = _positive_env_int(
                     self._env.get("CQP_ETF_ROTATION_CACHE_SECONDS"),
                     default=1800,
@@ -631,6 +677,7 @@ class ElectronBackendService:
                     security_ids=security_ids,
                     allocation=allocation,
                     validation=validation,
+                    capacity=capacity,
                 )
                 self._rotation_cache = refreshed
                 self._rotation_retry_after = None
@@ -875,6 +922,7 @@ def _portfolio_evidence_from_rotation_cache(
     security_id: str,
     stale: bool,
     refresh_error: str | None,
+    reference_capital: float,
 ) -> PortfolioStrategyEvidence:
     allocation = cached.allocation
     validation = cached.validation
@@ -883,6 +931,10 @@ def _portfolio_evidence_from_rotation_cache(
         ranked_security_ids.index(security_id) + 1 if security_id in ranked_security_ids else None
     )
     failures = (refresh_error,) if refresh_error else ()
+    capacity = assess_etf_capacity_scenario(
+        cached.capacity,
+        portfolio_capital=reference_capital,
+    )
     notes = tuple(
         dict.fromkeys(
             (
@@ -917,6 +969,15 @@ def _portfolio_evidence_from_rotation_cache(
         required_walk_forward_fold_count=validation.config.minimum_walk_forward_folds,
         walk_forward_positive_ratio=validation.walk_forward_positive_ratio,
         walk_forward_excess_ratio=validation.walk_forward_excess_ratio,
+        trading_system=cached.capacity.trading_systems[security_id].value,
+        capacity_status=capacity.status.value,
+        capacity_model_version=cached.capacity.config.model_version,
+        capacity_reference_capital=capacity.portfolio_capital,
+        capacity_max_participation_rate=capacity.max_participation_rate,
+        capacity_estimated_round_trip_cost_bps=capacity.max_modeled_round_trip_cost_bps,
+        capacity_max_supported_capital=cached.capacity.maximum_supported_capital,
+        capacity_observation_count=capacity.observation_count,
+        capacity_missing_observation_count=capacity.missing_observation_count,
         stale=stale,
         failures=failures,
         notes=notes,

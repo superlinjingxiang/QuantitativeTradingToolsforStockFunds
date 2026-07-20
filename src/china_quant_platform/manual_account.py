@@ -43,6 +43,9 @@ def evaluate_manual_account(
     strategy_signal: str | None = None,
     strategy_target_position_limit: object = None,
     decision_readiness: str | None = None,
+    capacity_status: str | None = None,
+    capacity_limit: float | None = None,
+    trading_system: str | None = None,
 ) -> dict[str, Any]:
     """Translate the current strategy output into account-position advice.
 
@@ -85,6 +88,12 @@ def evaluate_manual_account(
     decision_signal = str(final_signal or "").upper()
     strategy_signal_text = str(strategy_signal or decision_signal).upper()
     grade_text = str(grade or "N").upper()
+    capacity_status_text = str(capacity_status or "").upper()
+    capacity_limit_value = max(0.0, capacity_limit or 0.0)
+    capacity_allows_add = not capacity_status_text or (
+        capacity_status_text == "PASS"
+        and (capacity_limit_value <= 0 or planned_capital <= capacity_limit_value)
+    )
 
     blockers: list[str] = []
     if planned_capital <= 0:
@@ -102,7 +111,7 @@ def evaluate_manual_account(
         advice = "补全账户数据"
         reason = " ".join(blockers)
     elif quantity == 0:
-        if decision_signal in _BUY_SIGNALS and decision_target_weight > 0:
+        if decision_signal in _BUY_SIGNALS and decision_target_weight > 0 and capacity_allows_add:
             max_position_value = net_asset * decision_target_weight
             suggested_amount = min(max_position_value, max(0.0, estimated_cash))
             advice = "可小仓试买" if suggested_amount > 0 else "观察"
@@ -110,6 +119,13 @@ def evaluate_manual_account(
                 f"当前空仓，当前策略通过最终门禁后信号为{_signal_label(decision_signal)}，"
                 f"按可执行仓位上限"
                 f"{_pct(decision_target_weight)}折算可买金额；等级{grade_text}仅作证据强弱展示。"
+            )
+        elif not capacity_allows_add:
+            advice = "暂不新开仓"
+            reason = _capacity_block_reason(
+                capacity_status=capacity_status_text,
+                planned_capital=planned_capital,
+                capacity_limit=capacity_limit_value,
             )
         else:
             advice = "暂不新开仓"
@@ -151,7 +167,11 @@ def evaluate_manual_account(
                 f"当前仓位约{_pct(current_weight)}，高于当前策略仓位上限"
                 f"{_pct(decision_target_weight)}。"
             )
-        elif decision_signal in _BUY_SIGNALS and current_weight < decision_target_weight - 0.01:
+        elif (
+            decision_signal in _BUY_SIGNALS
+            and current_weight < decision_target_weight - 0.01
+            and capacity_allows_add
+        ):
             suggested_amount = min(
                 decision_target_value - market_value,
                 max(0.0, estimated_cash),
@@ -161,6 +181,16 @@ def evaluate_manual_account(
                 f"当前仓位约{_pct(current_weight)}，低于当前策略仓位上限"
                 f"{_pct(decision_target_weight)}；最终门禁信号为"
                 f"{_signal_label(decision_signal)}。"
+            )
+        elif not capacity_allows_add and current_weight < decision_target_weight - 0.01:
+            advice = "持有观察"
+            reason = (
+                _capacity_block_reason(
+                    capacity_status=capacity_status_text,
+                    planned_capital=planned_capital,
+                    capacity_limit=capacity_limit_value,
+                )
+                + " 已有仓位不因此被强制卖出，但暂不建议加仓。"
             )
         else:
             advice = "持有观察"
@@ -189,6 +219,9 @@ def evaluate_manual_account(
         "strategySignal": strategy_signal_text or "--",
         "decisionSignal": decision_signal or "--",
         "decisionReadiness": str(decision_readiness or "--"),
+        "tradingSystem": str(trading_system or "--"),
+        "capacityStatus": capacity_status_text or "--",
+        "capacityLimit": (_money(capacity_limit_value) if capacity_limit_value > 0 else "--"),
         "accountAdvice": advice,
         "suggestedAmount": signed_amount,
         "suggestedQuantity": f"{suggested_quantity} 股/份" if suggested_quantity else "--",
@@ -264,6 +297,23 @@ def _signed_amount(advice: str, value: float) -> str:
         return "--"
     prefix = "建议减仓约" if "减仓" in advice or "止损" in advice else "可操作约"
     return f"{prefix}{_money(value)}"
+
+
+def _capacity_block_reason(
+    *,
+    capacity_status: str,
+    planned_capital: float,
+    capacity_limit: float,
+) -> str:
+    if capacity_limit > 0 and planned_capital > capacity_limit:
+        return (
+            f"计划资金{_money(planned_capital)}超过ETF组合按2% ADV目标参与率估算的"
+            f"容量{_money(capacity_limit)}，当前策略不允许新增风险暴露。"
+        )
+    return (
+        f"ETF组合容量证据为{capacity_status or 'MISSING'}，尚未通过无前视流动性和"
+        "冲击成本门禁，当前策略不允许新增风险暴露。"
+    )
 
 
 def _money(value: float) -> str:

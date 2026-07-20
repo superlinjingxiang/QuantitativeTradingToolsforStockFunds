@@ -225,6 +225,15 @@ class PortfolioStrategyEvidence(DomainModel):
     required_walk_forward_fold_count: int = Field(default=1, ge=1)
     walk_forward_positive_ratio: float | None = Field(default=None, ge=0, le=1)
     walk_forward_excess_ratio: float | None = Field(default=None, ge=0, le=1)
+    trading_system: NonEmptyString = "UNKNOWN"
+    capacity_status: NonEmptyString = "MISSING"
+    capacity_model_version: NonEmptyString = "etf-capacity-impact-v1"
+    capacity_reference_capital: float | None = Field(default=None, gt=0)
+    capacity_max_participation_rate: float | None = Field(default=None, ge=0)
+    capacity_estimated_round_trip_cost_bps: float | None = Field(default=None, ge=0)
+    capacity_max_supported_capital: float | None = Field(default=None, ge=0)
+    capacity_observation_count: int = Field(default=0, ge=0)
+    capacity_missing_observation_count: int = Field(default=0, ge=0)
     stale: bool = False
     failures: tuple[NonEmptyString, ...] = ()
     notes: tuple[NonEmptyString, ...] = ()
@@ -243,6 +252,19 @@ class PortfolioStrategyEvidence(DomainModel):
             raise ValueError("security target fraction cannot exceed portfolio target fraction")
         if (self.signal_date is None) != (self.execution_date is None):
             raise ValueError("signal_date and execution_date must be provided together")
+        capacity_metrics = (
+            self.capacity_reference_capital,
+            self.capacity_max_participation_rate,
+            self.capacity_estimated_round_trip_cost_bps,
+            self.capacity_max_supported_capital,
+        )
+        if self.capacity_status.upper() in {"PASS", "WATCH", "FAIL"}:
+            if any(value is None for value in capacity_metrics):
+                raise ValueError("audited capacity status requires complete capacity metrics")
+            if self.capacity_observation_count <= 0:
+                raise ValueError("audited capacity status requires observations")
+            if self.capacity_missing_observation_count:
+                raise ValueError("audited capacity status cannot contain missing observations")
         return self
 
 

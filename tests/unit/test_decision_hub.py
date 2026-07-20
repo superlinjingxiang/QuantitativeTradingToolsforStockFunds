@@ -143,6 +143,7 @@ def portfolio_evidence(
     validation_status: str = "PASS",
     selected: bool = True,
     stale: bool = False,
+    capacity_status: str = "PASS",
 ) -> PortfolioStrategyEvidence:
     selected_ids = ("SSE:600519", "SSE:510300") if selected else ("SSE:510300",)
     return PortfolioStrategyEvidence(
@@ -169,6 +170,13 @@ def portfolio_evidence(
         required_walk_forward_fold_count=3,
         walk_forward_positive_ratio=1.0,
         walk_forward_excess_ratio=0.67,
+        trading_system="T+1",
+        capacity_status=capacity_status,
+        capacity_reference_capital=100_000,
+        capacity_max_participation_rate=0.008,
+        capacity_estimated_round_trip_cost_bps=25.7,
+        capacity_max_supported_capital=250_000,
+        capacity_observation_count=12,
         stale=stale,
         notes=("fixture",),
     )
@@ -301,6 +309,75 @@ def test_unselected_security_is_not_treated_as_portfolio_buy_candidate() -> None
     assert gate.status is EvidenceGateStatus.WARN
     assert report.final_signal is FinalSignal.WATCH
     assert "未进入" in gate.reasons[0]
+
+
+def test_missing_capacity_evidence_fails_closed() -> None:
+    evidence = portfolio_evidence(capacity_status="MISSING").model_copy(
+        update={
+            "capacity_reference_capital": None,
+            "capacity_max_participation_rate": None,
+            "capacity_estimated_round_trip_cost_bps": None,
+            "capacity_max_supported_capital": None,
+            "capacity_observation_count": 0,
+            "capacity_missing_observation_count": 2,
+        }
+    )
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis().model_copy(update={"portfolio_strategy_evidence": evidence}),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    gate = next(item for item in report.gates if item.gate_id == "portfolio-strategy")
+    assert gate.status is EvidenceGateStatus.MISSING
+    assert report.final_signal is FinalSignal.WATCH
+    assert "2笔调仓" in gate.reasons[0]
+
+
+def test_failed_capacity_blocks_portfolio_candidate() -> None:
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis().model_copy(
+            update={
+                "portfolio_strategy_evidence": portfolio_evidence(
+                    capacity_status="FAIL"
+                ).model_copy(
+                    update={
+                        "capacity_max_participation_rate": 0.08,
+                        "capacity_estimated_round_trip_cost_bps": 49.0,
+                    }
+                )
+            }
+        ),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    gate = next(item for item in report.gates if item.gate_id == "portfolio-strategy")
+    assert gate.status is EvidenceGateStatus.FAIL
+    assert report.final_signal is FinalSignal.WATCH
+    assert "8.00%" in gate.reasons[0]
+
+
+def test_watch_capacity_requires_paper_fill_confirmation() -> None:
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis().model_copy(
+            update={
+                "portfolio_strategy_evidence": portfolio_evidence(
+                    capacity_status="WATCH"
+                ).model_copy(update={"capacity_max_participation_rate": 0.03})
+            }
+        ),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    gate = next(item for item in report.gates if item.gate_id == "portfolio-strategy")
+    assert gate.status is EvidenceGateStatus.WARN
+    assert report.final_signal is FinalSignal.WATCH
+    assert any("容量WATCH" in reason for reason in gate.reasons)
 
 
 def test_purged_forecast_calibration_is_included_in_decision_gate() -> None:
