@@ -29,8 +29,14 @@ class EtfMomentumSignalModel(StrEnum):
     SKIP_RECENT_MONTH = "SKIP_RECENT_MONTH"
 
 
+class EtfExposureScalingModel(StrEnum):
+    INVERSE_VOLATILITY = "INVERSE_VOLATILITY"
+    INVERSE_VARIANCE = "INVERSE_VARIANCE"
+
+
 class EtfRotationBacktestConfig(DomainModel):
     signal_model: EtfMomentumSignalModel = EtfMomentumSignalModel.SINGLE_HORIZON
+    exposure_model: EtfExposureScalingModel = EtfExposureScalingModel.INVERSE_VOLATILITY
     formation_lookback_bars: int = Field(default=252, ge=20)
     confirmation_lookback_bars: int = Field(default=126, ge=20)
     skip_recent_bars: int = Field(default=21, ge=1)
@@ -603,9 +609,12 @@ def _target_position_fraction(
         ]
         annual_volatilities.append(statistics.pstdev(returns) * math.sqrt(252))
     average_volatility = max(statistics.fmean(annual_volatilities), 0.05)
+    raw_fraction = config.target_annual_volatility / average_volatility
+    if config.exposure_model is EtfExposureScalingModel.INVERSE_VARIANCE:
+        raw_fraction **= 2
     return min(
         config.max_position_fraction,
-        max(config.min_position_fraction, config.target_annual_volatility / average_volatility),
+        max(config.min_position_fraction, raw_fraction),
     )
 
 

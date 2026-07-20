@@ -1,4 +1,4 @@
-# ExecPlan 0011：盈利验证 V4-V12 候选研究与独立验证
+# ExecPlan 0011：盈利验证 V4-V13 候选研究与独立验证
 
 ## 目标
 
@@ -63,6 +63,11 @@
 - [x] 新增`SKIP_RECENT_MONTH`研究开关、紧凑报告配置和排名端点/跳过区间隔离/窗口约束/生产默认保护测试。
 - [x] 使用同一批固定十ETF数据完成V10/V12开发段同源比较；因净收益和45bp压力收益下降停止，不读取最终留出、容量或当前持仓。
 - [x] V12负结果收口通过328项Python回归、Ruff format、Ruff lint、mypy和差异检查；生产默认保持V10。
+- [x] 在实现和读取结果前预注册V13逆方差仓位缩放，固定开发/最终顺序门槛、容量要求和模拟盘边界。
+- [x] 新增`INVERSE_VARIANCE`显式研究开关、CLI/报告证据，以及高波动降仓、低波动无杠杆、排名一致、未来隔离和默认保护测试。
+- [x] 固定十ETF开发段11项门槛全部通过后，才运行全样本、20%/25%/30%留出和容量验证；最终回测门槛全部通过。
+- [x] V13研究收口通过331项Python全量回归、Ruff format、Ruff lint、137个源文件mypy、发布审计和差异检查。
+- [ ] V13仍需双轨模拟盘成交偏差和更多滚动起点，未替换V10生产默认。
 
 ## 当前证据
 
@@ -93,11 +98,13 @@
 - 容量V2含120个实际交易观测且0缺失；100万元最大参与率0.5715%、最大模型成本24.07bp并PASS，2%目标支持资金约349.95万元，1000万元和5000万元场景因超过5%硬参与率而FAIL。
 - 双周期候选开发段收益+27.44%、最大回撤-11.66%、Sharpe0.84、平均换手46.44%，均不满足替换V10基线的综合门槛；最后30%留出超额-2.03%，拒绝晋级。
 - 跳过最近一月候选开发段收益+45.52%、最大回撤-20.49%、Sharpe1.109、平均换手34.45%、45bp压力收益+43.07%；V10基线分别为+46.91%、-21.54%、1.103、35.06%和+44.41%。净收益与压力收益失败，候选停止且未读取最终留出或容量。
+- V13开发段净收益+44.87%、最大回撤-13.60%、Sharpe1.223、45bp压力收益+42.49%，11项门槛全部通过。全样本净收益+95.72%、最大回撤-13.60%、Sharpe1.223；20%/25%/30%留出均为正收益、正超额且Sharpe高于V10，100万元容量PASS。
+- V13三个留出完整滚动折仍仅1/1/2，最后20%唯一完整折超额为负，模拟盘成交偏差缺失；候选为RESEARCH_ONLY，不进入当前四模块或账户。
 - 预测校准V2第一组十标的最少60个独立时点，平均区间覆盖82.67%、下破7.00%、三分类Brier 0.1938。
 - 预测校准V2第二组十标的最少56个独立时点，平均区间覆盖80.40%、下破9.67%、三分类Brier 0.1987。
 - 两组预测校准均为HIGH，但只证明历史概率/区间校准达到当前门槛，不改变A股V7盈利验证仍未PASS的结论。
 
-V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`；V5 A 股反追涨记录保留为历史对照；V6 执行模型见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`；V7 市场门槛、五组结果和数据校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`；V8 候选审计、第四组留出和拒绝晋级结论见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`；V9 ETF组合候选和容量V1保留为历史快照；当前V10差额调仓、实际换手费用、多时间切片和容量V2权威结果见`docs/research/SHORT_TERM_STRATEGY_VALIDATION_V10_TURNOVER_2026-07-20.md`；V11双周期候选及拒绝晋级依据见`docs/research/SHORT_TERM_STRATEGY_V11_DUAL_HORIZON_CANDIDATE_2026-07-20.md`；V12预注册和开发段停止依据见`docs/research/SHORT_TERM_STRATEGY_V12_SKIP_MONTH_PREREGISTRATION_2026-07-20.md`与`docs/research/SHORT_TERM_STRATEGY_V12_SKIP_MONTH_CANDIDATE_2026-07-20.md`；预测校准V2的方法和两组十标的结果见 `docs/research/FORECAST_INTERVAL_VALIDATION_V2_2026-07-17.md`。
+V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`；V5 A 股反追涨记录保留为历史对照；V6 执行模型见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`；V7 市场门槛、五组结果和数据校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`；V8 候选审计、第四组留出和拒绝晋级结论见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`；V9 ETF组合候选和容量V1保留为历史快照；当前V10差额调仓、实际换手费用、多时间切片和容量V2权威结果见`docs/research/SHORT_TERM_STRATEGY_VALIDATION_V10_TURNOVER_2026-07-20.md`；V11双周期候选及拒绝晋级依据见`docs/research/SHORT_TERM_STRATEGY_V11_DUAL_HORIZON_CANDIDATE_2026-07-20.md`；V12预注册和开发段停止依据见`docs/research/SHORT_TERM_STRATEGY_V12_SKIP_MONTH_PREREGISTRATION_2026-07-20.md`与`docs/research/SHORT_TERM_STRATEGY_V12_SKIP_MONTH_CANDIDATE_2026-07-20.md`；V13预注册和回测门槛通过但等待模拟盘的依据见`docs/research/SHORT_TERM_STRATEGY_V13_INVERSE_VARIANCE_PREREGISTRATION_2026-07-20.md`与`docs/research/SHORT_TERM_STRATEGY_V13_INVERSE_VARIANCE_CANDIDATE_2026-07-20.md`；预测校准V2的方法和两组十标的结果见 `docs/research/FORECAST_INTERVAL_VALIDATION_V2_2026-07-17.md`。
 
 ## 剩余工作
 

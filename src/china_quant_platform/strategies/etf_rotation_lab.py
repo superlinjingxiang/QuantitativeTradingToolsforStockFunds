@@ -16,6 +16,7 @@ from china_quant_platform.strategies.etf_capacity_validation import (
     classify_etf_trading_system,
 )
 from china_quant_platform.strategies.etf_rotation_validation import (
+    EtfExposureScalingModel,
     EtfMomentumSignalModel,
     EtfRotationBacktestConfig,
     EtfRotationValidationReport,
@@ -191,6 +192,13 @@ def _compact_rotation_report(report: Mapping[str, object]) -> dict[str, object]:
             "confirmation_lookback_bars": config["confirmation_lookback_bars"],
             "skip_recent_bars": config["skip_recent_bars"],
         },
+        "exposure": {
+            "model": config["exposure_model"],
+            "volatility_lookback_bars": config["volatility_lookback_bars"],
+            "target_annual_volatility": config["target_annual_volatility"],
+            "min_position_fraction": config["min_position_fraction"],
+            "max_position_fraction": config["max_position_fraction"],
+        },
         "base": {key: base[key] for key in metric_keys},
         "stress": {key: stress[key] for key in metric_keys},
         "walk_forward_fold_count": len(folds),
@@ -211,6 +219,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=tuple(model.value for model in EtfMomentumSignalModel),
         default=EtfMomentumSignalModel.SINGLE_HORIZON.value,
         help="Momentum signal model to validate without changing production defaults.",
+    )
+    parser.add_argument(
+        "--exposure-model",
+        choices=tuple(model.value for model in EtfExposureScalingModel),
+        default=EtfExposureScalingModel.INVERSE_VOLATILITY.value,
+        help="Exposure scaling model to validate without changing production defaults.",
     )
     parser.add_argument(
         "--compact",
@@ -236,6 +250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     dates = common_trade_dates(bars_by_security, security_ids=security_ids)
     config = EtfRotationBacktestConfig(
         signal_model=EtfMomentumSignalModel(args.signal_model),
+        exposure_model=EtfExposureScalingModel(args.exposure_model),
     )
     minimum_dates = config.formation_lookback_bars + config.walk_forward_window_bars + 2
     if len(dates) < minimum_dates:

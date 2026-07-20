@@ -49,6 +49,7 @@ from china_quant_platform.strategies.etf_rotation import (
     cost_turnover_sensitivity,
 )
 from china_quant_platform.strategies.etf_rotation_validation import (
+    EtfExposureScalingModel,
     EtfMomentumSignalModel,
     EtfRotationAllocationSnapshot,
     EtfRotationBacktestConfig,
@@ -146,6 +147,7 @@ __all__ = [
     "EtfRotationValidationStatus",
     "EtfRotationWalkForwardFold",
     "EtfTradingSystem",
+    "EtfExposureScalingModel",
     "EtfMomentumSignalModel",
     "ResearchStatus",
     "DEFAULT_A_SHARE_VALIDATION_UNIVERSE",

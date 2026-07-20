@@ -9,6 +9,7 @@ import pytest
 from china_quant_platform.domain import AdjustmentMode, Bar, BarInterval, RecordQualityStatus
 from china_quant_platform.strategies.etf_rotation_lab import _compact_rotation_report
 from china_quant_platform.strategies.etf_rotation_validation import (
+    EtfExposureScalingModel,
     EtfMomentumSignalModel,
     EtfRotationBacktestConfig,
     EtfRotationValidationStatus,
@@ -18,7 +19,13 @@ from china_quant_platform.strategies.etf_rotation_validation import (
 )
 
 
-def _bars(security_id: str, *, rank: int, count: int = 900) -> tuple[Bar, ...]:
+def _bars(
+    security_id: str,
+    *,
+    rank: int,
+    count: int = 900,
+    noise_scale: float = 1.0,
+) -> tuple[Bar, ...]:
     result: list[Bar] = []
     current_date = date(2022, 1, 3)
     close = 1.0
@@ -28,7 +35,7 @@ def _bars(security_id: str, *, rank: int, count: int = 900) -> tuple[Bar, ...]:
             current_date += timedelta(days=1)
             continue
         base_return = 0.0016 - rank * 0.00018
-        alternating_noise = 0.009 if index % 2 == 0 else -0.008
+        alternating_noise = (0.009 if index % 2 == 0 else -0.008) * noise_scale
         daily_return = base_return + alternating_noise
         open_price = close * (1.0 + daily_return * 0.2)
         next_close = close * (1.0 + daily_return)
@@ -71,6 +78,7 @@ def test_research_candidates_are_not_the_production_default() -> None:
     config = EtfRotationBacktestConfig()
 
     assert config.signal_model is EtfMomentumSignalModel.SINGLE_HORIZON
+    assert config.exposure_model is EtfExposureScalingModel.INVERSE_VOLATILITY
 
 
 def test_rotation_uses_only_prior_close_and_executes_next_open(
@@ -100,6 +108,86 @@ def test_rotation_applies_volatility_target_and_position_bounds(
         if event.selected_security_ids
     )
     assert 0.25 <= result.average_position_fraction <= 1.0
+
+
+def test_inverse_variance_reduces_high_volatility_exposure_without_changing_rank() -> None:
+    high_volatility_bars = {
+        f"SSE:51{rank:04d}": _bars(
+            f"SSE:51{rank:04d}",
+            rank=rank,
+            noise_scale=3.0,
+        )
+        for rank in range(10)
+    }
+    security_ids = tuple(high_volatility_bars)
+    baseline = run_etf_rotation_backtest(
+        high_volatility_bars,
+        security_ids=security_ids,
+    )
+    candidate = run_etf_rotation_backtest(
+        high_volatility_bars,
+        security_ids=security_ids,
+        config=EtfRotationBacktestConfig(exposure_model=EtfExposureScalingModel.INVERSE_VARIANCE),
+    )
+
+    baseline_first = baseline.rebalances[0]
+    candidate_first = candidate.rebalances[0]
+    assert candidate_first.selected_security_ids == baseline_first.selected_security_ids
+    assert candidate_first.momentum_scores == baseline_first.momentum_scores
+    assert candidate_first.target_position_fraction < baseline_first.target_position_fraction
+    assert candidate_first.target_position_fraction == pytest.approx(
+        max(0.25, baseline_first.target_position_fraction**2)
+    )
+
+
+def test_inverse_variance_does_not_leverage_low_volatility_assets(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    security_ids = tuple(etf_bars)
+    baseline = run_etf_rotation_backtest(etf_bars, security_ids=security_ids)
+    candidate = run_etf_rotation_backtest(
+        etf_bars,
+        security_ids=security_ids,
+        config=EtfRotationBacktestConfig(exposure_model=EtfExposureScalingModel.INVERSE_VARIANCE),
+    )
+
+    assert baseline.rebalances[0].target_position_fraction == pytest.approx(1.0)
+    assert candidate.rebalances[0].target_position_fraction == pytest.approx(1.0)
+
+
+def test_inverse_variance_first_allocation_does_not_read_future_bars(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    config = EtfRotationBacktestConfig(exposure_model=EtfExposureScalingModel.INVERSE_VARIANCE)
+    security_ids = tuple(etf_bars)
+    baseline = run_etf_rotation_backtest(
+        etf_bars,
+        security_ids=security_ids,
+        config=config,
+    )
+    mutated = {
+        security_id: tuple(
+            bar
+            if index <= 252
+            else bar.model_copy(
+                update={
+                    "open_price": bar.open_price * 5,
+                    "high_price": bar.high_price * 5,
+                    "low_price": bar.low_price * 5,
+                    "close_price": bar.close_price * 5,
+                }
+            )
+            for index, bar in enumerate(bars)
+        )
+        for security_id, bars in etf_bars.items()
+    }
+    changed = run_etf_rotation_backtest(
+        mutated,
+        security_ids=security_ids,
+        config=config,
+    )
+
+    assert changed.rebalances[0] == baseline.rebalances[0]
 
 
 def test_dual_horizon_requires_positive_126_and_252_day_momentum(
@@ -281,6 +369,13 @@ def test_compact_report_identifies_the_research_signal_model(
         "formation_lookback_bars": 252,
         "confirmation_lookback_bars": 126,
         "skip_recent_bars": 21,
+    }
+    assert compact["exposure"] == {
+        "model": "INVERSE_VOLATILITY",
+        "volatility_lookback_bars": 63,
+        "target_annual_volatility": 0.2,
+        "min_position_fraction": 0.25,
+        "max_position_fraction": 1.0,
     }
 
 
