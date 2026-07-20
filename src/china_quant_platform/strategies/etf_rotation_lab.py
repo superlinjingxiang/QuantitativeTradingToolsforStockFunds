@@ -19,7 +19,10 @@ from china_quant_platform.strategies.etf_rotation_validation import (
     EtfExposureScalingModel,
     EtfMomentumSignalModel,
     EtfRotationBacktestConfig,
+    EtfRotationShadowComparisonReport,
+    EtfRotationShadowValidationConfig,
     EtfRotationValidationReport,
+    compare_etf_rotation_shadow_episodes,
     validate_etf_rotation_strategy,
 )
 from china_quant_platform.strategies.profit_validation import (
@@ -94,9 +97,11 @@ def validation_summary(
     full: EtfRotationValidationReport,
     oos: EtfRotationValidationReport,
     capacity: EtfCapacityAuditReport,
+    shadow_comparison: EtfRotationShadowComparisonReport | None = None,
+    shadow_oos_comparison: EtfRotationShadowComparisonReport | None = None,
     failures: Sequence[str] = (),
 ) -> dict[str, object]:
-    return {
+    result: dict[str, object] = {
         "provider": provider_id,
         "security_ids": list(security_ids),
         "common_date_count": len(common_dates),
@@ -114,6 +119,11 @@ def validation_summary(
             "order_path": "research_only",
         },
     }
+    if shadow_comparison is not None:
+        result["shadow_comparison"] = shadow_comparison.to_contract_dict()
+    if shadow_oos_comparison is not None:
+        result["shadow_oos_comparison"] = shadow_oos_comparison.to_contract_dict()
+    return result
 
 
 def compact_validation_summary(summary: Mapping[str, object]) -> dict[str, object]:
@@ -124,7 +134,7 @@ def compact_validation_summary(summary: Mapping[str, object]) -> dict[str, objec
     capacity = summary["capacity"]
     if not isinstance(full, dict) or not isinstance(oos, dict) or not isinstance(capacity, dict):
         raise TypeError("validation summary contains invalid report payloads")
-    return {
+    result: dict[str, object] = {
         "provider": summary["provider"],
         "security_ids": summary["security_ids"],
         "common_date_count": summary["common_date_count"],
@@ -152,6 +162,24 @@ def compact_validation_summary(summary: Mapping[str, object]) -> dict[str, objec
         },
         "execution_boundary": summary["execution_boundary"],
     }
+    for shadow_key in ("shadow_comparison", "shadow_oos_comparison"):
+        shadow = summary.get(shadow_key)
+        if isinstance(shadow, dict):
+            episodes = shadow["episodes"]
+            if not isinstance(episodes, (list, tuple)):
+                raise TypeError("shadow comparison contains invalid episode payloads")
+            compact_shadow = {key: value for key, value in shadow.items() if key != "episodes"}
+            compact_shadow["episode_dates"] = [
+                {
+                    "episode_id": episode["episode_id"],
+                    "execution_date": episode["execution_date"],
+                    "evaluation_end": episode["evaluation_end"],
+                }
+                for episode in episodes
+                if isinstance(episode, dict)
+            ]
+            result[shadow_key] = compact_shadow
+    return result
 
 
 def _compact_rotation_report(report: Mapping[str, object]) -> dict[str, object]:
@@ -231,9 +259,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Print decision-relevant metrics without equity curves and rebalance details.",
     )
+    parser.add_argument(
+        "--shadow-compare-v13",
+        action="store_true",
+        help="Compare V10 and V13 over non-overlapping rebalance episodes.",
+    )
     args = parser.parse_args(argv)
     if not 0.1 <= args.oos_fraction <= 0.5:
         parser.error("--oos-fraction must be between 0.1 and 0.5")
+    if (
+        args.shadow_compare_v13
+        and args.exposure_model != EtfExposureScalingModel.INVERSE_VARIANCE.value
+    ):
+        parser.error("--shadow-compare-v13 requires --exposure-model INVERSE_VARIANCE")
 
     from china_quant_platform.data import create_default_market_data_provider
 
@@ -278,6 +316,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             for member in universe
         },
     )
+    shadow_comparison = None
+    shadow_oos_comparison = None
+    if args.shadow_compare_v13:
+        shadow_comparison = compare_etf_rotation_shadow_episodes(
+            bars_by_security,
+            security_ids=security_ids,
+            candidate_config=config,
+        )
+        shadow_oos_comparison = compare_etf_rotation_shadow_episodes(
+            bars_by_security,
+            security_ids=security_ids,
+            candidate_config=config,
+            validation_config=EtfRotationShadowValidationConfig(
+                minimum_episode_count=12,
+                minimum_downside_episode_count=3,
+                minimum_downside_improvement_ratio=2 / 3,
+                minimum_downside_loss_reduction=0.10,
+                minimum_upside_retention_ratio=0.65,
+            ),
+            evaluation_start=oos_start,
+        )
     summary = validation_summary(
         provider_id=provider.provider_id,
         security_ids=security_ids,
@@ -287,6 +346,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         full=full,
         oos=oos,
         capacity=capacity,
+        shadow_comparison=shadow_comparison,
+        shadow_oos_comparison=shadow_oos_comparison,
         failures=failures,
     )
     if args.compact:

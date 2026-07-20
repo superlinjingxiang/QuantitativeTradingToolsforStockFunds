@@ -12,8 +12,11 @@ from china_quant_platform.strategies.etf_rotation_validation import (
     EtfExposureScalingModel,
     EtfMomentumSignalModel,
     EtfRotationBacktestConfig,
+    EtfRotationShadowValidationConfig,
+    EtfRotationShadowValidationStatus,
     EtfRotationValidationStatus,
     build_current_etf_rotation_allocation,
+    compare_etf_rotation_shadow_episodes,
     run_etf_rotation_backtest,
     validate_etf_rotation_strategy,
 )
@@ -25,6 +28,7 @@ def _bars(
     rank: int,
     count: int = 900,
     noise_scale: float = 1.0,
+    monthly_regimes: bool = False,
 ) -> tuple[Bar, ...]:
     result: list[Bar] = []
     current_date = date(2022, 1, 3)
@@ -34,7 +38,11 @@ def _bars(
         if current_date.weekday() >= 5:
             current_date += timedelta(days=1)
             continue
-        base_return = 0.0016 - rank * 0.00018
+        if monthly_regimes:
+            regime_return = 0.003 if (index // 21) % 3 != 2 else -0.004
+            base_return = regime_return - rank * 0.00018
+        else:
+            base_return = 0.0016 - rank * 0.00018
         alternating_noise = (0.009 if index % 2 == 0 else -0.008) * noise_scale
         daily_return = base_return + alternating_noise
         open_price = close * (1.0 + daily_return * 0.2)
@@ -188,6 +196,110 @@ def test_inverse_variance_first_allocation_does_not_read_future_bars(
     )
 
     assert changed.rebalances[0] == baseline.rebalances[0]
+
+
+def test_shadow_episodes_are_contiguous_and_reconcile_full_return(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    report = compare_etf_rotation_shadow_episodes(
+        etf_bars,
+        security_ids=tuple(etf_bars),
+    )
+
+    assert report.episode_count == len(report.episodes)
+    assert report.episode_count > 10
+    assert report.baseline_reconciled
+    assert report.candidate_reconciled
+    assert report.selection_agreement_ratio == 1.0
+    assert all(
+        current.evaluation_end < following.execution_date
+        for current, following in zip(report.episodes, report.episodes[1:], strict=False)
+    )
+
+
+def test_shadow_comparison_reduces_high_volatility_downside_without_changing_rank() -> None:
+    high_volatility_bars = {
+        f"SSE:51{rank:04d}": _bars(
+            f"SSE:51{rank:04d}",
+            rank=rank,
+            count=1_200,
+            noise_scale=3.0,
+            monthly_regimes=True,
+        )
+        for rank in range(10)
+    }
+    report = compare_etf_rotation_shadow_episodes(
+        high_volatility_bars,
+        security_ids=tuple(high_volatility_bars),
+        validation_config=EtfRotationShadowValidationConfig(
+            minimum_episode_count=10,
+            minimum_downside_episode_count=2,
+        ),
+    )
+
+    assert report.selection_agreement_ratio == 1.0
+    assert report.exposure_reduction_ratio > 0
+    assert report.candidate_average_target_fraction < report.baseline_average_target_fraction
+    assert report.downside_episode_count >= 2
+    assert report.downside_improvement_ratio is not None
+    assert report.downside_improvement_ratio >= 0.75
+    assert report.downside_loss_reduction is not None
+    assert report.downside_loss_reduction > 0
+    assert report.upside_retention_ratio is not None
+    assert report.status in {
+        EtfRotationShadowValidationStatus.PASS,
+        EtfRotationShadowValidationStatus.WATCH,
+    }
+
+
+def test_shadow_first_episode_does_not_read_later_bars(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    security_ids = tuple(etf_bars)
+    baseline = compare_etf_rotation_shadow_episodes(
+        etf_bars,
+        security_ids=security_ids,
+    )
+    first_end = baseline.episodes[0].evaluation_end
+    mutated = {
+        security_id: tuple(
+            bar
+            if bar.trade_date <= first_end
+            else bar.model_copy(
+                update={
+                    "open_price": bar.open_price * 5,
+                    "high_price": bar.high_price * 5,
+                    "low_price": bar.low_price * 5,
+                    "close_price": bar.close_price * 5,
+                }
+            )
+            for bar in bars
+        )
+        for security_id, bars in etf_bars.items()
+    }
+    changed = compare_etf_rotation_shadow_episodes(
+        mutated,
+        security_ids=security_ids,
+    )
+
+    assert changed.episodes[0] == baseline.episodes[0]
+
+
+def test_shadow_comparison_rejects_non_exposure_parameter_changes(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="may differ only by exposure_model",
+    ):
+        compare_etf_rotation_shadow_episodes(
+            etf_bars,
+            security_ids=tuple(etf_bars),
+            candidate_config=EtfRotationBacktestConfig(
+                exposure_model=EtfExposureScalingModel.INVERSE_VARIANCE,
+                rebalance_interval_bars=42,
+            ),
+        )
 
 
 def test_dual_horizon_requires_positive_126_and_252_day_momentum(

@@ -34,6 +34,12 @@ class EtfExposureScalingModel(StrEnum):
     INVERSE_VARIANCE = "INVERSE_VARIANCE"
 
 
+class EtfRotationShadowValidationStatus(StrEnum):
+    PASS = "PASS"
+    WATCH = "WATCH"
+    FAIL = "FAIL"
+
+
 class EtfRotationBacktestConfig(DomainModel):
     signal_model: EtfMomentumSignalModel = EtfMomentumSignalModel.SINGLE_HORIZON
     exposure_model: EtfExposureScalingModel = EtfExposureScalingModel.INVERSE_VOLATILITY
@@ -170,6 +176,67 @@ class EtfRotationWalkForwardFold(DomainModel):
     excess_return: float
     max_drawdown: float
     sharpe_ratio: float
+
+
+class EtfRotationShadowValidationConfig(DomainModel):
+    minimum_episode_count: int = Field(default=36, ge=1)
+    minimum_downside_episode_count: int = Field(default=8, ge=1)
+    minimum_selection_agreement_ratio: float = Field(default=1.0, ge=0, le=1)
+    minimum_exposure_reduction_ratio: float = Field(default=0.20, ge=0, le=1)
+    minimum_downside_improvement_ratio: float = Field(default=0.75, ge=0, le=1)
+    minimum_downside_loss_reduction: float = Field(default=0.15, ge=0, le=1)
+    minimum_upside_retention_ratio: float = Field(default=0.70, ge=0)
+    maximum_return_sacrifice: float = Field(default=0.05, ge=0, le=1)
+
+
+class EtfRotationShadowEpisode(DomainModel):
+    episode_id: NonEmptyString
+    signal_date: date
+    execution_date: date
+    evaluation_end: date
+    selected_security_ids: tuple[NonEmptyString, ...]
+    selection_matches: bool
+    baseline_target_fraction: float = Field(ge=0, le=1)
+    candidate_target_fraction: float = Field(ge=0, le=1)
+    baseline_return: float
+    candidate_return: float
+    return_delta: float
+    baseline_max_drawdown: float = Field(le=0)
+    candidate_max_drawdown: float = Field(le=0)
+    drawdown_delta: float
+
+
+class EtfRotationShadowComparisonReport(DomainModel):
+    status: EtfRotationShadowValidationStatus
+    validation_config: EtfRotationShadowValidationConfig
+    baseline_exposure_model: EtfExposureScalingModel
+    candidate_exposure_model: EtfExposureScalingModel
+    evaluation_start: date
+    evaluation_end: date
+    episodes: tuple[EtfRotationShadowEpisode, ...]
+    episode_count: int = Field(ge=0)
+    selection_agreement_ratio: float = Field(ge=0, le=1)
+    exposure_reduction_episode_count: int = Field(ge=0)
+    exposure_reduction_ratio: float = Field(ge=0, le=1)
+    baseline_average_target_fraction: float = Field(ge=0, le=1)
+    candidate_average_target_fraction: float = Field(ge=0, le=1)
+    downside_episode_count: int = Field(ge=0)
+    downside_improvement_ratio: float | None = Field(default=None, ge=0, le=1)
+    baseline_mean_downside_return: float | None = None
+    candidate_mean_downside_return: float | None = None
+    downside_loss_reduction: float | None = None
+    upside_episode_count: int = Field(ge=0)
+    upside_retention_ratio: float | None = None
+    candidate_episode_win_ratio: float = Field(ge=0, le=1)
+    baseline_total_return: float
+    candidate_total_return: float
+    baseline_max_drawdown: float = Field(le=0)
+    candidate_max_drawdown: float = Field(le=0)
+    baseline_sharpe_ratio: float
+    candidate_sharpe_ratio: float
+    baseline_reconciled: bool
+    candidate_reconciled: bool
+    notes: tuple[NonEmptyString, ...]
 
 
 class EtfRotationValidationReport(DomainModel):
@@ -476,6 +543,251 @@ def validate_etf_rotation_strategy(
     )
 
 
+def compare_etf_rotation_shadow_episodes(
+    bars_by_security: Mapping[str, Sequence[Bar]],
+    *,
+    security_ids: Sequence[str],
+    baseline_config: EtfRotationBacktestConfig | None = None,
+    candidate_config: EtfRotationBacktestConfig | None = None,
+    validation_config: EtfRotationShadowValidationConfig | None = None,
+    evaluation_start: date | None = None,
+    evaluation_end: date | None = None,
+) -> EtfRotationShadowComparisonReport:
+    """Compare exposure models over contiguous, non-overlapping rebalance episodes."""
+
+    baseline = baseline_config or EtfRotationBacktestConfig()
+    candidate = candidate_config or EtfRotationBacktestConfig(
+        exposure_model=EtfExposureScalingModel.INVERSE_VARIANCE
+    )
+    thresholds = validation_config or EtfRotationShadowValidationConfig()
+    _validate_shadow_comparison_configs(baseline, candidate)
+    baseline_result = run_etf_rotation_backtest(
+        bars_by_security,
+        security_ids=security_ids,
+        config=baseline,
+        evaluation_start=evaluation_start,
+        evaluation_end=evaluation_end,
+    )
+    candidate_result = run_etf_rotation_backtest(
+        bars_by_security,
+        security_ids=security_ids,
+        config=candidate,
+        evaluation_start=evaluation_start,
+        evaluation_end=evaluation_end,
+    )
+    if len(baseline_result.rebalances) != len(candidate_result.rebalances):
+        raise ValueError("shadow comparison requires identical rebalance schedules")
+
+    baseline_curve = baseline_result.equity_curve
+    candidate_curve = candidate_result.equity_curve
+    baseline_dates = tuple(point.trade_date for point in baseline_curve)
+    candidate_dates = tuple(point.trade_date for point in candidate_curve)
+    if baseline_dates != candidate_dates:
+        raise ValueError("shadow comparison requires identical equity-curve dates")
+    date_indexes = {trade_date: index for index, trade_date in enumerate(baseline_dates)}
+    episodes: list[EtfRotationShadowEpisode] = []
+    for index, (baseline_event, candidate_event) in enumerate(
+        zip(
+            baseline_result.rebalances,
+            candidate_result.rebalances,
+            strict=True,
+        )
+    ):
+        if baseline_event.execution_date != candidate_event.execution_date:
+            raise ValueError("shadow comparison requires identical rebalance execution dates")
+        execution_index = date_indexes[baseline_event.execution_date]
+        if execution_index <= 0:
+            raise ValueError("shadow episode requires a prior close equity point")
+        if index + 1 < len(baseline_result.rebalances):
+            next_execution = baseline_result.rebalances[index + 1].execution_date
+            episode_end_index = date_indexes[next_execution] - 1
+        else:
+            episode_end_index = len(baseline_curve) - 1
+        if episode_end_index < execution_index:
+            raise ValueError("shadow episode must include at least one trading date")
+        baseline_values = tuple(
+            point.equity for point in baseline_curve[execution_index - 1 : episode_end_index + 1]
+        )
+        candidate_values = tuple(
+            point.equity for point in candidate_curve[execution_index - 1 : episode_end_index + 1]
+        )
+        baseline_return = baseline_values[-1] / baseline_values[0] - 1.0
+        candidate_return = candidate_values[-1] / candidate_values[0] - 1.0
+        selection_matches = (
+            baseline_event.selected_security_ids == candidate_event.selected_security_ids
+            and tuple(baseline_event.momentum_scores) == tuple(candidate_event.momentum_scores)
+            and baseline_event.momentum_scores == candidate_event.momentum_scores
+        )
+        baseline_drawdown = _maximum_drawdown(baseline_values)
+        candidate_drawdown = _maximum_drawdown(candidate_values)
+        episodes.append(
+            EtfRotationShadowEpisode(
+                episode_id=f"episode-{index + 1:03d}",
+                signal_date=baseline_event.signal_date,
+                execution_date=baseline_event.execution_date,
+                evaluation_end=baseline_dates[episode_end_index],
+                selected_security_ids=baseline_event.selected_security_ids,
+                selection_matches=selection_matches,
+                baseline_target_fraction=baseline_event.target_position_fraction,
+                candidate_target_fraction=candidate_event.target_position_fraction,
+                baseline_return=baseline_return,
+                candidate_return=candidate_return,
+                return_delta=candidate_return - baseline_return,
+                baseline_max_drawdown=baseline_drawdown,
+                candidate_max_drawdown=candidate_drawdown,
+                drawdown_delta=candidate_drawdown - baseline_drawdown,
+            )
+        )
+
+    episode_count = len(episodes)
+    selection_agreement_ratio = (
+        sum(episode.selection_matches for episode in episodes) / episode_count
+        if episode_count
+        else 0.0
+    )
+    exposure_reductions = tuple(
+        episode
+        for episode in episodes
+        if episode.candidate_target_fraction < episode.baseline_target_fraction - 1e-12
+    )
+    exposure_reduction_ratio = len(exposure_reductions) / episode_count if episode_count else 0.0
+    baseline_average_target = (
+        statistics.fmean(episode.baseline_target_fraction for episode in episodes)
+        if episodes
+        else 0.0
+    )
+    candidate_average_target = (
+        statistics.fmean(episode.candidate_target_fraction for episode in episodes)
+        if episodes
+        else 0.0
+    )
+    downside = tuple(episode for episode in episodes if episode.baseline_return < 0)
+    upside = tuple(episode for episode in episodes if episode.baseline_return > 0)
+    downside_improvement_ratio = (
+        sum(episode.candidate_return >= episode.baseline_return - 1e-12 for episode in downside)
+        / len(downside)
+        if downside
+        else None
+    )
+    baseline_mean_downside = (
+        statistics.fmean(episode.baseline_return for episode in downside) if downside else None
+    )
+    candidate_mean_downside = (
+        statistics.fmean(episode.candidate_return for episode in downside) if downside else None
+    )
+    downside_loss_reduction = None
+    if baseline_mean_downside is not None and baseline_mean_downside < 0:
+        candidate_loss_magnitude = abs(min(candidate_mean_downside or 0.0, 0.0))
+        downside_loss_reduction = 1.0 - candidate_loss_magnitude / abs(baseline_mean_downside)
+    upside_retention_ratio = None
+    if upside:
+        baseline_upside = sum(episode.baseline_return for episode in upside)
+        if baseline_upside > 0:
+            upside_retention_ratio = (
+                sum(episode.candidate_return for episode in upside) / baseline_upside
+            )
+    candidate_win_ratio = (
+        sum(episode.candidate_return >= episode.baseline_return - 1e-12 for episode in episodes)
+        / episode_count
+        if episode_count
+        else 0.0
+    )
+    compounded_baseline = math.prod(1.0 + episode.baseline_return for episode in episodes) - 1.0
+    compounded_candidate = math.prod(1.0 + episode.candidate_return for episode in episodes) - 1.0
+    baseline_reconciled = math.isclose(
+        compounded_baseline,
+        baseline_result.total_return,
+        rel_tol=0,
+        abs_tol=1e-10,
+    )
+    candidate_reconciled = math.isclose(
+        compounded_candidate,
+        candidate_result.total_return,
+        rel_tol=0,
+        abs_tol=1e-10,
+    )
+    structural_pass = (
+        baseline_reconciled
+        and candidate_reconciled
+        and selection_agreement_ratio >= thresholds.minimum_selection_agreement_ratio
+    )
+    sample_pass = (
+        episode_count >= thresholds.minimum_episode_count
+        and len(downside) >= thresholds.minimum_downside_episode_count
+    )
+    exposure_pass = (
+        exposure_reduction_ratio >= thresholds.minimum_exposure_reduction_ratio
+        and candidate_average_target < baseline_average_target
+    )
+    downside_pass = (
+        downside_improvement_ratio is not None
+        and downside_improvement_ratio >= thresholds.minimum_downside_improvement_ratio
+        and downside_loss_reduction is not None
+        and downside_loss_reduction >= thresholds.minimum_downside_loss_reduction
+    )
+    upside_pass = (
+        upside_retention_ratio is not None
+        and upside_retention_ratio >= thresholds.minimum_upside_retention_ratio
+    )
+    return_pass = (
+        candidate_result.total_return > 0
+        and baseline_result.total_return - candidate_result.total_return
+        <= thresholds.maximum_return_sacrifice
+    )
+    risk_pass = (
+        candidate_result.sharpe_ratio >= baseline_result.sharpe_ratio
+        and candidate_result.max_drawdown >= baseline_result.max_drawdown
+    )
+    status = EtfRotationShadowValidationStatus.WATCH
+    if not structural_pass or candidate_result.total_return <= 0:
+        status = EtfRotationShadowValidationStatus.FAIL
+    elif all((sample_pass, exposure_pass, downside_pass, upside_pass, return_pass, risk_pass)):
+        status = EtfRotationShadowValidationStatus.PASS
+    notes = (
+        f"structural_pass={structural_pass}",
+        f"sample_pass={sample_pass}",
+        f"exposure_pass={exposure_pass}",
+        f"downside_pass={downside_pass}",
+        f"upside_pass={upside_pass}",
+        f"return_pass={return_pass}",
+        f"risk_pass={risk_pass}",
+        "paired_non_overlapping_rebalance_episodes",
+        "research_only_no_live_order_path",
+    )
+    return EtfRotationShadowComparisonReport(
+        status=status,
+        validation_config=thresholds,
+        baseline_exposure_model=baseline.exposure_model,
+        candidate_exposure_model=candidate.exposure_model,
+        evaluation_start=baseline_result.evaluation_start,
+        evaluation_end=baseline_result.evaluation_end,
+        episodes=tuple(episodes),
+        episode_count=episode_count,
+        selection_agreement_ratio=selection_agreement_ratio,
+        exposure_reduction_episode_count=len(exposure_reductions),
+        exposure_reduction_ratio=exposure_reduction_ratio,
+        baseline_average_target_fraction=baseline_average_target,
+        candidate_average_target_fraction=candidate_average_target,
+        downside_episode_count=len(downside),
+        downside_improvement_ratio=downside_improvement_ratio,
+        baseline_mean_downside_return=baseline_mean_downside,
+        candidate_mean_downside_return=candidate_mean_downside,
+        downside_loss_reduction=downside_loss_reduction,
+        upside_episode_count=len(upside),
+        upside_retention_ratio=upside_retention_ratio,
+        candidate_episode_win_ratio=candidate_win_ratio,
+        baseline_total_return=baseline_result.total_return,
+        candidate_total_return=candidate_result.total_return,
+        baseline_max_drawdown=baseline_result.max_drawdown,
+        candidate_max_drawdown=candidate_result.max_drawdown,
+        baseline_sharpe_ratio=baseline_result.sharpe_ratio,
+        candidate_sharpe_ratio=candidate_result.sharpe_ratio,
+        baseline_reconciled=baseline_reconciled,
+        candidate_reconciled=candidate_reconciled,
+        notes=notes,
+    )
+
+
 def walk_forward_validate_etf_rotation(
     bars_by_security: Mapping[str, Sequence[Bar]],
     *,
@@ -526,6 +838,18 @@ def walk_forward_validate_etf_rotation(
         fold_number += 1
         fold_start += config.walk_forward_step_bars
     return tuple(folds)
+
+
+def _validate_shadow_comparison_configs(
+    baseline: EtfRotationBacktestConfig,
+    candidate: EtfRotationBacktestConfig,
+) -> None:
+    if baseline.exposure_model is candidate.exposure_model:
+        raise ValueError("shadow comparison requires different exposure models")
+    baseline_payload = baseline.model_dump(exclude={"exposure_model"})
+    candidate_payload = candidate.model_dump(exclude={"exposure_model"})
+    if baseline_payload != candidate_payload:
+        raise ValueError("shadow comparison configs may differ only by exposure_model")
 
 
 def _positive_momentum_scores(

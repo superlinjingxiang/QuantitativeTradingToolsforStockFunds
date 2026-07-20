@@ -2,7 +2,7 @@
 
 ## 本轮目标
 
-本轮继续补齐固定十 ETF 组合策略的可信执行证据。主要变化不是新增第二套策略，而是在现有 V9 ETF 组合证据、DecisionHub、右侧四个模块和手动账户同一链路中加入容量、冲击成本和 T+0/T+1 交易制度门禁。
+本轮继续补齐固定十 ETF 组合策略的可信执行证据。主要变化不是新增第二套生产策略，而是在现有 V9/V10 ETF 组合证据上补齐容量、冲击成本、T+0/T+1、V13候选审计和多起点影子持有段验证。
 
 当前平台仍是研究、回测和模拟验证工具，不连接真实券商，不执行真实下单，也不承诺未来收益。
 
@@ -17,6 +17,19 @@
 - 三个留出只有1/1/2个完整滚动折，最后20%唯一完整折的超额为负，模拟盘偏差仍缺失。候选保持`RESEARCH_ONLY`，不进入当前四模块和账户建议。
 - 预注册：`research/SHORT_TERM_STRATEGY_V13_INVERSE_VARIANCE_PREREGISTRATION_2026-07-20.md`。
 - 结果：`research/SHORT_TERM_STRATEGY_V13_INVERSE_VARIANCE_CANDIDATE_2026-07-20.md`。
+
+## V13多起点影子持有段验证
+
+- 在实现和读取逐调仓结果前，预注册连续、互不重叠持有段定义，以及全样本和最后30%的固定门槛。
+- 新增`EtfRotationShadowEpisode`、结构化比较报告、门槛配置和`compare_etf_rotation_shadow_episodes(...)`。
+- V10/V13只允许`exposure_model`不同；调仓日、证券选择、排名、成本和执行会计必须相同。
+- `etf_rotation_lab`增加`--shadow-compare-v13`，紧凑JSON报告同时输出全样本和指定最终切片结果。
+- 全样本51段、14个V10下跌段，证券选择一致率100%；V13在13/14下跌段改善，平均亏损减少30.41%，上涨收益保留85.87%，最大回撤由-21.54%改善至-13.60%。
+- 最后30%有19段、6个下跌段，平均亏损减少36.66%，上涨收益保留85.57%，V13净收益+35.27%、超额+13.24%，预注册门槛全部通过。
+- 最后20%/25%分别有12/15段，平均亏损减少38.96%/37.05%，上涨收益保留84.42%/85.93%，结果方向一致。
+- 结论为`SHADOW_RESEARCH_PASS`，但V13仍为`RESEARCH_ONLY`；Vue/Electron、DecisionHub、右侧四模块和手动账户继续使用V10。
+- 预注册：`research/SHORT_TERM_STRATEGY_V13_SHADOW_EPISODE_PREREGISTRATION_2026-07-20.md`。
+- 结果：`research/SHORT_TERM_STRATEGY_V13_SHADOW_EPISODE_VALIDATION_2026-07-20.md`。
 
 ## V11双周期确认候选审计
 
@@ -120,7 +133,7 @@ V9 与容量 V1 数字保留为历史快照。V10 的收益改善来自纠正未
 - Ruff format：通过。
 - Ruff lint：通过。
 - mypy：137 个源文件通过。
-- Python 全量回归：331 项通过。
+- Python 全量回归：335 项通过。
 - 发布审计：`RELEASE_AUDIT_OK`。
 - Vitest：1 项通过。
 - Vite 生产构建：通过；ECharts 分包超过 500kB 为已记录的非阻断性能提示。
