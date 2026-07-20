@@ -32,7 +32,7 @@ class MarketDataProvider(Protocol):
 - `CorporateAction`：行为类型、公告/登记/除权日期以及现金和股份影响。
 - `DataHealth`：新鲜度、完整性、一致性、授权和阻断等级。
 - `AnalysisReport`：完整的用户可见策略结果和来源信息。
-- `PortfolioStrategyEvidence`：可选的组合级研究证据；记录固定池验证状态、信号/执行日期、入选标的、横截面排名、目标仓位、收益风险、滚动折和缓存陈旧状态。
+- `PortfolioStrategyEvidence`：可选的组合级研究证据；记录固定池验证状态、信号/执行日期、入选标的、横截面排名、目标仓位、收益风险、滚动折、累计换手、平均调仓换手、累计费用、容量和缓存陈旧状态。
 
 ## AnalysisReport不变量
 
@@ -46,6 +46,7 @@ class MarketDataProvider(Protocol):
 - 解释同时包含正向因素和负向/风险因素；
 - 不交易结果包含有类型的原因。
 - 组合证据只能作为附加门禁和仓位参照，不能覆盖单标的概率预测；`WATCH`、陈旧或未入选不得升级为新增仓位许可。
+- 组合换手和费用必须来自回测实际执行权重差额，不能由界面或容量模块重新推导一套理想化交易路径。
 
 详见 `../../spec/contracts/analysis_report.schema.json`。
 

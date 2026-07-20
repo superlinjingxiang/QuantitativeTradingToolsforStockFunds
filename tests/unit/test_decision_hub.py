@@ -149,7 +149,7 @@ def portfolio_evidence(
     return PortfolioStrategyEvidence(
         security_id="SSE:600519",
         strategy_id="strategy.etf_rotation_portfolio",
-        strategy_version="etf-rotation-v9",
+        strategy_version="etf-rotation-v10",
         validation_status=validation_status,
         as_of_date=date(2026, 6, 30),
         signal_date=date(2026, 6, 27),
@@ -170,8 +170,12 @@ def portfolio_evidence(
         required_walk_forward_fold_count=3,
         walk_forward_positive_ratio=1.0,
         walk_forward_excess_ratio=0.67,
+        cumulative_turnover=6.68,
+        average_rebalance_turnover=0.41,
+        cumulative_transaction_cost=0.0064,
         trading_system="T+1",
         capacity_status=capacity_status,
+        capacity_model_version="etf-capacity-impact-v2",
         capacity_reference_capital=100_000,
         capacity_max_participation_rate=0.008,
         capacity_estimated_round_trip_cost_bps=25.7,
@@ -276,6 +280,22 @@ def test_all_evidence_passes_to_api_candidate_without_real_order_path() -> None:
     assert all(gate.status is EvidenceGateStatus.PASS for gate in report.gates)
     assert report.target_position_limit == 0.05
     assert report.real_order_submission_enabled is False
+
+
+def test_portfolio_gate_includes_execution_accounting_evidence() -> None:
+    report = DecisionHub().build_report(
+        request=request(),
+        analysis_report=analysis().model_copy(
+            update={"portfolio_strategy_evidence": portfolio_evidence()}
+        ),
+        profitability=profitability(),
+        simulation=simulation(),
+    )
+
+    portfolio_gate = next(item for item in report.gates if item.gate_id == "portfolio-strategy")
+    assert portfolio_gate.status is EvidenceGateStatus.PASS
+    assert any("历史平均调仓换手41.0%" in reason for reason in portfolio_gate.reasons)
+    assert any("累计扣除费用/初始资金0.64%" in reason for reason in portfolio_gate.reasons)
 
 
 def test_watch_portfolio_evidence_blocks_new_position_upgrade() -> None:

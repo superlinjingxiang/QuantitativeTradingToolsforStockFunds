@@ -186,12 +186,19 @@ def _portfolio_capacity_reason(analysis_report: AnalysisReport) -> str:
         if evidence.capacity_max_supported_capital is not None
         else ""
     )
+    execution_evidence = (
+        f"；历史平均调仓换手{evidence.average_rebalance_turnover:.1%}，"
+        f"累计扣除费用/初始资金{evidence.cumulative_transaction_cost:.2%}"
+        if evidence.average_rebalance_turnover is not None
+        and evidence.cumulative_transaction_cost is not None
+        else ""
+    )
     return (
         f"容量{evidence.capacity_status}：资金假设"
         f"{evidence.capacity_reference_capital / 10_000:.1f}万元，最大ADV参与率"
         f"{evidence.capacity_max_participation_rate:.2%}，模型往返成本"
         f"{evidence.capacity_estimated_round_trip_cost_bps:.1f}bp"
-        f"{capacity_limit}；交易制度{evidence.trading_system}。"
+        f"{capacity_limit}；交易制度{evidence.trading_system}{execution_evidence}。"
     )
 
 

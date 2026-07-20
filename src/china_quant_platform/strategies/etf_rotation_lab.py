@@ -88,6 +88,7 @@ def validation_summary(
     security_ids: Sequence[str],
     common_dates: Sequence[date],
     oos_start: date,
+    oos_fraction: float,
     full: EtfRotationValidationReport,
     oos: EtfRotationValidationReport,
     capacity: EtfCapacityAuditReport,
@@ -100,9 +101,10 @@ def validation_summary(
         "common_start": common_dates[0].isoformat(),
         "common_end": common_dates[-1].isoformat(),
         "oos_start": oos_start.isoformat(),
+        "oos_fraction": oos_fraction,
         "failures": list(failures),
         "full": full.to_contract_dict(),
-        "oos25": oos.to_contract_dict(),
+        "oos": oos.to_contract_dict(),
         "capacity": capacity.to_contract_dict(),
         "execution_boundary": {
             "signal": "prior_close",
@@ -116,7 +118,7 @@ def compact_validation_summary(summary: Mapping[str, object]) -> dict[str, objec
     """Return the decision-relevant metrics without equity-curve payloads."""
 
     full = summary["full"]
-    oos = summary["oos25"]
+    oos = summary["oos"]
     capacity = summary["capacity"]
     if not isinstance(full, dict) or not isinstance(oos, dict) or not isinstance(capacity, dict):
         raise TypeError("validation summary contains invalid report payloads")
@@ -127,9 +129,10 @@ def compact_validation_summary(summary: Mapping[str, object]) -> dict[str, objec
         "common_start": summary["common_start"],
         "common_end": summary["common_end"],
         "oos_start": summary["oos_start"],
+        "oos_fraction": summary["oos_fraction"],
         "failures": summary["failures"],
         "full": _compact_rotation_report(full),
-        "oos25": _compact_rotation_report(oos),
+        "oos": _compact_rotation_report(oos),
         "capacity": {
             "model_version": capacity["config"]["model_version"],
             "as_of_date": capacity["as_of_date"],
@@ -138,6 +141,11 @@ def compact_validation_summary(summary: Mapping[str, object]) -> dict[str, objec
             "maximum_supported_capital": capacity["maximum_supported_capital"],
             "hard_maximum_supported_capital": capacity["hard_maximum_supported_capital"],
             "trading_systems": capacity["trading_systems"],
+            "missing_observations": [
+                observation
+                for observation in capacity["observations"]
+                if observation["missing_reason"] is not None
+            ],
             "notes": capacity["notes"],
         },
         "execution_boundary": summary["execution_boundary"],
@@ -166,6 +174,9 @@ def _compact_rotation_report(report: Mapping[str, object]) -> dict[str, object]:
         "rebalance_count",
         "active_rebalance_count",
         "average_position_fraction",
+        "cumulative_turnover",
+        "average_rebalance_turnover",
+        "cumulative_transaction_cost",
         "round_trip_cost_bps",
         "selection_counts",
     )
@@ -240,6 +251,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         security_ids=security_ids,
         common_dates=dates,
         oos_start=oos_start,
+        oos_fraction=args.oos_fraction,
         full=full,
         oos=oos,
         capacity=capacity,

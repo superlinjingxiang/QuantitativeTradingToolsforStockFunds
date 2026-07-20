@@ -110,6 +110,56 @@ def test_capacity_uses_only_amount_known_by_signal_date() -> None:
     assert mutated.maximum_supported_capital == baseline.maximum_supported_capital
 
 
+def test_capacity_reuses_backtest_trade_weight_changes() -> None:
+    security_id = "SSE:513300"
+    bars = _bars(security_id)
+    event = EtfRotationRebalanceEvent(
+        signal_date=bars[24].trade_date,
+        execution_date=bars[25].trade_date,
+        selected_security_ids=(security_id,),
+        momentum_scores={security_id: 0.12},
+        target_position_fraction=0.5,
+        target_weights={security_id: 0.5},
+        trade_weight_changes={security_id: 0.1},
+        turnover_fraction=0.1,
+    )
+
+    report = audit_etf_rotation_capacity(
+        {security_id: bars},
+        rebalances=(event,),
+    )
+
+    observation = report.observations[0]
+    assert observation.target_weight_change == pytest.approx(0.1)
+    assert observation.requested_notional == pytest.approx(100_000.0)
+    assert observation.participation_rate == pytest.approx(0.01)
+    assert "turnover_uses_executed_weight_change_when_available" in report.notes
+
+
+def test_capacity_includes_zero_amount_day_conservatively() -> None:
+    security_id = "SSE:513300"
+    original = _bars(security_id)
+    bars = tuple(
+        bar.model_copy(update={"amount": 0.0, "volume": 0.0}) if index == 20 else bar
+        for index, bar in enumerate(original)
+    )
+
+    report = audit_etf_rotation_capacity(
+        {security_id: bars},
+        rebalances=(_event(bars),),
+    )
+
+    observation = report.observations[0]
+    assert observation.missing_reason is None
+    assert observation.adv_amount == pytest.approx(9_500_000.0)
+    assert report.reference_scenario.status is not EtfCapacityStatus.MISSING
+    assert (
+        assess_etf_capacity_scenario(report, portfolio_capital=100_000).status
+        is EtfCapacityStatus.PASS
+    )
+    assert "zero_amount_bars_are_included_conservatively_in_adv" in report.notes
+
+
 def test_capacity_fails_closed_when_adv_history_is_missing() -> None:
     security_id = "SSE:510300"
     bars = _bars(security_id, count=12)

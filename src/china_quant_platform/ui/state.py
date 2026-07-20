@@ -889,7 +889,7 @@ def _portfolio_strategy_summary(report: AnalysisReport) -> str:
         else f"；容量{evidence.capacity_status}"
     )
     return (
-        f"ETF轮动V9 {evidence.validation_status}；信号日{evidence.signal_date.isoformat()}；"
+        f"ETF轮动V10 {evidence.validation_status}；信号日{evidence.signal_date.isoformat()}；"
         f"候选{selected or '空仓'}；总研究仓位{evidence.target_position_fraction:.1%}"
         f"{capacity_note}{cache_note}"
     )
@@ -909,7 +909,12 @@ def _portfolio_forecast_context(report: AnalysisReport) -> str:
         if evidence.current_security_momentum is not None
         else ""
     )
-    return f"{rank}{momentum}；组合排名不替代单标的概率区间。"
+    excess = (
+        f"；组合留出期相对等权超额{evidence.excess_return:.1%}"
+        if evidence.excess_return is not None
+        else ""
+    )
+    return f"{rank}{momentum}{excess}；组合历史证据不替代单标的概率区间。"
 
 
 def _portfolio_operation_context(report: AnalysisReport) -> str:
@@ -935,11 +940,20 @@ def _portfolio_operation_context(report: AnalysisReport) -> str:
         if evidence.capacity_max_supported_capital is not None
         else ""
     )
+    execution_cost = (
+        f"；历史平均调仓换手{evidence.average_rebalance_turnover:.1%}，"
+        f"累计换手{evidence.cumulative_turnover:.2f}倍，"
+        f"累计扣除费用/初始资金{evidence.cumulative_transaction_cost:.2%}"
+        if evidence.average_rebalance_turnover is not None
+        and evidence.cumulative_turnover is not None
+        and evidence.cumulative_transaction_cost is not None
+        else ""
+    )
     return (
         f"{selected}组合候选；当前标的研究权重"
         f"{evidence.current_security_target_fraction:.1%}；{next_rebalance}；"
         f"验证状态{evidence.validation_status}；交易制度{evidence.trading_system}；"
-        f"{capacity}{capacity_limit}。"
+        f"{capacity}{capacity_limit}{execution_cost}。"
     )
 
 

@@ -129,6 +129,64 @@ def test_stress_cost_cannot_improve_rotation_return(
     assert stress.round_trip_cost_bps == 45.0
 
 
+def test_rebalance_trades_only_weight_delta_and_reconciles_costs(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    flat_after_signal = {
+        security_id: tuple(
+            bar
+            if index <= 252
+            else bar.model_copy(
+                update={
+                    "open_price": bars[252].close_price,
+                    "high_price": bars[252].close_price,
+                    "low_price": bars[252].close_price,
+                    "close_price": bars[252].close_price,
+                }
+            )
+            for index, bar in enumerate(bars)
+        )
+        for security_id, bars in etf_bars.items()
+    }
+    config = EtfRotationBacktestConfig(
+        target_annual_volatility=1.0,
+        min_position_fraction=1.0,
+        max_position_fraction=1.0,
+        round_trip_cost_bps=15.0,
+    )
+
+    result = run_etf_rotation_backtest(
+        flat_after_signal,
+        security_ids=tuple(flat_after_signal),
+        config=config,
+    )
+
+    one_way_cost = config.round_trip_cost_bps / 20_000.0
+    expected_final_equity = (1.0 - one_way_cost) / (1.0 + one_way_cost)
+    assert result.total_return == pytest.approx(expected_final_equity - 1.0)
+    assert result.rebalances[0].turnover_fraction == pytest.approx(1.0 / (1.0 + one_way_cost))
+    assert result.rebalances[1].turnover_fraction == pytest.approx(0.0, abs=1e-12)
+    assert result.rebalances[1].trade_weight_changes == {}
+    assert result.cumulative_turnover == pytest.approx(1.0 + 1.0 / (1.0 + one_way_cost))
+    assert result.cumulative_transaction_cost == pytest.approx(
+        2.0 * one_way_cost / (1.0 + one_way_cost)
+    )
+
+
+def test_rebalance_event_exposes_target_weights_and_actual_turnover(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    result = run_etf_rotation_backtest(etf_bars, security_ids=tuple(etf_bars))
+
+    for event in result.rebalances:
+        assert set(event.target_weights) == set(event.selected_security_ids)
+        assert sum(event.target_weights.values()) == pytest.approx(event.target_position_fraction)
+        assert sum(abs(value) for value in event.trade_weight_changes.values()) == pytest.approx(
+            event.turnover_fraction
+        )
+        assert event.transaction_cost_fraction >= 0
+
+
 def test_validation_requires_return_risk_cost_and_rolling_evidence(
     etf_bars: dict[str, tuple[Bar, ...]],
 ) -> None:

@@ -225,9 +225,12 @@ class PortfolioStrategyEvidence(DomainModel):
     required_walk_forward_fold_count: int = Field(default=1, ge=1)
     walk_forward_positive_ratio: float | None = Field(default=None, ge=0, le=1)
     walk_forward_excess_ratio: float | None = Field(default=None, ge=0, le=1)
+    cumulative_turnover: float | None = Field(default=None, ge=0)
+    average_rebalance_turnover: float | None = Field(default=None, ge=0, le=2)
+    cumulative_transaction_cost: float | None = Field(default=None, ge=0)
     trading_system: NonEmptyString = "UNKNOWN"
     capacity_status: NonEmptyString = "MISSING"
-    capacity_model_version: NonEmptyString = "etf-capacity-impact-v1"
+    capacity_model_version: NonEmptyString = "etf-capacity-impact-v2"
     capacity_reference_capital: float | None = Field(default=None, gt=0)
     capacity_max_participation_rate: float | None = Field(default=None, ge=0)
     capacity_estimated_round_trip_cost_bps: float | None = Field(default=None, ge=0)

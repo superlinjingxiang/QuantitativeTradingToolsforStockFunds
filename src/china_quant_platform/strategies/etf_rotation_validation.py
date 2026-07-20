@@ -61,6 +61,31 @@ class EtfRotationRebalanceEvent(DomainModel):
     selected_security_ids: tuple[NonEmptyString, ...]
     momentum_scores: dict[str, float]
     target_position_fraction: float = Field(ge=0, le=1)
+    target_weights: dict[str, float] = Field(default_factory=dict)
+    trade_weight_changes: dict[str, float] = Field(default_factory=dict)
+    turnover_fraction: float = Field(default=0.0, ge=0, le=2)
+    transaction_cost_fraction: float = Field(default=0.0, ge=0, lt=1)
+
+    @model_validator(mode="after")
+    def validate_rebalance(self) -> Self:
+        if self.target_weights:
+            if set(self.target_weights) != set(self.selected_security_ids):
+                raise ValueError("target_weights must match selected_security_ids")
+            if any(weight < 0 or weight > 1 for weight in self.target_weights.values()):
+                raise ValueError("target weights must be between zero and one")
+            if not math.isclose(
+                sum(self.target_weights.values()),
+                self.target_position_fraction,
+                abs_tol=1e-9,
+            ):
+                raise ValueError("target weights must sum to target_position_fraction")
+        if self.trade_weight_changes and not math.isclose(
+            sum(abs(value) for value in self.trade_weight_changes.values()),
+            self.turnover_fraction,
+            abs_tol=1e-9,
+        ):
+            raise ValueError("trade weight changes must sum to turnover_fraction")
+        return self
 
 
 class EtfRotationAllocationSnapshot(DomainModel):
@@ -101,6 +126,9 @@ class EtfRotationBacktestResult(DomainModel):
     rebalance_count: int = Field(ge=0)
     active_rebalance_count: int = Field(ge=0)
     average_position_fraction: float = Field(ge=0, le=1)
+    cumulative_turnover: float = Field(ge=0)
+    average_rebalance_turnover: float = Field(ge=0, le=2)
+    cumulative_transaction_cost: float = Field(ge=0)
     round_trip_cost_bps: float = Field(ge=0)
     selection_counts: dict[str, int]
     equity_curve: tuple[EtfRotationEquityPoint, ...]
@@ -161,11 +189,12 @@ def build_current_etf_rotation_allocation(
         1,
         active_config.rebalance_interval_bars - bars_since_rebalance,
     )
-    per_security_weight = (
-        latest.target_position_fraction / len(latest.selected_security_ids)
-        if latest.selected_security_ids
-        else 0.0
-    )
+    target_weights = latest.target_weights
+    if not target_weights and latest.selected_security_ids:
+        per_security_weight = latest.target_position_fraction / len(latest.selected_security_ids)
+        target_weights = {
+            security_id: per_security_weight for security_id in latest.selected_security_ids
+        }
     return EtfRotationAllocationSnapshot(
         as_of_date=result.evaluation_end,
         signal_date=latest.signal_date,
@@ -173,9 +202,7 @@ def build_current_etf_rotation_allocation(
         selected_security_ids=latest.selected_security_ids,
         momentum_scores=latest.momentum_scores,
         target_position_fraction=latest.target_position_fraction,
-        target_weights={
-            security_id: per_security_weight for security_id in latest.selected_security_ids
-        },
+        target_weights=target_weights,
         bars_since_rebalance=bars_since_rebalance,
         bars_until_next_rebalance=bars_until_next_rebalance,
     )
@@ -222,17 +249,18 @@ def run_etf_rotation_backtest(
         raise ValueError("evaluation interval must contain at least two common trading dates")
 
     equity = 1.0
-    held: tuple[str, ...] = ()
-    held_fraction = 0.0
+    cash = 1.0
+    shares: dict[str, float] = {}
     one_way_cost = active_config.round_trip_cost_bps / 20_000.0
     equity_curve = [EtfRotationEquityPoint(trade_date=common_dates[start_index - 1], equity=equity)]
     rebalances: list[EtfRotationRebalanceEvent] = []
     selection_counts = {security_id: 0 for security_id in identifiers}
     position_fractions: list[float] = []
+    cumulative_turnover = 0.0
+    cumulative_transaction_cost = 0.0
 
     for index in range(start_index, end_index + 1):
         trade_date = common_dates[index]
-        previous_date = common_dates[index - 1]
         is_rebalance = (index - warmup) % active_config.rebalance_interval_bars == 0
         if is_rebalance:
             signal_index = index - 1
@@ -253,44 +281,69 @@ def run_etf_rotation_backtest(
                 signal_index=signal_index,
                 config=active_config,
             )
-            equity = _liquidate_at_open(
-                equity,
-                indexed,
-                held,
-                held_fraction,
-                trade_date,
-                previous_date,
-                one_way_cost,
+            per_security_weight = target_fraction / len(selected) if selected else 0.0
+            target_weights = {security_id: per_security_weight for security_id in selected}
+            (
+                cash,
+                shares,
+                trade_weight_changes,
+                turnover_fraction,
+                transaction_cost_fraction,
+                transaction_cost,
+            ) = _rebalance_at_open(
+                cash=cash,
+                shares=shares,
+                target_weights=target_weights,
+                indexed=indexed,
+                trade_date=trade_date,
+                one_way_cost=one_way_cost,
             )
-            held = selected
-            held_fraction = target_fraction
-            if held:
-                equity *= 1.0 - one_way_cost * held_fraction
-                equity *= _cash_blended_factor(
-                    _average_price_factor(indexed, held, trade_date, trade_date, use_open=True),
-                    held_fraction,
-                )
-                position_fractions.append(held_fraction)
-                for security_id in held:
+            cumulative_turnover += turnover_fraction
+            cumulative_transaction_cost += transaction_cost
+            if selected:
+                for security_id in selected:
                     selection_counts[security_id] += 1
             rebalances.append(
                 EtfRotationRebalanceEvent(
                     signal_date=common_dates[signal_index],
                     execution_date=trade_date,
-                    selected_security_ids=held,
+                    selected_security_ids=selected,
                     momentum_scores={security_id: score for score, security_id in scores},
-                    target_position_fraction=held_fraction,
+                    target_position_fraction=target_fraction,
+                    target_weights=target_weights,
+                    trade_weight_changes=trade_weight_changes,
+                    turnover_fraction=turnover_fraction,
+                    transaction_cost_fraction=transaction_cost_fraction,
                 )
             )
-        elif held:
-            equity *= _cash_blended_factor(
-                _average_price_factor(indexed, held, trade_date, previous_date),
-                held_fraction,
+        equity = _portfolio_value(
+            cash,
+            shares,
+            indexed,
+            trade_date,
+            use_open=False,
+        )
+        position_fractions.append(
+            _portfolio_position_fraction(
+                equity,
+                shares,
+                indexed,
+                trade_date,
+                use_open=False,
             )
+        )
         equity_curve.append(EtfRotationEquityPoint(trade_date=trade_date, equity=equity))
 
-    if held:
-        equity *= 1.0 - one_way_cost * held_fraction
+    if shares:
+        final_market_value = sum(
+            quantity * indexed[security_id][common_dates[end_index]].close_price
+            for security_id, quantity in shares.items()
+        )
+        final_transaction_cost = final_market_value * one_way_cost
+        final_turnover = final_market_value / equity
+        equity -= final_transaction_cost
+        cumulative_turnover += final_turnover
+        cumulative_transaction_cost += final_transaction_cost
         equity_curve[-1] = equity_curve[-1].model_copy(update={"equity": equity})
 
     daily_returns = [
@@ -302,7 +355,7 @@ def run_etf_rotation_backtest(
     total_return = equity - 1.0
     benchmark_return = statistics.fmean(
         indexed[security_id][common_dates[end_index]].close_price
-        / indexed[security_id][common_dates[start_index]].close_price
+        / indexed[security_id][common_dates[start_index]].open_price
         - 1.0
         for security_id in identifiers
     )
@@ -320,6 +373,11 @@ def run_etf_rotation_backtest(
         average_position_fraction=(
             statistics.fmean(position_fractions) if position_fractions else 0.0
         ),
+        cumulative_turnover=cumulative_turnover,
+        average_rebalance_turnover=(
+            statistics.fmean(event.turnover_fraction for event in rebalances) if rebalances else 0.0
+        ),
+        cumulative_transaction_cost=cumulative_transaction_cost,
         round_trip_cost_bps=active_config.round_trip_cost_bps,
         selection_counts={key: value for key, value in selection_counts.items() if value},
         equity_curve=tuple(equity_curve),
@@ -498,60 +556,115 @@ def _target_position_fraction(
     )
 
 
-def _liquidate_at_open(
-    equity: float,
-    indexed: Mapping[str, Mapping[date, Bar]],
-    held: Sequence[str],
-    held_fraction: float,
-    trade_date: date,
-    previous_date: date,
-    one_way_cost: float,
-) -> float:
-    if not held:
-        return equity
-    overnight_factor = _average_price_factor(
-        indexed,
-        held,
-        trade_date,
-        previous_date,
-        use_open=True,
-    )
-    return (
-        equity
-        * _cash_blended_factor(overnight_factor, held_fraction)
-        * (1.0 - one_way_cost * held_fraction)
-    )
-
-
-def _average_price_factor(
-    indexed: Mapping[str, Mapping[date, Bar]],
-    held: Sequence[str],
-    current_date: date,
-    previous_date: date,
+def _rebalance_at_open(
     *,
-    use_open: bool = False,
-) -> float:
-    if use_open and current_date == previous_date:
-        return statistics.fmean(
-            indexed[security_id][current_date].close_price
-            / indexed[security_id][current_date].open_price
-            for security_id in held
+    cash: float,
+    shares: Mapping[str, float],
+    target_weights: Mapping[str, float],
+    indexed: Mapping[str, Mapping[date, Bar]],
+    trade_date: date,
+    one_way_cost: float,
+) -> tuple[float, dict[str, float], dict[str, float], float, float, float]:
+    current_notionals = {
+        security_id: quantity * indexed[security_id][trade_date].open_price
+        for security_id, quantity in shares.items()
+    }
+    equity_before_cost = cash + sum(current_notionals.values())
+    if equity_before_cost <= 0:
+        raise ValueError("portfolio equity must remain positive before rebalance")
+
+    equity_after_cost = equity_before_cost
+    target_notionals: dict[str, float] = {}
+    transaction_cost = 0.0
+    for _ in range(32):
+        target_notionals = {
+            security_id: equity_after_cost * weight
+            for security_id, weight in target_weights.items()
+        }
+        traded_notional = sum(
+            abs(target_notionals.get(security_id, 0.0) - current_notionals.get(security_id, 0.0))
+            for security_id in set(current_notionals) | set(target_notionals)
         )
-    if use_open:
-        return statistics.fmean(
-            indexed[security_id][current_date].open_price
-            / indexed[security_id][previous_date].close_price
-            for security_id in held
+        transaction_cost = one_way_cost * traded_notional
+        updated_equity = equity_before_cost - transaction_cost
+        if updated_equity <= 0:
+            raise ValueError("transaction costs exhausted portfolio equity")
+        if math.isclose(updated_equity, equity_after_cost, rel_tol=0, abs_tol=1e-14):
+            equity_after_cost = updated_equity
+            break
+        equity_after_cost = updated_equity
+    target_notionals = {
+        security_id: equity_after_cost * weight for security_id, weight in target_weights.items()
+    }
+    trade_weight_changes = {
+        security_id: (
+            target_notionals.get(security_id, 0.0) - current_notionals.get(security_id, 0.0)
         )
-    return statistics.fmean(
-        indexed[security_id][current_date].close_price
-        / indexed[security_id][previous_date].close_price
-        for security_id in held
+        / equity_before_cost
+        for security_id in set(current_notionals) | set(target_notionals)
+        if not math.isclose(
+            target_notionals.get(security_id, 0.0),
+            current_notionals.get(security_id, 0.0),
+            rel_tol=0,
+            abs_tol=1e-14,
+        )
+    }
+    turnover_fraction = sum(abs(value) for value in trade_weight_changes.values())
+    new_shares = {
+        security_id: notional / indexed[security_id][trade_date].open_price
+        for security_id, notional in target_notionals.items()
+        if notional > 0
+    }
+    new_cash = equity_after_cost - sum(target_notionals.values())
+    return (
+        max(new_cash, 0.0),
+        new_shares,
+        trade_weight_changes,
+        turnover_fraction,
+        transaction_cost / equity_before_cost,
+        transaction_cost,
     )
 
 
-def _cash_blended_factor(asset_factor: float, position_fraction: float) -> float:
-    return 1.0 + position_fraction * (asset_factor - 1.0)
+def _portfolio_value(
+    cash: float,
+    shares: Mapping[str, float],
+    indexed: Mapping[str, Mapping[date, Bar]],
+    trade_date: date,
+    *,
+    use_open: bool,
+) -> float:
+    return cash + sum(
+        quantity
+        * (
+            indexed[security_id][trade_date].open_price
+            if use_open
+            else indexed[security_id][trade_date].close_price
+        )
+        for security_id, quantity in shares.items()
+    )
+
+
+def _portfolio_position_fraction(
+    equity: float,
+    shares: Mapping[str, float],
+    indexed: Mapping[str, Mapping[date, Bar]],
+    trade_date: date,
+    *,
+    use_open: bool,
+) -> float:
+    if equity <= 0:
+        return 0.0
+    market_value = sum(
+        quantity
+        * (
+            indexed[security_id][trade_date].open_price
+            if use_open
+            else indexed[security_id][trade_date].close_price
+        )
+        for security_id, quantity in shares.items()
+    )
+    return min(1.0, max(0.0, market_value / equity))
 
 
 def _maximum_drawdown(values: Iterable[float]) -> float:

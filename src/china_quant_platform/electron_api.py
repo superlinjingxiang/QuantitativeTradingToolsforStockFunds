@@ -576,7 +576,7 @@ class ElectronBackendService:
                 PortfolioStrategyEvidence(
                     security_id=security_id,
                     strategy_id="strategy.etf_rotation_portfolio",
-                    strategy_version="etf-rotation-v9",
+                    strategy_version="etf-rotation-v10",
                     validation_status="MISSING",
                     as_of_date=as_of.date(),
                     trading_system=classify_etf_trading_system(
@@ -948,7 +948,7 @@ def _portfolio_evidence_from_rotation_cache(
     return PortfolioStrategyEvidence(
         security_id=security_id,
         strategy_id="strategy.etf_rotation_portfolio",
-        strategy_version="etf-rotation-v9",
+        strategy_version="etf-rotation-v10",
         validation_status=validation.status.value,
         as_of_date=allocation.as_of_date,
         signal_date=allocation.signal_date,
@@ -969,6 +969,9 @@ def _portfolio_evidence_from_rotation_cache(
         required_walk_forward_fold_count=validation.config.minimum_walk_forward_folds,
         walk_forward_positive_ratio=validation.walk_forward_positive_ratio,
         walk_forward_excess_ratio=validation.walk_forward_excess_ratio,
+        cumulative_turnover=validation.base.cumulative_turnover,
+        average_rebalance_turnover=validation.base.average_rebalance_turnover,
+        cumulative_transaction_cost=validation.base.cumulative_transaction_cost,
         trading_system=cached.capacity.trading_systems[security_id].value,
         capacity_status=capacity.status.value,
         capacity_model_version=cached.capacity.config.model_version,

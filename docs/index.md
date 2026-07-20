@@ -27,6 +27,7 @@
 - 截至 2026-07-20 的近期改动与当前状态：PROJECT_STATUS_2026-07-20.md
 - 2026-07-20 ETF容量、冲击成本和交易制度改动：CHANGELOG_2026-07-20.md
 - ETF组合容量、冲击成本与T+0/T+1验证：research/ETF_CAPACITY_IMPACT_VALIDATION_2026-07-20.md
+- 短线策略 V10 ETF差额调仓、真实换手费用与多时间切片验证：research/SHORT_TERM_STRATEGY_VALIDATION_V10_TURNOVER_2026-07-20.md
 - 截至 2026-07-17、覆盖至 `8231aec` 的近期改动与当前状态：PROJECT_STATUS_2026-07-17.md
 - 2026-07-17 近期整合发布说明（架构、缓存、界面、荐股、账户、预测校准与 ETF 组合证据）：CHANGELOG_2026-07-17.md
 - 截至 2026-07-14 的项目状态总览：PROJECT_STATUS_2026-07-14.md

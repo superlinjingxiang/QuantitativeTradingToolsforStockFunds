@@ -40,7 +40,7 @@ class EtfCapacityAuditConfig(DomainModel):
     with the already established 45bp stress budget.
     """
 
-    model_version: NonEmptyString = "etf-capacity-impact-v1"
+    model_version: NonEmptyString = "etf-capacity-impact-v2"
     adv_lookback_bars: int = Field(default=20, ge=5)
     target_participation_rate: float = Field(default=0.02, gt=0, le=1)
     maximum_participation_rate: float = Field(default=0.05, gt=0, le=1)
@@ -175,12 +175,16 @@ def audit_etf_rotation_capacity(
 
     for event in ordered_rebalances:
         selected = tuple(dict.fromkeys(event.selected_security_ids))
-        target_weight = event.target_position_fraction / len(selected) if selected else 0.0
-        target_weights = {security_id: target_weight for security_id in selected}
-        for security_id in sorted(set(previous_weights) | set(target_weights)):
-            weight_change = target_weights.get(security_id, 0.0) - previous_weights.get(
-                security_id, 0.0
-            )
+        target_weights = event.target_weights
+        if not target_weights:
+            target_weight = event.target_position_fraction / len(selected) if selected else 0.0
+            target_weights = {security_id: target_weight for security_id in selected}
+        trade_weight_changes = event.trade_weight_changes or {
+            security_id: target_weights.get(security_id, 0.0)
+            - previous_weights.get(security_id, 0.0)
+            for security_id in set(previous_weights) | set(target_weights)
+        }
+        for security_id, weight_change in sorted(trade_weight_changes.items()):
             if math.isclose(weight_change, 0.0, abs_tol=1e-12):
                 continue
             absolute_weight_change = abs(weight_change)
@@ -274,7 +278,8 @@ def audit_etf_rotation_capacity(
         trading_systems=trading_systems,
         notes=(
             "adv_uses_signal_date_and_prior_bars_only",
-            "turnover_uses_absolute_target_weight_change",
+            "zero_amount_bars_are_included_conservatively_in_adv",
+            "turnover_uses_executed_weight_change_when_available",
             "impact_is_configured_square_root_model_not_order_book_evidence",
             "paper_fills_still_required_before_execution_upgrade",
         ),
@@ -371,9 +376,10 @@ def _adv_as_of_signal(
     window = known[-lookback:]
     if len(window) < lookback:
         return None, f"信号日{signal_date.isoformat()}可用成交额不足{lookback}日。"
-    if any(bar.amount <= 0 for bar in window):
-        return None, f"信号日{signal_date.isoformat()}前{lookback}日存在无效成交额。"
-    return statistics.fmean(bar.amount for bar in window), None
+    average_amount = statistics.fmean(bar.amount for bar in window)
+    if average_amount <= 0:
+        return None, f"信号日{signal_date.isoformat()}前{lookback}日平均成交额为零。"
+    return average_amount, None
 
 
 def _modeled_round_trip_cost_bps(
