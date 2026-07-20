@@ -60,6 +60,13 @@ Redis可选热缓存 + 内存降级 + Parquet历史缓存 + 多数据源
 - 组合证据作为单标的附加门禁进入 `AnalysisReport`、右侧四模块、DecisionHub 和手动账户；不替代单标的方向概率。
 - 最后 20%、25%、30% 时间留出分别只有 1、1、2 个完整滚动窗口，因此状态均为 `WATCH`。
 
+### V11 双周期确认候选
+
+- 新候选要求 252 日和 126 日动量同时为正，目标是减少中期反转暴露。
+- 开发段最大回撤由 V10 的 -21.54% 改善到 -11.66%，但净收益由 +46.91% 降到 +27.44%，Sharpe 由 1.10 降到 0.84，平均调仓换手由 35.06% 升到 46.44%。
+- 最后 30% 留出相对等权基准为 -2.03%，100 万元最大参与率升至 1.8749%，支持资金明显缩小。
+- 候选拒绝晋级，仅保留为显式研究开关；当前策略、右侧四模块、DecisionHub 和手动账户仍使用 V10 单周期默认。
+
 ## 四、ETF 容量与冲击成本
 
 2026-07-20 新增 `etf-capacity-impact-v1`，当前 V10 已升级为 `etf-capacity-impact-v2`：
@@ -113,7 +120,7 @@ Redis可选热缓存 + 内存降级 + Parquet历史缓存 + 多数据源
 
 ## 六、工程质量状态
 
-- Python：320 项全量回归通过。
+- Python：325 项全量回归通过。
 - Ruff format、Ruff lint、mypy：通过。
 - 发布审计：通过。
 - Vitest：1 项通过。
@@ -134,6 +141,7 @@ Redis可选热缓存 + 内存降级 + Parquet历史缓存 + 多数据源
 
 - `CHANGELOG_2026-07-20.md`
 - `research/SHORT_TERM_STRATEGY_VALIDATION_V10_TURNOVER_2026-07-20.md`
+- `research/SHORT_TERM_STRATEGY_V11_DUAL_HORIZON_CANDIDATE_2026-07-20.md`
 - `research/ETF_CAPACITY_IMPACT_VALIDATION_2026-07-20.md`
 - `research/ETF_ROTATION_DECISION_INTEGRATION_2026-07-17.md`
 - `research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`
@@ -152,7 +160,9 @@ Redis可选热缓存 + 内存降级 + Parquet历史缓存 + 多数据源
 | 2026-07-17 | `8231aec` | 将 ETF 组合证据接入 `AnalysisReport`、DecisionHub、右侧四模块和手动账户同一决策链。 |
 | 2026-07-20 | `c2b4562` | 增加按时点 ADV 容量审计、平方根冲击成本、ETF T+0/T+1 分类及账户资金门禁。 |
 | 2026-07-20 | `cbcc3cf` | 同步状态、变更记录、ADR、任务、追踪矩阵和研究证据。 |
-| 2026-07-20 | 待提交 | V10 按目标权重差额调仓，贯通真实换手、费用、容量 V2、DecisionHub 和多时间切片复测。 |
+| 2026-07-20 | `71cade3` | V10 按目标权重差额调仓，贯通真实换手、费用、容量 V2、DecisionHub 和多时间切片复测。 |
+| 2026-07-20 | `e421ce0` | 汇总近期平台、策略、预测、容量、账户和工程质量状态。 |
+| 2026-07-20 | 本轮研究 | 复核双周期动量确认候选并因证据退步拒绝晋级；生产默认保持V10。 |
 
 ## 十、怎样理解当前结果
 

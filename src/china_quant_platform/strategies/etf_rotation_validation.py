@@ -23,8 +23,15 @@ class EtfRotationValidationStatus(StrEnum):
     INSUFFICIENT_HISTORY = "INSUFFICIENT_HISTORY"
 
 
+class EtfMomentumSignalModel(StrEnum):
+    SINGLE_HORIZON = "SINGLE_HORIZON"
+    DUAL_HORIZON_CONSENSUS = "DUAL_HORIZON_CONSENSUS"
+
+
 class EtfRotationBacktestConfig(DomainModel):
+    signal_model: EtfMomentumSignalModel = EtfMomentumSignalModel.SINGLE_HORIZON
     formation_lookback_bars: int = Field(default=252, ge=20)
+    confirmation_lookback_bars: int = Field(default=126, ge=20)
     volatility_lookback_bars: int = Field(default=63, ge=20)
     rebalance_interval_bars: int = Field(default=21, ge=1)
     max_positions: int = Field(default=2, ge=1)
@@ -47,6 +54,13 @@ class EtfRotationBacktestConfig(DomainModel):
             raise ValueError("min_position_fraction must not exceed max_position_fraction")
         if self.stress_round_trip_cost_bps < self.round_trip_cost_bps:
             raise ValueError("stress cost must not be lower than base cost")
+        if (
+            self.signal_model is EtfMomentumSignalModel.DUAL_HORIZON_CONSENSUS
+            and self.confirmation_lookback_bars >= self.formation_lookback_bars
+        ):
+            raise ValueError(
+                "confirmation_lookback_bars must be shorter than formation_lookback_bars"
+            )
         return self
 
 
@@ -229,13 +243,7 @@ def run_etf_rotation_backtest(
         for security_id in identifiers
     }
     common_dates = sorted(set.intersection(*(set(items) for items in indexed.values())))
-    warmup = (
-        max(
-            active_config.formation_lookback_bars,
-            active_config.volatility_lookback_bars,
-        )
-        + 1
-    )
+    warmup = _required_warmup(active_config)
     if len(common_dates) <= warmup + 1:
         raise ValueError(f"insufficient common ETF history: {len(common_dates)}/{warmup + 2}")
 
@@ -269,7 +277,7 @@ def run_etf_rotation_backtest(
                 identifiers,
                 common_dates,
                 signal_index=signal_index,
-                lookback=active_config.formation_lookback_bars,
+                config=active_config,
             )
             selected = tuple(
                 security_id for _, security_id in scores[: active_config.max_positions]
@@ -472,7 +480,7 @@ def walk_forward_validate_etf_rotation(
             )
         )
     )
-    warmup = max(config.formation_lookback_bars, config.volatility_lookback_bars) + 1
+    warmup = _required_warmup(config)
     first_index = warmup
     if evaluation_start is not None:
         first_index = max(first_index, _first_index_on_or_after(common_dates, evaluation_start))
@@ -513,19 +521,54 @@ def _positive_momentum_scores(
     dates: Sequence[date],
     *,
     signal_index: int,
-    lookback: int,
+    config: EtfRotationBacktestConfig,
 ) -> list[tuple[float, str]]:
     scores = []
     for security_id in identifiers:
-        score = (
+        formation_return = (
             indexed[security_id][dates[signal_index]].close_price
-            / indexed[security_id][dates[signal_index - lookback]].close_price
+            / indexed[security_id][dates[signal_index - config.formation_lookback_bars]].close_price
             - 1.0
         )
-        if score > 0:
-            scores.append((score, security_id))
+        if formation_return <= 0:
+            continue
+        score = formation_return
+        if config.signal_model is EtfMomentumSignalModel.DUAL_HORIZON_CONSENSUS:
+            confirmation_return = (
+                indexed[security_id][dates[signal_index]].close_price
+                / indexed[security_id][
+                    dates[signal_index - config.confirmation_lookback_bars]
+                ].close_price
+                - 1.0
+            )
+            if confirmation_return <= 0:
+                continue
+            score = statistics.fmean(
+                (
+                    _annualized_momentum(
+                        formation_return,
+                        config.formation_lookback_bars,
+                    ),
+                    _annualized_momentum(
+                        confirmation_return,
+                        config.confirmation_lookback_bars,
+                    ),
+                )
+            )
+        scores.append((score, security_id))
     scores.sort(reverse=True)
     return scores
+
+
+def _required_warmup(config: EtfRotationBacktestConfig) -> int:
+    signal_lookback = config.formation_lookback_bars
+    if config.signal_model is EtfMomentumSignalModel.DUAL_HORIZON_CONSENSUS:
+        signal_lookback = max(signal_lookback, config.confirmation_lookback_bars)
+    return max(signal_lookback, config.volatility_lookback_bars) + 1
+
+
+def _annualized_momentum(total_return: float, lookback_bars: int) -> float:
+    return float((1.0 + total_return) ** (252.0 / lookback_bars) - 1.0)
 
 
 def _target_position_fraction(

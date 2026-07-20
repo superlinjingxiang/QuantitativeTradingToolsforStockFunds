@@ -16,6 +16,7 @@ from china_quant_platform.strategies.etf_capacity_validation import (
     classify_etf_trading_system,
 )
 from china_quant_platform.strategies.etf_rotation_validation import (
+    EtfMomentumSignalModel,
     EtfRotationBacktestConfig,
     EtfRotationValidationReport,
     validate_etf_rotation_strategy,
@@ -153,11 +154,13 @@ def compact_validation_summary(summary: Mapping[str, object]) -> dict[str, objec
 
 
 def _compact_rotation_report(report: Mapping[str, object]) -> dict[str, object]:
+    config = report["config"]
     base = report["base"]
     stress = report["stress"]
     folds = report["walk_forward_folds"]
     if (
-        not isinstance(base, dict)
+        not isinstance(config, dict)
+        or not isinstance(base, dict)
         or not isinstance(stress, dict)
         or not isinstance(folds, (list, tuple))
     ):
@@ -182,6 +185,11 @@ def _compact_rotation_report(report: Mapping[str, object]) -> dict[str, object]:
     )
     return {
         "status": report["status"],
+        "signal": {
+            "model": config["signal_model"],
+            "formation_lookback_bars": config["formation_lookback_bars"],
+            "confirmation_lookback_bars": config["confirmation_lookback_bars"],
+        },
         "base": {key: base[key] for key in metric_keys},
         "stress": {key: stress[key] for key in metric_keys},
         "walk_forward_fold_count": len(folds),
@@ -197,6 +205,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--history-years", type=int, default=9)
     parser.add_argument("--oos-fraction", type=float, default=0.25)
+    parser.add_argument(
+        "--signal-model",
+        choices=tuple(model.value for model in EtfMomentumSignalModel),
+        default=EtfMomentumSignalModel.SINGLE_HORIZON.value,
+        help="Momentum signal model to validate without changing production defaults.",
+    )
     parser.add_argument(
         "--compact",
         action="store_true",
@@ -219,7 +233,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     security_ids = tuple(member.security_id for member in universe)
     dates = common_trade_dates(bars_by_security, security_ids=security_ids)
-    config = EtfRotationBacktestConfig()
+    config = EtfRotationBacktestConfig(
+        signal_model=EtfMomentumSignalModel(args.signal_model),
+    )
     minimum_dates = config.formation_lookback_bars + config.walk_forward_window_bars + 2
     if len(dates) < minimum_dates:
         raise ValueError(f"insufficient common ETF history: {len(dates)}/{minimum_dates}")

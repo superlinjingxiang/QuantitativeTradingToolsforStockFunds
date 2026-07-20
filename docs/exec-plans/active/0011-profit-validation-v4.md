@@ -1,4 +1,4 @@
-# ExecPlan 0011：盈利验证 V4-V8 候选研究与独立验证
+# ExecPlan 0011：盈利验证 V4-V11 候选研究与独立验证
 
 ## 目标
 
@@ -56,6 +56,9 @@
 - [x] 容量V2复用实际执行差额，零成交额日保守进入ADV；领域契约、DecisionHub、右侧四模块和缓存v5同步。
 - [x] 固定十ETF完成20%/25%/30%多时间切片复跑，所有留出因滚动折不足保持WATCH。
 - [x] V10收口通过320项Python回归、Ruff、mypy、发布审计、Vitest和Vite生产构建；Playwright两条业务用例通过。
+- [x] 预注册并实现252日/126日双周期动量确认候选，增加无前视和生产默认保护测试。
+- [x] 使用固定十ETF的前70%开发段、全样本及20%/25%/30%留出复核候选；因收益、Sharpe、滚动稳定性、换手和容量退步拒绝晋级。
+- [x] V11负结果收口通过325项Python回归、Ruff、变更模块mypy和差异检查；生产默认保持V10。
 
 ## 当前证据
 
@@ -84,11 +87,12 @@
 - 最终时间留出只有1个完整252日滚动窗口，未满足至少3折要求，因此组合候选状态为WATCH。现已作为附加研究证据接入单标的四模块和DecisionHub，但不能覆盖单标的概率、不能许可新增仓位，也未升级PAPER_READY。
 - 最新已完成组合快照为2026-06-24信号、2026-06-25执行，入选159915/516160，总研究仓位约61.02%。
 - 容量V2含120个实际交易观测且0缺失；100万元最大参与率0.5715%、最大模型成本24.07bp并PASS，2%目标支持资金约349.95万元，1000万元和5000万元场景因超过5%硬参与率而FAIL。
+- 双周期候选开发段收益+27.44%、最大回撤-11.66%、Sharpe0.84、平均换手46.44%，均不满足替换V10基线的综合门槛；最后30%留出超额-2.03%，拒绝晋级。
 - 预测校准V2第一组十标的最少60个独立时点，平均区间覆盖82.67%、下破7.00%、三分类Brier 0.1938。
 - 预测校准V2第二组十标的最少56个独立时点，平均区间覆盖80.40%、下破9.67%、三分类Brier 0.1987。
 - 两组预测校准均为HIGH，但只证明历史概率/区间校准达到当前门槛，不改变A股V7盈利验证仍未PASS的结论。
 
-V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`；V5 A 股反追涨记录保留为历史对照；V6 执行模型见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`；V7 市场门槛、五组结果和数据校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`；V8 候选审计、第四组留出和拒绝晋级结论见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`；V9 ETF组合候选和容量V1保留为历史快照；当前V10差额调仓、实际换手费用、多时间切片和容量V2权威结果见`docs/research/SHORT_TERM_STRATEGY_VALIDATION_V10_TURNOVER_2026-07-20.md`；预测校准V2的方法和两组十标的结果见 `docs/research/FORECAST_INTERVAL_VALIDATION_V2_2026-07-17.md`。
+V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`；V5 A 股反追涨记录保留为历史对照；V6 执行模型见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`；V7 市场门槛、五组结果和数据校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`；V8 候选审计、第四组留出和拒绝晋级结论见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`；V9 ETF组合候选和容量V1保留为历史快照；当前V10差额调仓、实际换手费用、多时间切片和容量V2权威结果见`docs/research/SHORT_TERM_STRATEGY_VALIDATION_V10_TURNOVER_2026-07-20.md`；V11双周期候选及拒绝晋级依据见`docs/research/SHORT_TERM_STRATEGY_V11_DUAL_HORIZON_CANDIDATE_2026-07-20.md`；预测校准V2的方法和两组十标的结果见 `docs/research/FORECAST_INTERVAL_VALIDATION_V2_2026-07-17.md`。
 
 ## 剩余工作
 

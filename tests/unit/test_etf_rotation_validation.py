@@ -7,7 +7,9 @@ from datetime import UTC, date, datetime, time, timedelta
 import pytest
 
 from china_quant_platform.domain import AdjustmentMode, Bar, BarInterval, RecordQualityStatus
+from china_quant_platform.strategies.etf_rotation_lab import _compact_rotation_report
 from china_quant_platform.strategies.etf_rotation_validation import (
+    EtfMomentumSignalModel,
     EtfRotationBacktestConfig,
     EtfRotationValidationStatus,
     build_current_etf_rotation_allocation,
@@ -65,6 +67,12 @@ def etf_bars() -> dict[str, tuple[Bar, ...]]:
     return {f"SSE:51{rank:04d}": _bars(f"SSE:51{rank:04d}", rank=rank) for rank in range(10)}
 
 
+def test_rejected_dual_horizon_candidate_is_not_the_production_default() -> None:
+    config = EtfRotationBacktestConfig()
+
+    assert config.signal_model is EtfMomentumSignalModel.SINGLE_HORIZON
+
+
 def test_rotation_uses_only_prior_close_and_executes_next_open(
     etf_bars: dict[str, tuple[Bar, ...]],
 ) -> None:
@@ -92,6 +100,105 @@ def test_rotation_applies_volatility_target_and_position_bounds(
         if event.selected_security_ids
     )
     assert 0.25 <= result.average_position_fraction <= 1.0
+
+
+def test_dual_horizon_requires_positive_126_and_252_day_momentum(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    identifiers = tuple(etf_bars)
+    conflicted_security = identifiers[0]
+    conflicted_bars = list(etf_bars[conflicted_security])
+    signal_close = conflicted_bars[252].close_price
+    conflicted_bars[126] = conflicted_bars[126].model_copy(
+        update={
+            "open_price": signal_close * 1.05,
+            "high_price": signal_close * 1.06,
+            "low_price": signal_close * 1.04,
+            "close_price": signal_close * 1.05,
+        }
+    )
+    candidate_bars = dict(etf_bars)
+    candidate_bars[conflicted_security] = tuple(conflicted_bars)
+
+    baseline = run_etf_rotation_backtest(
+        candidate_bars,
+        security_ids=identifiers,
+    )
+    consensus = run_etf_rotation_backtest(
+        candidate_bars,
+        security_ids=identifiers,
+        config=EtfRotationBacktestConfig(
+            signal_model=EtfMomentumSignalModel.DUAL_HORIZON_CONSENSUS
+        ),
+    )
+
+    assert conflicted_security in baseline.rebalances[0].selected_security_ids
+    assert conflicted_security not in consensus.rebalances[0].selected_security_ids
+
+
+def test_dual_horizon_first_signal_does_not_read_future_bars(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    config = EtfRotationBacktestConfig(signal_model=EtfMomentumSignalModel.DUAL_HORIZON_CONSENSUS)
+    identifiers = tuple(etf_bars)
+    baseline = run_etf_rotation_backtest(
+        etf_bars,
+        security_ids=identifiers,
+        config=config,
+    )
+    mutated = {
+        security_id: tuple(
+            bar
+            if index <= 252
+            else bar.model_copy(
+                update={
+                    "open_price": bar.open_price * 5,
+                    "high_price": bar.high_price * 5,
+                    "low_price": bar.low_price * 5,
+                    "close_price": bar.close_price * 5,
+                }
+            )
+            for index, bar in enumerate(bars)
+        )
+        for security_id, bars in etf_bars.items()
+    }
+    changed = run_etf_rotation_backtest(
+        mutated,
+        security_ids=identifiers,
+        config=config,
+    )
+
+    assert changed.rebalances[0] == baseline.rebalances[0]
+
+
+def test_dual_horizon_requires_shorter_confirmation_window() -> None:
+    with pytest.raises(
+        ValueError,
+        match="confirmation_lookback_bars must be shorter",
+    ):
+        EtfRotationBacktestConfig(
+            signal_model=EtfMomentumSignalModel.DUAL_HORIZON_CONSENSUS,
+            confirmation_lookback_bars=252,
+        )
+
+
+def test_compact_report_identifies_the_research_signal_model(
+    etf_bars: dict[str, tuple[Bar, ...]],
+) -> None:
+    config = EtfRotationBacktestConfig(signal_model=EtfMomentumSignalModel.DUAL_HORIZON_CONSENSUS)
+    report = validate_etf_rotation_strategy(
+        etf_bars,
+        security_ids=tuple(etf_bars),
+        config=config,
+    )
+
+    compact = _compact_rotation_report(report.model_dump(mode="json"))
+
+    assert compact["signal"] == {
+        "model": "DUAL_HORIZON_CONSENSUS",
+        "formation_lookback_bars": 252,
+        "confirmation_lookback_bars": 126,
+    }
 
 
 def test_current_allocation_reuses_latest_scheduled_rebalance(
