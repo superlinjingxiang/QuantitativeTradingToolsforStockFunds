@@ -105,10 +105,13 @@ china_quant_platform/
 | `RiskEngine` | 信号门禁、仓位计算和敞口约束 |
 | `PortfolioEngine` | 现金、持仓、可卖数量、估值和盈亏 |
 | `BacktestEngine` | 事件排序和模拟市场回放 |
+| `EtfCapacityAuditService` | 使用信号时点ADV、账户规模和产品交易制度生成ETF容量/冲击成本证据 |
 | `SimulationBroker` | 使用实时数据进行模拟下单与成交 |
 | `DecisionHub` | 汇总分析、回测、模拟盘和门禁证据，输出最终建议与执行候选状态 |
 | `AuditService` | 保存数据、规则、信号和回测的版本化证据 |
 | `TaskScheduler` | 可取消的后台任务和定时工作流 |
+
+ETF容量审计属于策略证据服务，不属于前端或账户的独立策略。它消费组合回测生成的同一调仓事件，以结构化`PortfolioStrategyEvidence`进入DecisionHub；手动账户只能用计划资金重新评估该报告，不能重算买卖方向或绕过最终门禁。
 
 ## 状态与并发
 

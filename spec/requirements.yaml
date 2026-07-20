@@ -175,8 +175,8 @@ post_mvp_acceptance_gates:
   text: 回测报告必须同时给出扣除成本后的净收益、最大回撤、风险调整收益、基准比较、交易次数、换手率和年份/市场状态拆解。
 - id: EPV-003
   task: TASK-027
-  status: planned
-  evidence: planned stress and sensitivity tests
+  status: in_progress
+  evidence: tests/unit/test_etf_capacity_validation.py; tests/unit/test_decision_hub.py; docs/research/ETF_CAPACITY_IMPACT_VALIDATION_2026-07-20.md
   text: 必须运行成本、滑点、流动性容量、涨跌停/停牌和参数敏感性压力测试；压力后失效的策略不得进入执行候选。
 - id: EPV-004
   task: TASK-027
@@ -190,8 +190,8 @@ post_mvp_acceptance_gates:
   text: 模拟盘必须记录信号时间、可得报价、模拟成交、滑点偏差、漏单/重复信号、数据延迟和异常恢复；偏差超限时自动降级。
 - id: EPV-006
   task: TASK-027
-  status: planned
-  evidence: planned DecisionHub integration gate tests
+  status: in_progress
+  evidence: tests/unit/test_decision_hub.py; tests/unit/test_manual_account.py; tests/integration/test_domain_contract_roundtrip.py
   text: DecisionHub只能使用通过EPV门槛的证据提升执行候选等级；证据缺失、过期或失败时输出WATCH或ABSTAIN。
 release_audit:
   command: python -m china_quant_platform.release.audit

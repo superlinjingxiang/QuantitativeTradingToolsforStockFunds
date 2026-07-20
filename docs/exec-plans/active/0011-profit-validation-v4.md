@@ -46,6 +46,11 @@
 - [x] 手动账户同时消费原始策略与最终门禁，避免空仓绕过门禁，并避免已有持仓被WATCH误判为强制清仓。
 - [x] 真实复跑固定十ETF并记录最新信号/执行日、入选代码和目标仓位。
 - [x] 本轮通过Ruff、mypy、306项Python回归、Vitest和Vite生产构建。
+- [x] 新增按信号时点20日ADV、2%目标/5%硬参与率和平方根冲击成本容量审计。
+- [x] 按ETF产品类别统一固定十ETF和荐股池的T+0/T+1研究分类，未知状态失败关闭。
+- [x] 将容量状态、参与率、模型成本和支持资金接入AnalysisReport、DecisionHub、右侧四模块和手动账户同一链路。
+- [x] 真实复跑1320个共同交易日和81个调仓容量观测；100万元PASS，1000万元及以上场景FAIL。
+- [x] 容量收口通过Ruff、mypy、315项Python回归、发布审计、Vitest和Vite生产构建。
 
 ## 当前证据
 
@@ -68,14 +73,15 @@
 - 21日回撤介入候选在30股与新增十股池的滚动参与率仅约16.3%与7.6%，未晋级。
 - 十ETF最新复跑仍为2/10 PASS、平均收益18.30%、平均回撤-10.45%、平均超额-13.93%，证明ETF有局部证据但不具备普遍超额。
 - 决策规则采用资产分层门禁；策略本体继续为V7，不发布V8。
-- 组合ETF轮动候选全样本收益+94.46%、最大回撤-22.22%、7/7滚动窗口为正；最终25%时间留出收益+43.64%、超额+16.78%、最大回撤-11.89%、45bp压力收益+38.35%。
+- 2026-07-20数据快照下，组合ETF轮动候选全样本收益+85.38%、最大回撤-22.22%、7/7滚动窗口为正；最终25%时间留出收益+39.58%、超额+18.42%、最大回撤-14.78%、45bp压力收益+34.84%。旧1318日快照保留在7月17日报告中。
 - 最终时间留出只有1个完整252日滚动窗口，未满足至少3折要求，因此组合候选状态为WATCH。现已作为附加研究证据接入单标的四模块和DecisionHub，但不能覆盖单标的概率、不能许可新增仓位，也未升级PAPER_READY。
 - 最新已完成组合快照为2026-06-24信号、2026-06-25执行，入选159915/516160，总研究仓位约61.02%。
+- 容量报告含81个调仓买卖观测且0缺失；100万元最大参与率0.572%、最大模型成本24.08bp并PASS，2%目标支持资金约349.68万元，1000万元和5000万元场景因超过5%硬参与率而FAIL。
 - 预测校准V2第一组十标的最少60个独立时点，平均区间覆盖82.67%、下破7.00%、三分类Brier 0.1938。
 - 预测校准V2第二组十标的最少56个独立时点，平均区间覆盖80.40%、下破9.67%、三分类Brier 0.1987。
 - 两组预测校准均为HIGH，但只证明历史概率/区间校准达到当前门槛，不改变A股V7盈利验证仍未PASS的结论。
 
-V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`；V5 A 股反追涨记录保留为历史对照；V6 执行模型见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`；V7 市场门槛、五组结果和数据校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`；V8 候选审计、第四组留出和拒绝晋级结论见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`；V9 ETF组合候选、失败股票候选和时间留出结果见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`；预测校准V2的方法和两组十标的结果见 `docs/research/FORECAST_INTERVAL_VALIDATION_V2_2026-07-17.md`。
+V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-07-13.md`；V5 A 股反追涨记录保留为历史对照；V6 执行模型见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V6_2026-07-13.md`；V7 市场门槛、五组结果和数据校验和见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V7_2026-07-14.md`；V8 候选审计、第四组留出和拒绝晋级结论见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V8_CANDIDATE_2026-07-14.md`；V9 ETF组合候选、失败股票候选和时间留出结果见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V9_ETF_ROTATION_2026-07-17.md`；预测校准V2的方法和两组十标的结果见 `docs/research/FORECAST_INTERVAL_VALIDATION_V2_2026-07-17.md`；容量、冲击成本和交易制度证据见`docs/research/ETF_CAPACITY_IMPACT_VALIDATION_2026-07-20.md`。
 
 ## 剩余工作
 
@@ -86,8 +92,9 @@ V4 风险暴露基线见 `docs/research/SHORT_TERM_STRATEGY_VALIDATION_V4_2026-0
 - [x] 使用第四组未参与调参的股票池验证相对强弱/保本止损候选，并在证据变差时保持 V7 默认配置。
 - [x] 使用新增跨行业十股池和十ETF复核后续候选，并将负结果接入决策与账户门禁。
 - [x] 预测校准使用不重叠评估时点和持有期训练隔离，并以两组十标的真实数据验证。
-- [ ] 覆盖盘口排队、容量、部分成交和冲击成本压力路径。
-- [ ] 按 ETF 产品类别映射 T+0/T+1 交易制度。
+- [x] 完成基于信号时点日成交额的第一阶容量/冲击成本模型，并将不同账户资金接入DecisionHub门禁。
+- [x] 按 ETF 产品类别映射 T+0/T+1 研究交易制度，未知状态失败关闭。
+- [ ] 覆盖盘口排队、实时价差、部分成交、拆单和真实冲击成本压力路径。
 - [ ] 运行至少一个完整市场状态周期和更多滚动起点。
 - [ ] 接入模拟盘并对比理论成交与实际成交偏差。
 - [ ] 持续监控预测区间在新市场状态和模拟盘中的覆盖率、下破率与三分类Brier漂移。
