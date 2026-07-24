@@ -6,6 +6,16 @@ test("Vue workbench renders without a hard refresh", async ({ page }) => {
   await expect(page.getByPlaceholder("代码 / 名称")).toBeVisible();
   await expect(page.getByRole("button", { name: "回测曲线" })).toBeVisible();
   await expect(page.getByText("当前策略")).toBeVisible();
+
+  const scrollbarVisibility = await page.evaluate(() => {
+    const sidebar = document.querySelector(".sidebar");
+    return {
+      page: getComputedStyle(document.documentElement, "::-webkit-scrollbar").display,
+      body: getComputedStyle(document.body, "::-webkit-scrollbar").display,
+      sidebar: sidebar ? getComputedStyle(sidebar, "::-webkit-scrollbar").display : "missing",
+    };
+  });
+  expect(scrollbarVisibility).toEqual({ page: "none", body: "none", sidebar: "none" });
 });
 
 test("行情图同时展示价格、单日涨跌幅和成交量", async ({ page }) => {

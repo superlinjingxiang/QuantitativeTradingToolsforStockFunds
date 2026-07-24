@@ -1,11 +1,14 @@
 :root { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #e5edf8; background: #080c12; font-size: 14px; }
 :root[data-theme="light"] { color: #1e293b; background: #f1f5f9; }
 * { box-sizing: border-box; }
+html, body { scrollbar-width: none; -ms-overflow-style: none; }
+html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; width: 0; height: 0; }
 body { margin: 0; min-width: 1180px; min-height: 100vh; background: var(--page, #080c12); }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
 .app-shell { display: grid; grid-template-columns: 242px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { padding: 20px 16px; border-right: 1px solid #1e293b; background: #0b111b; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.sidebar { padding: 20px 16px; border-right: 1px solid #1e293b; background: #0b111b; position: sticky; top: 0; height: 100vh; overflow-y: auto; scrollbar-width: none; -ms-overflow-style: none; }
+.sidebar::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .brand { display: flex; gap: 12px; align-items: center; padding: 4px 4px 22px; border-bottom: 1px solid #1e293b; }
 .brand-mark { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 10px; background: #17304f; color: #4ca3ff; font-weight: 900; font-size: 22px; }
 .brand strong { display: block; font-size: 17px; }.brand small, .eyebrow, p, small { color: #8ea3bf; }
