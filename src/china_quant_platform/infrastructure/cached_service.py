@@ -12,7 +12,7 @@ from typing import Any
 
 from china_quant_platform.infrastructure.cache_backend import CacheBackend
 
-CACHE_SCHEMA_VERSION = "v5"
+CACHE_SCHEMA_VERSION = "v7"
 
 
 class CachedApplicationService:
@@ -20,6 +20,7 @@ class CachedApplicationService:
 
     TTL_SECONDS = {
         "health": 5,
+        "quote": 2,
         "search": 600,
         "market_overview": 10,
         "analyze": 15,
@@ -41,6 +42,14 @@ class CachedApplicationService:
 
     async def search(self, query: str) -> dict[str, Any]:
         return await self._cached("search", {"q": query}, lambda: self._service.search(query))
+
+    async def quote(self, query: str) -> dict[str, Any]:
+        normalized = query.strip().upper()
+        return await self._cached(
+            "quote",
+            {"q": normalized},
+            lambda: self._service.quote(normalized),
+        )
 
     async def market_overview(self) -> dict[str, Any]:
         return await self._cached("market_overview", {}, self._service.market_overview)

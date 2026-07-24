@@ -39,7 +39,7 @@ function loadHistory(): HistoryItem[] {
 }
 
 const store = useAnalysisStore();
-const { data, loading, error } = storeToRefs(store);
+const { data, loading, error, quoteLoading, quoteError } = storeToRefs(store);
 const WATCHLIST_KEY = "chinaQuantVue:watchlist";
 const activeTab = ref("market");
 const query = ref(data.value?.selectedSecurity?.security_id || "");
@@ -62,7 +62,9 @@ const recommendations = ref<Record<string, any> | null>(loadRecommendationsCache
 const recommendationLoading = ref(false);
 const recommendationError = ref("");
 let refreshTimer: number | null = null;
+let quoteRefreshTimer: number | null = null;
 let debounceTimer: number | null = null;
+const QUOTE_REFRESH_MS = 3000;
 
 const account = reactive({ plannedCapital: "", availableCash: "", holdingQuantity: "", averageCost: "", riskProfile: "standard" });
 
@@ -76,11 +78,30 @@ const strategy = computed(() => analysis.value.strategy || {});
 const backtest = computed(() => data.value?.backtest || {});
 const health = computed(() => data.value?.dataHealth || {});
 const latest = computed(() => chart.value.points?.[chart.value.points.length - 1] || null);
+const currentQuote = computed(() => data.value?.quote || null);
+const currentPrice = computed(() => {
+  const quotePrice = Number(currentQuote.value?.latest_price);
+  if (Number.isFinite(quotePrice) && quotePrice > 0) return quotePrice;
+  const chartPrice = Number(latest.value?.close_price);
+  return Number.isFinite(chartPrice) && chartPrice > 0 ? chartPrice : null;
+});
 const latestChange = computed(() => {
+  const quoteChange = Number(data.value?.latestChangePct);
+  if (Number.isFinite(quoteChange)) return (quoteChange * 100).toFixed(2);
   const points = chart.value.points || [];
   const current = Number(latest.value?.close_price || 0);
   const previous = Number(points[points.length - 2]?.close_price || current);
   return previous ? ((current / previous - 1) * 100).toFixed(2) : "0.00";
+});
+const quoteTime = computed(() => currentQuote.value?.source_time || latest.value?.time_label || "--");
+const quoteRefreshLabel = computed(() => {
+  if (quoteError.value) return quoteError.value;
+  if (quoteLoading.value) return "正在刷新实时价";
+  return data.value?.quoteState?.label || (
+    String(currentQuote.value?.provider || "").includes("bar_fallback")
+      ? "日线收盘价兜底"
+      : "每3秒刷新当前价"
+  );
 });
 const accountAssessment = computed(() => data.value?.accountAssessment || {});
 const cacheLabel = computed(() => data.value?.cache?.status === "STALE" ? "已保留上次数据" : "");
@@ -107,9 +128,10 @@ function payload() {
   return { query: query.value.trim(), strategyMode: strategyMode.value, maxTrades: maxTrades.value, interval: interval.value, range: range.value, adjustment: adjustment.value, overlays: overlays.value, chartBacktestActive: backtestActive.value, accountContext };
 }
 
-function runAnalysis(options: { silent?: boolean } = {}) {
+async function runAnalysis(options: { silent?: boolean } = {}) {
   if (!query.value.trim()) return;
-  store.fetch(payload(), options);
+  await store.fetch(payload(), options);
+  void refreshCurrentQuote();
 }
 
 function submitSearch() { runAnalysis(); }
@@ -126,6 +148,18 @@ function configureRefresh() {
   refreshTimer = null;
   localStorage.setItem("chinaQuantVue:refreshMs", String(refreshMs.value));
   if (refreshMs.value > 0) refreshTimer = window.setInterval(() => runAnalysis({ silent: true }), refreshMs.value);
+}
+function refreshCurrentQuote() {
+  if (document.visibilityState === "hidden") return;
+  const target = selected.value?.security_id || "";
+  if (target) void store.fetchQuote(target);
+}
+function configureQuoteRefresh() {
+  if (quoteRefreshTimer) window.clearInterval(quoteRefreshTimer);
+  quoteRefreshTimer = window.setInterval(refreshCurrentQuote, QUOTE_REFRESH_MS);
+}
+function handleVisibilityChange() {
+  if (document.visibilityState === "visible") refreshCurrentQuote();
 }
 
 function accountKey() {
@@ -268,7 +302,10 @@ function recommendationGradeClass(item: any) { return item.gradeClass || (Number
 watch([strategyMode, maxTrades, interval, range, adjustment, backtestActive], scheduleAnalysis);
 watch(theme, (value) => document.documentElement.dataset.theme = value, { immediate: true });
 watch(refreshMs, configureRefresh);
-watch(() => selected.value?.security_id, loadAccount);
+watch(() => selected.value?.security_id, () => {
+  loadAccount();
+  refreshCurrentQuote();
+});
 watch(watchlist, (items) => localStorage.setItem(WATCHLIST_KEY, JSON.stringify(items)), { deep: true });
 watch(history, (items) => localStorage.setItem("chinaQuantVue:history", JSON.stringify(items)), { deep: true });
 watch(selected, recordHistory, { immediate: true });
@@ -276,11 +313,20 @@ watch(activeTab, (value) => { if (value === "recommendations" && !recommendation
 onMounted(() => {
   loadAccount();
   configureRefresh();
+  configureQuoteRefresh();
+  document.addEventListener("visibilitychange", handleVisibilityChange);
   if (!data.value && query.value) runAnalysis();
+  else refreshCurrentQuote();
   void refreshMarketOverview({ silent: true });
   void refreshRecommendations({ silent: true });
 });
-onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); if (debounceTimer) window.clearTimeout(debounceTimer); });
+onUnmounted(() => {
+  if (refreshTimer) window.clearInterval(refreshTimer);
+  if (quoteRefreshTimer) window.clearInterval(quoteRefreshTimer);
+  if (debounceTimer) window.clearTimeout(debounceTimer);
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
+  store.quoteController?.abort();
+});
 </script>
 
 <template>
@@ -330,16 +376,16 @@ onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); if (de
           <select v-model="strategyMode" class="control"><option value="short_term">短线策略</option><option value="long_term">长线策略</option></select>
           <select v-model.number="maxTrades" class="control"><option v-for="number in [4,6,8,10,12,20,30]" :key="number" :value="number">{{ number }} 次</option></select>
           <select v-model="theme" class="control"><option value="dark">黑色主题</option><option value="light">白色主题</option></select>
-          <select v-model.number="refreshMs" class="control"><option :value="5000">5秒刷新</option><option :value="15000">15秒刷新</option><option :value="30000">30秒刷新</option><option :value="0">停止刷新</option></select>
+          <select v-model.number="refreshMs" class="control"><option :value="5000">策略5秒</option><option :value="15000">策略15秒</option><option :value="30000">策略30秒</option><option :value="0">停止策略刷新</option></select>
           <button class="secondary-button" :class="{active: accountOpen}" @click="toggleAccount">账户输入</button>
           <button class="primary-button" :class="{active: backtestActive}" @click="toggleBacktest">{{ backtestActive ? '正常显示' : '回测曲线' }}</button>
         </div>
       </header>
 
-      <section class="health-row"><div :class="['health', health.status === 'HEALTHY' ? 'healthy' : 'degraded']">数据健康：{{ health.status || (loading ? '获取中' : '等待行情') }} <span v-if="cacheLabel">· {{ cacheLabel }}</span></div><span>行情时间：{{ latest?.time_label || '--' }}</span></section>
+      <section class="health-row"><div :class="['health', health.status === 'HEALTHY' ? 'healthy' : 'degraded']">数据健康：{{ health.status || (loading ? '获取中' : '等待行情') }} <span v-if="cacheLabel">· {{ cacheLabel }}</span></div><span>行情时间：{{ quoteTime }}</span></section>
 
       <section class="kpi-grid">
-        <article class="kpi accent-blue"><small>当前价格</small><strong>{{ latest ? Number(latest.close_price).toFixed(3) : '--' }}</strong><span :class="Number(latestChange) >= 0 ? 'up' : 'down'">{{ latest ? `${changeArrow(latestChange)} ${Number(latestChange) >= 0 ? '+' : ''}${latestChange}%` : '等待行情' }}</span></article>
+        <article class="kpi accent-blue"><small>当前价格</small><strong>{{ currentPrice !== null ? currentPrice.toFixed(3) : '--' }}</strong><span :class="Number(latestChange) >= 0 ? 'up' : 'down'">{{ currentPrice !== null ? `${changeArrow(latestChange)} ${Number(latestChange) >= 0 ? '+' : ''}${latestChange}%` : '等待行情' }}</span><small class="quote-meta">{{ quoteRefreshLabel }}</small></article>
         <article class="kpi accent-red"><small>策略建议</small><strong :class="signalClass(operation.final_signal)">{{ signalLabel(operation.final_signal) }}</strong><span>等级 {{ operation.grade || '--' }} · 仓位上限 {{ operation.target_position_limit || '--' }}</span></article>
         <article class="kpi accent-green"><small>预期收益区间</small><strong>{{ forecast.expected_return_range || '--' }}</strong><span>{{ forecast.probability_summary || '概率待计算' }} · 回撤 {{ forecast.expected_drawdown || '--' }}</span></article>
         <article class="kpi accent-amber"><small>回测状态</small><strong>{{ backtest.total_return || '--' }}</strong><span>{{ backtest.status || '样本外验证待加载' }} · 交易 {{ backtest.trade_count || '--' }} · 平均暴露 {{ backtest.average_position_fraction || '--' }} · Sharpe {{ backtest.sharpe_ratio || '--' }}</span></article>
@@ -354,7 +400,7 @@ onUnmounted(() => { if (refreshTimer) window.clearInterval(refreshTimer); if (de
 
         <aside class="insight-stack">
           <section class="info-card"><h2>当前策略</h2><div class="info-grid"> <template v-for="row in rows(strategy, [['模式','mode_label'],['策略','strategy_id'],['版本','strategy_version'],['窗口','horizon_label'],['核心','core_indicators'],['组合参照','portfolio_context'],['市场状态','market_regime'],['原始信号','raw_signal'],['样本','sample_count'],['模型','model_version']])" :key="row.label"><b>{{ row.label }}</b><span>{{ row.value }}</span></template></div></section>
-          <section class="info-card"><h2>预期走势</h2><div class="info-grid"><template v-for="row in rows(forecast, [['方向','direction_label'],['概率','probability_summary'],['区间','expected_return_range'],['回撤','expected_drawdown'],['校准','validation_metrics'],['横截面','cross_sectional_context']])" :key="row.label"><b>{{ row.label }}</b><span :class="row.label === '方向' ? 'tag warn' : ''">{{ row.value }}</span></template></div></section>
+          <section class="info-card"><h2>预期走势</h2><div class="info-grid"><template v-for="row in rows(forecast, [['预测期','horizon_label'],['方向','direction_label'],['概率','probability_summary'],['区间','expected_return_range'],['回撤','expected_drawdown'],['校准','validation_metrics'],['横截面','cross_sectional_context']])" :key="row.label"><b>{{ row.label }}</b><span :class="row.label === '方向' ? 'tag warn' : ''">{{ row.value }}</span></template></div></section>
           <section class="info-card"><h2>操作与风险</h2><div class="info-grid"><b>策略建议</b><strong :class="signalClass(operation.final_signal)">{{ signalLabel(operation.final_signal) }}</strong><b>等级</b><span>{{ operation.grade || '--' }} {{ operation.grade_description || '' }}</span><b>仓位上限</b><span>{{ operation.target_position_limit || '0.0%' }}</span><b>组合仓位</b><span>{{ operation.portfolio_context || '--' }}</span><b>支持依据</b><span>{{ evidenceSummary(operation.positive_drivers, '暂无足够正向证据', 2) }}</span><b>主要风险</b><span>{{ evidenceSummary(operation.negative_drivers, '暂无额外风险说明', 3) }}</span><b>失效条件</b><span>{{ evidenceSummary(operation.exit_or_invalidation_conditions, '--', 2) }}</span><b>账户建议</b><strong>{{ accountAssessment.accountAdvice || '--' }}</strong><template v-if="accountAssessment.connected"><b>建议金额</b><span>{{ accountAssessment.suggestedAmount || '--' }}</span><b>建议份额</b><span>{{ accountAssessment.suggestedQuantity || '--' }}</span><b>账户依据</b><span>{{ accountAssessment.reason || '--' }}</span></template><b>不交易原因</b><span>{{ operation.abstain_reason || '无' }}</span></div></section>
           <section class="info-card"><h2>决策证据</h2><div class="info-grid"><b>执行状态</b><span class="tag warn">{{ data?.decision?.readiness || '仅研究观察' }}</span><b>门禁信号</b><span>{{ signalLabel(data?.decision?.final_signal || operation.final_signal) }}</span><b>置信度</b><span>{{ data?.decision?.confidence || '--' }}</span><b>门禁汇总</b><span>{{ data?.decision?.gate_summary || '--' }}</span><b>阻断原因</b><span>{{ evidenceSummary(data?.decision?.blocking_reasons, '无', 3) }}</span><b>回测证据</b><span>{{ backtest.total_return || '--' }} · 回撤 {{ backtest.max_drawdown || '--' }} · 平均暴露 {{ backtest.average_position_fraction || '--' }}</span><b>执行真实性</b><span>{{ backtest.execution_realism || '--' }}</span><b>滚动前推</b><span>{{ backtest.walk_forward_consistency || '--' }}</span><b>成本压力</b><span>{{ backtest.cost_stress || '--' }}</span></div></section>
         </aside>

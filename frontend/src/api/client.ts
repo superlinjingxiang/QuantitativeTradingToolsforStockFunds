@@ -18,6 +18,13 @@ export function analyze(payload: Record<string, unknown>, signal?: AbortSignal) 
   });
 }
 
+export function quote(query: string, signal?: AbortSignal) {
+  return request<Record<string, any>>(`/api/quote?q=${encodeURIComponent(query)}`, {
+    cache: "no-store",
+    signal,
+  });
+}
+
 export function recommendations(payload: Record<string, unknown>) {
   return request<Record<string, any>>("/api/recommendations", {
     method: "POST",

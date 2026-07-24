@@ -31,6 +31,20 @@ class FakeApiService:
             },
         }
 
+    def quote(self, query: str) -> dict[str, object]:
+        return {
+            "ok": True,
+            "selectedSecurity": {"security_id": query},
+            "quote": {
+                "security_id": query,
+                "latest_price": 2.564,
+                "previous_close": 2.567,
+                "source_time": "2026-07-20T10:00:00+08:00",
+            },
+            "latestChangePct": 2.564 / 2.567 - 1,
+            "quoteState": {"status": "LIVE", "label": "实时行情"},
+        }
+
     def analyze(self, payload: dict[str, object]) -> dict[str, object]:
         return {
             "ok": True,
@@ -52,6 +66,12 @@ def test_fastapi_keeps_legacy_routes_and_openapi() -> None:
     with TestClient(app) as client:
         assert client.get("/api/health").json()["provider"] == "fake"
         assert client.get("/api/search?q=513300").json()["query"] == "513300"
+        first_quote = client.get("/api/quote?q=SSE%3A513300")
+        second_quote = client.get("/api/quote?q=SSE%3A513300")
+        assert first_quote.json()["quote"]["latest_price"] == 2.564
+        assert first_quote.json()["cache"]["status"] == "MISS"
+        assert second_quote.json()["cache"]["status"] == "HIT"
+        assert first_quote.headers["cache-control"] == "no-store"
         first_overview = client.get("/api/market-overview").json()
         second_overview = client.get("/api/market-overview").json()
         assert first_overview["marketOverview"]["indices"][0]["name"] == "上证指数"
@@ -63,6 +83,7 @@ def test_fastapi_keeps_legacy_routes_and_openapi() -> None:
         assert client.post("/api/recommendations", json={}).json()["ok"] is True
         openapi = client.get("/openapi.json").json()
         assert "/api/analyze" in openapi["paths"]
+        assert "/api/quote" in openapi["paths"]
         assert "/api/recommendations" in openapi["paths"]
         assert "/api/market-overview" in openapi["paths"]
 

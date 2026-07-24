@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -65,6 +65,15 @@ def create_app(
         service_adapter: CachedApplicationService = Depends(_service),  # noqa: B008
     ) -> dict[str, Any]:
         return await service_adapter.search(q)
+
+    @app.get("/api/quote")
+    async def quote(
+        response: Response,
+        q: str = Query(min_length=1, max_length=120),
+        service_adapter: CachedApplicationService = Depends(_service),  # noqa: B008
+    ) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        return await service_adapter.quote(q)
 
     @app.get("/api/market-overview")
     async def market_overview(

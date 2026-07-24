@@ -278,6 +278,7 @@ class AnalysisReport(DomainModel):
     strategy_id: StrategyId
     strategy_version: NonEmptyString
     horizon: int = Field(ge=1)
+    strategy_horizon: int | None = Field(default=None, ge=1)
     market_regime: NonEmptyString
     direction_probabilities: DirectionProbabilities
     raw_signal: NonEmptyString

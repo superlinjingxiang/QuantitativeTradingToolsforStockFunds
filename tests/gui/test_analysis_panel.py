@@ -52,6 +52,7 @@ def report(
         strategy_id="strategy.demo",
         strategy_version="v1",
         horizon=5,
+        strategy_horizon=21,
         market_regime="RANGE_STRONG",
         direction_probabilities=probabilities
         or DirectionProbabilities(up=0.62, flat=0.23, down=0.15),
@@ -128,6 +129,9 @@ def test_view_model_applies_analysis_report_to_panel_state() -> None:
 
     assert view_model.state.run_state is UiRunState.REALTIME_RUNNING
     assert view_model.state.analysis.strategy.strategy_name == "Demo momentum strategy"
+    assert view_model.state.analysis.strategy.horizon_label == "21 bars"
+    assert view_model.state.analysis.forecast.horizon == 5
+    assert view_model.state.analysis.forecast.horizon_label == "5个交易日终点"
     assert view_model.state.analysis.forecast.direction_label == "震荡上涨"
     assert "上涨62.0%" in view_model.state.analysis.forecast.probability_summary
     assert view_model.state.analysis.operation.final_signal == "BUY_CANDIDATE"

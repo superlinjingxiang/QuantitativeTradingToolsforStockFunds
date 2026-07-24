@@ -564,7 +564,7 @@ GetBacktestResult(job_id) -> BacktestReport
 
 AnalysisReport {  
 security, as_of, data_health,  
-strategy_id, strategy_version, horizon, market_regime,  
+strategy_id, strategy_version, horizon, strategy_horizon?, market_regime,
 direction_probabilities, expected_return_quantiles, expected_drawdown,  
 forecast_validation?, portfolio_strategy_evidence?,
 raw_signal, final_signal, grade, validity,  
@@ -572,6 +572,10 @@ target_position_limit, stop_or_exit_conditions,
 positive_drivers\[\], negative_drivers\[\], abstain_reason?,  
 model_version, rule_version, data_snapshot_id  
 }
+
+- `horizon`是概率预测的终点周期；日线模型单位为交易日。
+- `strategy_horizon`是策略持有、再平衡或回测窗口，不能直接用来延展预测区间。
+- 当前验证默认值为短线预测5日/策略21日，长线预测10日/策略126日。
 
 ## 15.3 错误分类
 

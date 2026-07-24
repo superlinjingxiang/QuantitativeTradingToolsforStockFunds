@@ -64,7 +64,15 @@
     "horizon": {
       "type": "integer",
       "minimum": 1,
-      "description": "预测周期，单位由调用契约约定。"
+      "description": "概率预测终点周期，当前日线模型单位为交易日。"
+    },
+    "strategy_horizon": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "策略持有或回测窗口；与概率预测终点周期分开。"
     },
     "market_regime": {
       "type": "string",

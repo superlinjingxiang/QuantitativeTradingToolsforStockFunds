@@ -15,7 +15,7 @@ import threading
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -152,6 +152,35 @@ class ElectronBackendService:
             "query": query,
             "selectedSecurityId": resolved.security.security_id,
             "candidates": [candidate.to_contract_dict() for candidate in resolved.candidates],
+        }
+
+    def quote(self, query: str) -> dict[str, Any]:
+        """Fetch only the current quote without recomputing history or strategy."""
+
+        stripped = query.strip()
+        if not stripped:
+            raise DataUnavailable("请输入需要刷新实时价格的标的。", retryable=False)
+        now = datetime.now(tz=UTC)
+        resolved = self._resolve_security(stripped, allow_online=False)
+        quote = asyncio.run(self._provider.get_quote(resolved.security.security_id))
+        quote_state = _quote_refresh_state(quote, now=now)
+        issues = (
+            ("交易时段内行情时间超过90秒，当前报价可能已延迟。",)
+            if quote_state["status"] == "STALE"
+            else ()
+        )
+        return {
+            "ok": True,
+            "selectedSecurity": resolved.security.to_contract_dict(),
+            "quote": quote.to_contract_dict(),
+            "latestChangePct": _quote_change_pct(quote),
+            "quoteState": quote_state,
+            "dataHealth": {
+                "status": "STALE" if issues else "HEALTHY",
+                "block_signal": bool(issues),
+                "as_of": now.isoformat(),
+                "issues": list(issues),
+            },
         }
 
     def analyze(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -751,6 +780,9 @@ def _handler_for(service: ElectronBackendService) -> type[BaseHTTPRequestHandler
                 if parsed.path == "/api/search":
                     self._send_json(service.search(query.get("q", [""])[0]))
                     return
+                if parsed.path == "/api/quote":
+                    self._send_json(service.quote(query.get("q", [""])[0]))
+                    return
                 if parsed.path == "/api/market-overview":
                     self._send_json(service.market_overview())
                     return
@@ -914,6 +946,37 @@ def _quote_change_pct(quote: Quote) -> float | None:
     if quote.previous_close <= 0:
         return None
     return quote.latest_price / quote.previous_close - 1.0
+
+
+def _quote_refresh_state(quote: Quote, *, now: datetime) -> dict[str, Any]:
+    china_tz = timezone(timedelta(hours=8), "Asia/Shanghai")
+    local_now = now.astimezone(china_tz)
+    local_time = local_now.time()
+    weekday = local_now.weekday()
+    market_open = weekday < 5 and (
+        time(9, 15) <= local_time <= time(11, 35) or time(12, 55) <= local_time <= time(15, 5)
+    )
+    source_age_seconds = max(
+        0,
+        int((now - quote.source_time.astimezone(UTC)).total_seconds()),
+    )
+    if market_open:
+        status = "LIVE" if source_age_seconds <= 90 else "STALE"
+        label = "实时行情" if status == "LIVE" else "行情延迟"
+    elif weekday < 5 and time(11, 35) < local_time < time(12, 55):
+        status = "PAUSED"
+        label = "午间休市价"
+    else:
+        status = "CLOSED"
+        label = "最近收盘价"
+    return {
+        "status": status,
+        "label": label,
+        "sourceTime": quote.source_time.isoformat(),
+        "receivedAt": quote.received_at.isoformat(),
+        "sourceAgeSeconds": source_age_seconds,
+        "pollIntervalSeconds": 3,
+    }
 
 
 def _portfolio_evidence_from_rotation_cache(

@@ -43,6 +43,7 @@ from china_quant_platform.domain import (
 )
 from china_quant_platform.forecasting import (
     IntervalForecastResult,
+    forecast_horizon_days_for_mode,
     forecast_interval_from_bars,
     required_independent_validation_samples,
 )
@@ -1942,9 +1943,10 @@ def _analysis_report_from_profit_backtest(
     portfolio_strategy_evidence: PortfolioStrategyEvidence | None = None,
 ) -> AnalysisReport:
     parameters = horizon_parameters(backtest.horizon)
+    forecast_horizon_days = forecast_horizon_days_for_mode(mode.value)
     forecast = forecast_interval_from_bars(
         bars,
-        horizon_days=parameters.holding_days,
+        horizon_days=forecast_horizon_days,
         round_trip_cost_bps=15.0,
     )
     final_signal = _profit_analysis_signal(backtest, data_health, forecast, mode)
@@ -1964,7 +1966,8 @@ def _analysis_report_from_profit_backtest(
         data_health=data_health,
         strategy_id=strategy_id,
         strategy_version=strategy_version,
-        horizon=parameters.holding_days,
+        horizon=forecast_horizon_days,
+        strategy_horizon=parameters.holding_days,
         market_regime=_profit_market_regime(backtest, forecast),
         direction_probabilities=_profit_direction_probabilities(backtest, forecast),
         raw_signal=_profit_raw_signal(backtest, forecast, mode),
@@ -1973,9 +1976,9 @@ def _analysis_report_from_profit_backtest(
         positive_drivers=_profit_positive_drivers(security, backtest, forecast, mode),
         negative_drivers=_profit_negative_drivers(backtest, data_health, forecast),
         model_version=forecast.model_version,
-        rule_version="rules-profit-validation-short-asset-gate-v1"
+        rule_version="rules-profit-validation-short-asset-gate-forecast5-v2"
         if mode is StrategyMode.SHORT_TERM
-        else "rules-profit-validation-long-v3",
+        else "rules-profit-validation-long-forecast10-v4",
         data_snapshot_id=f"profit-validation:{len(bars)}-daily-bars",
         expected_return_quantiles=_profit_expected_return_quantiles(backtest, forecast),
         expected_drawdown=forecast.expected_drawdown,

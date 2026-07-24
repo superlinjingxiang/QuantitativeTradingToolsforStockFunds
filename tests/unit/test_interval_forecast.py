@@ -7,9 +7,12 @@ import math
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
+
 from china_quant_platform.data import BarsRequest
 from china_quant_platform.domain import AdjustmentMode, Bar, BarInterval, RecordQualityStatus
 from china_quant_platform.forecasting import (
+    forecast_horizon_days_for_mode,
     forecast_interval_from_bars,
     required_independent_validation_samples,
     validate_interval_forecast_universe,
@@ -20,6 +23,14 @@ from china_quant_platform.forecasting.interval import (
     _validate_interval_forecasts,
 )
 from china_quant_platform.forecasting.lab import validate_default_interval_forecast_universe
+
+
+def test_default_forecast_horizons_are_shorter_than_strategy_holding_windows() -> None:
+    assert forecast_horizon_days_for_mode("short_term") == 5
+    assert forecast_horizon_days_for_mode("long_term") == 10
+
+    with pytest.raises(ValueError, match="unsupported strategy mode"):
+        forecast_horizon_days_for_mode("intraday")
 
 
 def test_interval_forecast_uses_similar_samples_for_probabilities_and_quantiles() -> None:

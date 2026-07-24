@@ -9,6 +9,30 @@ test("Vue workbench renders without a hard refresh", async ({ page }) => {
 });
 
 test("行情图同时展示价格、单日涨跌幅和成交量", async ({ page }) => {
+  await page.route("**/api/quote?**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        quote: {
+          security_id: "SSE:513300",
+          latest_price: 2.564,
+          previous_close: 2.567,
+          open_price: 2.57,
+          high_price: 2.58,
+          low_price: 2.55,
+          volume: 1_900_000,
+          amount: 4_871_600,
+          provider: "fixture",
+          source_time: "2026-07-20T10:00:03+08:00",
+        },
+        latestChangePct: 2.564 / 2.567 - 1,
+        quoteState: { status: "LIVE", label: "实时行情" },
+        cache: { status: "MISS" },
+      }),
+    });
+  });
   await page.route("**/api/analyze", async (route) => {
     const fixture = await page.evaluate(() => localStorage.getItem("chinaQuantVue:lastAnalysis"));
     await route.fulfill({ status: 200, contentType: "application/json", body: fixture || "{}" });
@@ -74,7 +98,7 @@ test("行情图同时展示价格、单日涨跌幅和成交量", async ({ page 
       chart: { interval: "1d", range: "1m", adjustment: "NONE", overlays: ["VOLUME", "FORECAST"], chartBacktestActive: false, points, signals: [] },
       analysis: {
         strategy: { mode_label: "短线策略", strategy_id: "test", horizon_label: "21个交易日", asset_scope: "ETF", sample_count: points.length, model_version: "test" },
-        forecast: { direction_label: "震荡偏强", probability_summary: "上涨50% / 横盘20% / 下跌30%", expected_return_range: "-3.0% to 6.0%; p50 1.2%", expected_drawdown: "-4.0%" },
+        forecast: { horizon: 5, horizon_label: "5个交易日终点", direction_label: "震荡偏强", probability_summary: "上涨50% / 横盘20% / 下跌30%", expected_return_range: "-3.0% to 6.0%; p50 1.2%", expected_drawdown: "-4.0%" },
         operation: { final_signal: "WATCH", grade: "B", target_position_limit: "5%" },
       },
       decision: { execution_status: "仅研究观察", final_signal: "WATCH", confidence: "60%" },
@@ -84,12 +108,15 @@ test("行情图同时展示价格、单日涨跌幅和成交量", async ({ page 
   });
   await page.goto("/");
   const chartCanvas = page.locator(".chart-canvas[data-chart-layers='price,change,volume']");
-  await expect(page.locator(".kpi.accent-blue")).toContainText("↓ -0.72%");
+  await expect(page.locator(".kpi.accent-blue")).toContainText("2.564");
+  await expect(page.locator(".kpi.accent-blue")).toContainText("↓ -0.12%");
+  await expect(page.locator(".kpi.accent-blue")).toContainText("实时行情");
   await expect(page.getByText("上证指数")).toBeVisible();
   await expect(page.getByText("+1.00%")).toBeVisible();
   await expect(page.locator(".history-item")).toHaveCount(1);
-  await expect(chartCanvas).toHaveAttribute("data-forecast-points", "21");
+  await expect(chartCanvas).toHaveAttribute("data-forecast-points", "5");
   await expect(chartCanvas.locator("canvas")).toBeVisible();
+  await expect(page.getByText("第5个交易日终点区间 · 虚线仅为插值，非逐日预测")).toBeVisible();
   const nonzeroPixels = await page.evaluate(() => {
     const canvas = document.querySelector(".chart-canvas canvas") as HTMLCanvasElement | null;
     if (!canvas) return 0;

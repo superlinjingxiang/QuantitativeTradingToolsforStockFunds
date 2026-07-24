@@ -345,6 +345,8 @@ class StrategyPanelState(DomainModel):
 
 
 class ForecastPanelState(DomainModel):
+    horizon: int | None = Field(default=None, ge=1)
+    horizon_label: str = "--"
     direction_label: str = "--"
     probability_summary: str = "--"
     expected_return_range: str = "--"
@@ -423,7 +425,7 @@ class AnalysisPanelState(DomainModel):
             strategy_version=report.strategy_version,
             mode_label=_mode_label_from_strategy(report),
             asset_scope=_asset_scope_from_strategy(report),
-            horizon_label=f"{report.horizon} bars",
+            horizon_label=f"{report.strategy_horizon or report.horizon} bars",
             market_regime=report.market_regime,
             raw_signal=report.raw_signal,
             core_indicators=_core_indicators_from_strategy(report),
@@ -436,6 +438,8 @@ class AnalysisPanelState(DomainModel):
             portfolio_context=_portfolio_strategy_summary(report),
         )
         forecast = ForecastPanelState(
+            horizon=report.horizon,
+            horizon_label=f"{report.horizon}个交易日终点",
             direction_label=_direction_label(report),
             probability_summary=_probability_summary(report),
             expected_return_range=_return_range(report),

@@ -13,6 +13,8 @@ from china_quant_platform.domain.base import DomainModel
 from china_quant_platform.domain.identifiers import ModelVersion, NonEmptyString
 
 SIMILAR_REGIME_INTERVAL_MODEL: ModelVersion = "forecast.similar_regime_interval.v2"
+SHORT_TERM_FORECAST_HORIZON_DAYS = 5
+LONG_TERM_FORECAST_HORIZON_DAYS = 10
 DEFAULT_INTERVAL_FORECAST_SECURITY_IDS: tuple[NonEmptyString, ...] = (
     "SSE:600519",
     "SSE:600036",
@@ -37,6 +39,17 @@ DEFAULT_INTERVAL_FORECAST_SECURITY_IDS: tuple[NonEmptyString, ...] = (
     "SZSE:399001",
     "SSE:000300",
 )
+
+
+def forecast_horizon_days_for_mode(strategy_mode: str) -> int:
+    """Return the validated endpoint horizon without changing strategy holding rules."""
+
+    normalized = strategy_mode.strip().lower()
+    if normalized == "short_term":
+        return SHORT_TERM_FORECAST_HORIZON_DAYS
+    if normalized == "long_term":
+        return LONG_TERM_FORECAST_HORIZON_DAYS
+    raise ValueError(f"unsupported strategy mode: {strategy_mode}")
 
 
 class IntervalForecastValidation(DomainModel):

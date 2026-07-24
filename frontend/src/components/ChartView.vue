@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import * as echarts from "echarts";
+import {
+  formatForecastEndpoint,
+  projectTerminalRange,
+} from "../charts/forecastProjection";
 
 const props = defineProps<{ data: Record<string, any> | null; overlays: string[]; theme?: string }>();
 const root = ref<HTMLElement | null>(null);
@@ -44,24 +48,30 @@ function render() {
   const forecastSteps = hasForecast ? resolveForecastSteps(forecast, props.data?.analysis?.strategy) : 0;
   forecastPointCount.value = forecastSteps;
   const forecastLabels = hasForecast ? buildForecastLabels(baseLabels[baseLabels.length - 1], forecastSteps, props.data?.chart?.interval) : [];
+  const forecastProjection = hasForecast
+    ? projectTerminalRange(latest, range, forecastSteps)
+    : null;
   const axisLabels = hasForecast ? [...baseLabels, ...forecastLabels] : baseLabels;
   const forecastValues = hasForecast ? [...closes, ...forecastLabels.map(() => null)] : closes;
   const changeValues = hasForecast ? [...changeBars, ...forecastLabels.map(() => null)] : changeBars;
   const volumeValues = hasForecast ? [...volumes, ...forecastLabels.map(() => null)] : volumes;
   const forecastPrefix = [...baseLabels.slice(0, -1).map(() => null), latest];
-  const forecastData = hasForecast ? [...forecastPrefix, ...forecastLabels.map((_label, index) => latest * (1 + range.p50 * ((index + 1) / forecastSteps)))] : [];
-  const forecastLower = hasForecast ? [...forecastPrefix, ...forecastLabels.map((_label, index) => latest * (1 + range.p05 * ((index + 1) / forecastSteps)))] : [];
-  const forecastUpper = hasForecast ? [...forecastPrefix, ...forecastLabels.map((_label, index) => latest * (1 + range.p95 * ((index + 1) / forecastSteps)))] : [];
+  const forecastData = forecastProjection ? [...forecastPrefix, ...forecastProjection.median] : [];
+  const forecastLower = forecastProjection ? [...forecastPrefix, ...forecastProjection.lower] : [];
+  const forecastUpper = forecastProjection ? [...forecastPrefix, ...forecastProjection.upper] : [];
   const forecastBand = hasForecast ? forecastLower.map((lower, index) => {
     if (lower === null || forecastUpper[index] === null) return null;
     return Number(forecastUpper[index]) - Number(lower);
   }) : [];
+  const lowerEndpoint = forecastProjection?.lower.at(-1) ?? latest;
+  const medianEndpoint = forecastProjection?.median.at(-1) ?? latest;
+  const upperEndpoint = forecastProjection?.upper.at(-1) ?? latest;
   chart.setOption({
     backgroundColor: "transparent",
     animation: false,
     tooltip: { trigger: "axis", axisPointer: { type: "cross" }, backgroundColor: colors.tooltipBg, borderColor: colors.tooltipBorder, textStyle: { color: colors.tooltipText } },
     grid: [
-      { left: 58, right: 22, top: 34, height: "54%", containLabel: true },
+      { left: 58, right: hasForecast ? 112 : 22, top: 34, height: "54%", containLabel: true },
       { left: 58, right: 22, top: "61%", height: "13%", containLabel: true },
       { left: 58, right: 22, top: "78%", bottom: 42, containLabel: true },
     ],
@@ -81,10 +91,56 @@ function render() {
       { name: "涨跌幅", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: changeValues, barMaxWidth: 14 },
       ...(props.overlays.includes("VOLUME") ? [{ name: "成交量", type: "bar", xAxisIndex: 2, yAxisIndex: 2, data: volumeValues, barMaxWidth: 14 }] : []),
       ...(forecastData.length ? [
-        { name: "预测下界", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: forecastLower, symbol: "none", stack: "forecast-band", lineStyle: { color: colors.forecast, type: "dashed", width: 1 } },
-        { name: "预测区间带", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: forecastBand, symbol: "none", stack: "forecast-band", lineStyle: { color: "transparent", width: 0 }, areaStyle: { color: lightTheme ? "rgba(124,58,237,.18)" : "rgba(192,132,252,.24)" }, tooltip: { show: false } },
-        { name: "预测上界", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: forecastUpper, symbol: "none", lineStyle: { color: colors.forecast, type: "dashed", width: 1 } },
-        { name: "预测中位", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: forecastData, symbol: "circle", lineStyle: { color: colors.forecast, type: "dashed", width: 2 }, itemStyle: { color: colors.forecast }, markLine: { symbol: ["none", "none"], lineStyle: { color: colors.forecast, type: "dotted", opacity: 0.8 }, label: { formatter: "预测起点", color: colors.forecast }, data: [{ xAxis: baseLabels[baseLabels.length - 1] }] } },
+        {
+          name: "p05区间插值（非逐日预测）",
+          type: "line",
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          data: forecastLower,
+          symbol: "none",
+          stack: "forecast-band",
+          lineStyle: { color: colors.forecast, type: "dashed", width: 1 },
+          endLabel: {
+            show: true,
+            formatter: formatForecastEndpoint("p05", lowerEndpoint, range.p05),
+            color: colors.forecast,
+            fontSize: 10,
+          },
+        },
+        { name: "终点概率区间插值", type: "line", xAxisIndex: 0, yAxisIndex: 0, data: forecastBand, symbol: "none", stack: "forecast-band", lineStyle: { color: "transparent", width: 0 }, areaStyle: { color: lightTheme ? "rgba(124,58,237,.18)" : "rgba(192,132,252,.24)" }, tooltip: { show: false } },
+        {
+          name: "p95区间插值（非逐日预测）",
+          type: "line",
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          data: forecastUpper,
+          symbol: "none",
+          lineStyle: { color: colors.forecast, type: "dashed", width: 1 },
+          endLabel: {
+            show: true,
+            formatter: formatForecastEndpoint("p95", upperEndpoint, range.p95),
+            color: colors.forecast,
+            fontSize: 10,
+          },
+        },
+        {
+          name: "p50中位插值（非逐日预测）",
+          type: "line",
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          data: forecastData,
+          symbol: "none",
+          lineStyle: { color: colors.forecast, type: "dashed", width: 2 },
+          itemStyle: { color: colors.forecast },
+          endLabel: {
+            show: true,
+            formatter: formatForecastEndpoint("p50", medianEndpoint, range.p50),
+            color: colors.forecast,
+            fontSize: 10,
+            fontWeight: "bold",
+          },
+          markLine: { symbol: ["none", "none"], lineStyle: { color: colors.forecast, type: "dotted", opacity: 0.8 }, label: { formatter: "预测起点", color: colors.forecast }, data: [{ xAxis: baseLabels[baseLabels.length - 1] }] },
+        },
       ] : []),
     ],
   }, true);
@@ -166,4 +222,7 @@ onBeforeUnmount(() => { window.removeEventListener("resize", resize); chart?.dis
 
 <template>
   <div ref="root" class="chart-canvas" data-chart-layers="price,change,volume" :data-forecast-points="forecastPointCount"></div>
+  <div v-if="forecastPointCount" class="forecast-interpretation">
+    第{{ forecastPointCount }}个交易日终点区间 · 虚线仅为插值，非逐日预测
+  </div>
 </template>
