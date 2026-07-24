@@ -200,8 +200,11 @@ class ElectronBackendService:
         interval = _interval_from_payload(payload.get("interval"))
         range_preset = _range_from_payload(payload.get("range"))
         adjustment = _adjustment_from_payload(payload.get("adjustment"))
-        overlays = _overlays_from_payload(payload.get("overlays"))
         chart_backtest_active = bool(payload.get("chartBacktestActive"))
+        overlays = _synchronize_backtest_overlay(
+            _overlays_from_payload(payload.get("overlays")),
+            active=chart_backtest_active,
+        )
         manual_account = manual_account_from_payload(payload.get("accountContext"))
 
         visible_start = _range_start(now, range_preset)
@@ -916,6 +919,19 @@ def _overlays_from_payload(value: object) -> frozenset[ChartOverlay]:
         except ValueError:
             continue
     return frozenset(overlays)
+
+
+def _synchronize_backtest_overlay(
+    overlays: frozenset[ChartOverlay],
+    *,
+    active: bool,
+) -> frozenset[ChartOverlay]:
+    synchronized = set(overlays)
+    if active:
+        synchronized.add(ChartOverlay.SIGNALS)
+    else:
+        synchronized.discard(ChartOverlay.SIGNALS)
+    return frozenset(synchronized)
 
 
 def _quote_from_latest_bar(security_id: str, bars: tuple[Bar, ...], now: datetime) -> Quote | None:

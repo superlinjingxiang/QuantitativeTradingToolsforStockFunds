@@ -5,10 +5,12 @@ import {
   formatForecastEndpoint,
   projectTerminalRange,
 } from "../charts/forecastProjection";
+import { buildBacktestMarkPoints } from "../charts/backtestSignals";
 
 const props = defineProps<{ data: Record<string, any> | null; overlays: string[]; theme?: string }>();
 const root = ref<HTMLElement | null>(null);
 const forecastPointCount = ref(0);
+const backtestMarkerCount = ref(0);
 let chart: echarts.ECharts | null = null;
 
 function render() {
@@ -35,12 +37,12 @@ function render() {
     itemStyle: { color: changes[index] >= 0 ? colors.red : colors.green },
   }));
   const signals = props.data?.chart?.signals || [];
-  const markPoints = signals.map((signal: any) => ({
-    name: signal.action || signal.signal || "信号",
-    coord: [signal.time_label || signal.time || "--", Number(signal.price || signal.close_price || 0)],
-    value: signal.action || signal.signal || "信号",
-    itemStyle: { color: String(signal.action || signal.signal || "").toUpperCase().includes("SELL") ? colors.green : colors.red },
-  }));
+  const markPoints = buildBacktestMarkPoints(
+    signals,
+    baseLabels,
+    { buy: colors.red, sell: colors.green },
+  );
+  backtestMarkerCount.value = props.overlays.includes("SIGNALS") ? markPoints.length : 0;
   const latest = closes[closes.length - 1] || 0;
   const forecast = props.data?.analysis?.forecast || {};
   const range = parseRange(forecast.expected_return_range);
@@ -221,7 +223,7 @@ onBeforeUnmount(() => { window.removeEventListener("resize", resize); chart?.dis
 </script>
 
 <template>
-  <div ref="root" class="chart-canvas" data-chart-layers="price,change,volume" :data-forecast-points="forecastPointCount"></div>
+  <div ref="root" class="chart-canvas" data-chart-layers="price,change,volume" :data-forecast-points="forecastPointCount" :data-backtest-markers="backtestMarkerCount"></div>
   <div v-if="forecastPointCount" class="forecast-interpretation">
     第{{ forecastPointCount }}个交易日终点区间 · 虚线仅为插值，非逐日预测
   </div>

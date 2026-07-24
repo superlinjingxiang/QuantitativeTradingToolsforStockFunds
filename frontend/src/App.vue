@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import ChartView from "./components/ChartView.vue";
 import { marketOverview as fetchMarketOverview, recommendations as fetchRecommendations } from "./api/client";
+import { overlaysForBacktest } from "./charts/backtestSignals";
 import { useAnalysisStore } from "./stores/analysis";
 
 type WatchlistItem = { securityId: string; symbol: string; name: string };
@@ -52,8 +53,9 @@ const refreshMs = ref(Number(localStorage.getItem("chinaQuantVue:refreshMs") || 
 const interval = ref(data.value?.chart?.interval || "1d");
 const range = ref(data.value?.chart?.range || "1m");
 const adjustment = ref(data.value?.chart?.adjustment || "NONE");
-const overlays = ref<string[]>(data.value?.chart?.overlays || ["VOLUME"]);
-const backtestActive = ref(Boolean(data.value?.chart?.chartBacktestActive));
+const initialBacktestActive = Boolean(data.value?.chart?.chartBacktestActive);
+const overlays = ref<string[]>(overlaysForBacktest(data.value?.chart?.overlays || ["VOLUME"], initialBacktestActive));
+const backtestActive = ref(initialBacktestActive);
 const accountOpen = ref(false);
 const marketOverview = ref<Record<string, any> | null>(loadMarketOverviewCache());
 const marketOverviewLoading = ref(false);
@@ -138,7 +140,15 @@ function submitSearch() { runAnalysis(); }
 function toggleOverlay(name: string) {
   overlays.value = overlays.value.includes(name) ? overlays.value.filter((item) => item !== name) : [...overlays.value, name];
 }
-function toggleBacktest() { backtestActive.value = !backtestActive.value; runAnalysis(); }
+function setBacktestMode(enabled: boolean) {
+  backtestActive.value = enabled;
+  overlays.value = overlaysForBacktest(overlays.value, enabled);
+  void runAnalysis();
+}
+function toggleBacktest() { setBacktestMode(!backtestActive.value); }
+function toggleBacktestOverlay(event: Event) {
+  setBacktestMode(Boolean((event.target as HTMLInputElement).checked));
+}
 function scheduleAnalysis() {
   if (debounceTimer) window.clearTimeout(debounceTimer);
   debounceTimer = window.setTimeout(() => runAnalysis(), 180);
@@ -299,7 +309,7 @@ function evidenceSummary(values: unknown, fallback: string, limit = 3) {
 }
 function recommendationGradeClass(item: any) { return item.gradeClass || (Number(item.totalScore) >= 85 ? "strong" : Number(item.totalScore) >= 70 ? "observe" : "weak"); }
 
-watch([strategyMode, maxTrades, interval, range, adjustment, backtestActive], scheduleAnalysis);
+watch([strategyMode, maxTrades, interval, range, adjustment], scheduleAnalysis);
 watch(theme, (value) => document.documentElement.dataset.theme = value, { immediate: true });
 watch(refreshMs, configureRefresh);
 watch(() => selected.value?.security_id, () => {
@@ -393,7 +403,7 @@ onUnmounted(() => {
 
       <section class="workspace-grid">
         <section class="chart-panel">
-          <div class="panel-heading"><div><h2>行情曲线</h2><p>周期：{{ interval }} · 复权：{{ adjustment }} · 范围：{{ range }} · 点数：{{ chart.points?.length || 0 }}</p></div><div class="chart-controls"><select v-model="interval" class="control"><option value="1d">日线</option><option value="30m">30分</option><option value="60m">60分</option><option value="1w">周线</option></select><select v-model="range" class="control"><option value="5d">5日</option><option value="1m">1月</option><option value="3m">3月</option><option value="6m">6月</option><option value="1y">1年</option></select><select v-model="adjustment" class="control"><option value="NONE">不复权</option><option value="FORWARD">前复权</option><option value="BACKWARD">后复权</option></select><label><input type="checkbox" :checked="overlays.includes('VOLUME')" @change="toggleOverlay('VOLUME')" />成交量</label><label><input type="checkbox" :checked="overlays.includes('MA')" @change="toggleOverlay('MA')" />MA</label><label><input type="checkbox" :checked="overlays.includes('SIGNALS')" @change="toggleOverlay('SIGNALS')" />回测信号</label><label><input type="checkbox" :checked="overlays.includes('FORECAST')" @change="toggleOverlay('FORECAST')" />预测区间</label></div></div>
+          <div class="panel-heading"><div><h2>行情曲线</h2><p>周期：{{ interval }} · 复权：{{ adjustment }} · 范围：{{ range }} · 点数：{{ chart.points?.length || 0 }}</p></div><div class="chart-controls"><select v-model="interval" class="control"><option value="1d">日线</option><option value="30m">30分</option><option value="60m">60分</option><option value="1w">周线</option></select><select v-model="range" class="control"><option value="5d">5日</option><option value="1m">1月</option><option value="3m">3月</option><option value="6m">6月</option><option value="1y">1年</option></select><select v-model="adjustment" class="control"><option value="NONE">不复权</option><option value="FORWARD">前复权</option><option value="BACKWARD">后复权</option></select><label><input type="checkbox" :checked="overlays.includes('VOLUME')" @change="toggleOverlay('VOLUME')" />成交量</label><label><input type="checkbox" :checked="overlays.includes('MA')" @change="toggleOverlay('MA')" />MA</label><label><input type="checkbox" :checked="backtestActive" @change="toggleBacktestOverlay" />回测信号</label><label><input type="checkbox" :checked="overlays.includes('FORECAST')" @change="toggleOverlay('FORECAST')" />预测区间</label></div></div>
           <section v-if="accountOpen" class="account-panel"><div class="panel-heading"><div><h2>手动账户 / 仓位评估</h2><p>只保存在本机；建议与当前 {{ strategyMode === 'short_term' ? '短线' : '长线' }}策略及最终证据门禁联动，不读取券商账户。</p></div><button class="secondary-button" @click="clearAccount">清空当前标的</button></div><div class="account-form"><label>计划总资金<input v-model="account.plannedCapital" type="number" min="0" /></label><label>可用现金<input v-model="account.availableCash" type="number" min="0" /></label><label>持仓数量<input v-model="account.holdingQuantity" type="number" min="0" /></label><label>成本价<input v-model="account.averageCost" type="number" min="0" step="0.001" /></label><label>风险偏好(记录)<select v-model="account.riskProfile"><option value="conservative">保守</option><option value="standard">标准</option><option value="aggressive">激进</option></select></label><button class="primary-button" @click="saveAccount">按当前策略评估</button></div><div class="account-result">{{ accountAssessment.summary || '填写账户数据后，点击按当前策略评估。' }}<template v-if="accountAssessment.reason"><br>{{ accountAssessment.reason }}</template><span v-if="accountAssessment.disclaimer"> {{ accountAssessment.disclaimer }}</span></div></section>
           <div class="chart-wrap"><ChartView :data="data" :overlays="overlays" :theme="theme" /><div v-if="!chart.points?.length" class="chart-empty">{{ error || '暂无图表数据' }}</div></div>
         </section>

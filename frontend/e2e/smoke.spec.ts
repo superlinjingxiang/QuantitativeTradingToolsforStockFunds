@@ -35,7 +35,19 @@ test("行情图同时展示价格、单日涨跌幅和成交量", async ({ page 
   });
   await page.route("**/api/analyze", async (route) => {
     const fixture = await page.evaluate(() => localStorage.getItem("chinaQuantVue:lastAnalysis"));
-    await route.fulfill({ status: 200, contentType: "application/json", body: fixture || "{}" });
+    const payload = route.request().postDataJSON() || {};
+    const result = JSON.parse(fixture || "{}");
+    const backtestActive = Boolean(payload.chartBacktestActive);
+    result.chart = {
+      ...(result.chart || {}),
+      chartBacktestActive: backtestActive,
+      overlays: payload.overlays || result.chart?.overlays || [],
+      signals: backtestActive ? [
+        { trade_date: "2026-07-03", action: "BUY", price: 2.61, label: "B", detail: "最大利润买入" },
+        { trade_date: "2026-07-08", action: "SELL", price: 2.73, label: "S", detail: "最大利润卖出" },
+      ] : [],
+    };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(result) });
   });
   await page.route("**/api/market-overview", async (route) => {
     await route.fulfill({
@@ -126,6 +138,13 @@ test("行情图同时展示价格、单日涨跌幅和成交量", async ({ page 
     return count;
   });
   expect(nonzeroPixels).toBeGreaterThan(100);
+  await page.getByRole("button", { name: "回测曲线" }).click();
+  await expect(page.getByRole("button", { name: "正常显示" })).toBeVisible();
+  await expect(page.getByLabel("回测信号")).toBeChecked();
+  await expect(chartCanvas).toHaveAttribute("data-backtest-markers", "2");
+  await page.getByLabel("回测信号").uncheck();
+  await expect(page.getByRole("button", { name: "回测曲线" })).toBeVisible();
+  await expect(chartCanvas).toHaveAttribute("data-backtest-markers", "0");
   await page.getByRole("button", { name: "账户输入" }).click();
   await expect(page.getByText("手动账户 / 仓位评估")).toBeVisible();
   await page.locator("select.control").nth(2).selectOption("light");
