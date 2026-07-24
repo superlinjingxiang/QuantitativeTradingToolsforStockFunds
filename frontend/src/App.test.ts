@@ -27,6 +27,19 @@ describe("Vue frontend bootstrap", () => {
     expect(localStorage.getItem("chinaQuantVue:lastAnalysis")).toBeNull();
   });
 
+  it("drops connected account cache that predates personalized position sizing", () => {
+    localStorage.setItem("chinaQuantVue:lastAnalysis", JSON.stringify({
+      analysis: { forecast: { horizon: 5 } },
+      accountAssessment: { connected: true, accountAdvice: "持有观察" },
+    }));
+    setActivePinia(createPinia());
+
+    const store = useAnalysisStore();
+
+    expect(store.data).toBeNull();
+    expect(localStorage.getItem("chinaQuantVue:lastAnalysis")).toBeNull();
+  });
+
   it("updates the current quote and today's daily point without re-running analysis", async () => {
     const store = useAnalysisStore();
     store.data = {

@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import ChartView from "./components/ChartView.vue";
 import { marketOverview as fetchMarketOverview, recommendations as fetchRecommendations } from "./api/client";
+import { accountStorageKey, buildAccountContext, legacyAccountStorageKey } from "./accountContext";
 import { overlaysForBacktest } from "./charts/backtestSignals";
 import { useAnalysisStore } from "./stores/analysis";
 
@@ -106,6 +107,14 @@ const quoteRefreshLabel = computed(() => {
   );
 });
 const accountAssessment = computed(() => data.value?.accountAssessment || {});
+const accountConnected = computed(() => Boolean(accountAssessment.value.connected));
+const primaryAdviceTitle = computed(() => accountConnected.value ? "账户建议" : "策略建议");
+const primaryAdviceValue = computed(() => accountConnected.value
+  ? accountAssessment.value.accountAdvice
+  : operation.value.final_signal);
+const primaryAdviceMeta = computed(() => accountConnected.value
+  ? `市场策略 ${signalLabel(operation.value.final_signal)} · 当前仓位 ${accountAssessment.value.currentWeight || "--"} · 个性化目标 ${accountAssessment.value.personalizedTargetWeight || "--"}`
+  : `等级 ${operation.value.grade || "--"} · 仓位上限 ${operation.value.target_position_limit || "--"}`);
 const cacheLabel = computed(() => data.value?.cache?.status === "STALE" ? "已保留上次数据" : "");
 
 function loadMarketOverviewCache() {
@@ -136,7 +145,14 @@ async function runAnalysis(options: { silent?: boolean } = {}) {
   void refreshCurrentQuote();
 }
 
-function submitSearch() { runAnalysis(); }
+async function submitSearch() {
+  loadAccount(query.value);
+  const submittedAccount = JSON.stringify(readAccount());
+  await runAnalysis();
+  if (!selected.value?.security_id) return;
+  loadAccount(selected.value.security_id);
+  if (JSON.stringify(readAccount()) !== submittedAccount) await runAnalysis();
+}
 function toggleOverlay(name: string) {
   overlays.value = overlays.value.includes(name) ? overlays.value.filter((item) => item !== name) : [...overlays.value, name];
 }
@@ -172,33 +188,46 @@ function handleVisibilityChange() {
   if (document.visibilityState === "visible") refreshCurrentQuote();
 }
 
-function accountKey() {
-  const symbol = selected.value?.security_id || query.value.trim();
-  return symbol ? `chinaQuantVue:account:${symbol.toUpperCase()}` : "";
+function accountIdentifier(identifier?: string) {
+  return identifier || selected.value?.security_id || query.value.trim();
+}
+function accountKey(identifier?: string) {
+  return accountStorageKey(accountIdentifier(identifier));
+}
+function legacyAccountKey(identifier?: string) {
+  return legacyAccountStorageKey(accountIdentifier(identifier));
 }
 function readAccount() {
-  const values: Record<string, any> = {};
-  if (account.plannedCapital) values.plannedCapital = Number(account.plannedCapital);
-  if (account.availableCash) values.availableCash = Number(account.availableCash);
-  if (account.holdingQuantity) values.holdingQuantity = Number(account.holdingQuantity);
-  if (account.averageCost) values.averageCost = Number(account.averageCost);
-  if (account.riskProfile) values.riskProfile = account.riskProfile;
-  return Object.keys(values).length ? values : null;
+  return buildAccountContext(account);
 }
-function loadAccount() {
-  const key = accountKey();
-  const value = key ? JSON.parse(localStorage.getItem(key) || "null") : null;
+function loadAccount(identifier?: string) {
+  const key = accountKey(identifier);
+  const legacyKey = legacyAccountKey(identifier);
+  let value: Record<string, any> | null = null;
+  try {
+    const raw = key ? localStorage.getItem(key) || (legacyKey !== key ? localStorage.getItem(legacyKey) : null) : null;
+    value = raw ? JSON.parse(raw) : null;
+    if (raw && key && !localStorage.getItem(key)) localStorage.setItem(key, raw);
+  } catch {
+    if (key) localStorage.removeItem(key);
+    if (legacyKey && legacyKey !== key) localStorage.removeItem(legacyKey);
+  }
   Object.assign(account, { plannedCapital: value?.plannedCapital ?? "", availableCash: value?.availableCash ?? "", holdingQuantity: value?.holdingQuantity ?? "", averageCost: value?.averageCost ?? "", riskProfile: value?.riskProfile ?? "standard" });
+  return Boolean(value);
 }
 function saveAccount() {
   const key = accountKey();
   if (!key) return;
-  localStorage.setItem(key, JSON.stringify(readAccount()));
+  const context = readAccount();
+  if (context) localStorage.setItem(key, JSON.stringify(context));
+  else localStorage.removeItem(key);
   runAnalysis();
 }
 function clearAccount() {
   const key = accountKey();
+  const legacyKey = legacyAccountKey();
   if (key) localStorage.removeItem(key);
+  if (legacyKey && legacyKey !== key) localStorage.removeItem(legacyKey);
   Object.assign(account, { plannedCapital: "", availableCash: "", holdingQuantity: "", averageCost: "", riskProfile: "standard" });
   runAnalysis();
 }
@@ -239,7 +268,7 @@ async function refreshRecommendations(options: { silent?: boolean } = {}) {
 function openCandidate(item: any) {
   query.value = item.securityId || item.symbol;
   activeTab.value = "market";
-  loadAccount();
+  loadAccount(query.value);
   runAnalysis();
 }
 function addCurrentToWatchlist() {
@@ -260,13 +289,13 @@ function clearWatchlist() {
 function selectWatchlistItem(item: WatchlistItem) {
   query.value = item.securityId;
   activeTab.value = "market";
-  loadAccount();
+  loadAccount(query.value);
   runAnalysis();
 }
 function selectHistoryItem(item: HistoryItem) {
   query.value = item.securityId;
   activeTab.value = "market";
-  loadAccount();
+  loadAccount(query.value);
   runAnalysis();
 }
 function removeHistoryItem(securityId: string) {
@@ -289,6 +318,7 @@ function selectMarketIndex(index: any) {
   if (!index?.security_id) return;
   query.value = index.security_id;
   activeTab.value = "market";
+  loadAccount(query.value);
   runAnalysis();
 }
 function indexChangeClass(value: string) {
@@ -300,6 +330,7 @@ function toggleAccount() { accountOpen.value = !accountOpen.value; if (accountOp
 
 function signalLabel(signal: string) { return ({ BUY_CANDIDATE: "买入候选", SELL: "卖出", REDUCE: "减仓", HOLD: "持有", WATCH: "观察", ABSTAIN: "暂不交易" } as any)[signal] || signal || "--"; }
 function signalClass(signal: string) { return ["BUY_CANDIDATE", "SELL"].includes(signal) ? "up" : ["REDUCE", "ABSTAIN"].includes(signal) ? "down" : "warn"; }
+function accountAdviceClass(advice: string) { return /买|加仓/.test(advice || "") ? "up" : /减仓|止损|清仓/.test(advice || "") ? "down" : "warn"; }
 function changeArrow(value: string) { const numeric = Number(value); return numeric > 0 ? "↑" : numeric < 0 ? "↓" : "→"; }
 function display(value: any) { return value === undefined || value === null || value === "" ? "--" : String(value); }
 function rows(source: Record<string, any>, fields: [string, string][]) { return fields.map(([label, key]) => ({ label, value: display(source?.[key]) })); }
@@ -396,7 +427,7 @@ onUnmounted(() => {
 
       <section class="kpi-grid">
         <article class="kpi accent-blue"><small>当前价格</small><strong>{{ currentPrice !== null ? currentPrice.toFixed(3) : '--' }}</strong><span :class="Number(latestChange) >= 0 ? 'up' : 'down'">{{ currentPrice !== null ? `${changeArrow(latestChange)} ${Number(latestChange) >= 0 ? '+' : ''}${latestChange}%` : '等待行情' }}</span><small class="quote-meta">{{ quoteRefreshLabel }}</small></article>
-        <article class="kpi accent-red"><small>策略建议</small><strong :class="signalClass(operation.final_signal)">{{ signalLabel(operation.final_signal) }}</strong><span>等级 {{ operation.grade || '--' }} · 仓位上限 {{ operation.target_position_limit || '--' }}</span></article>
+        <article class="kpi accent-red"><small>{{ primaryAdviceTitle }}</small><strong :class="accountConnected ? accountAdviceClass(primaryAdviceValue) : signalClass(primaryAdviceValue)">{{ accountConnected ? primaryAdviceValue : signalLabel(primaryAdviceValue) }}</strong><span>{{ primaryAdviceMeta }}</span></article>
         <article class="kpi accent-green"><small>预期收益区间</small><strong>{{ forecast.expected_return_range || '--' }}</strong><span>{{ forecast.probability_summary || '概率待计算' }} · 回撤 {{ forecast.expected_drawdown || '--' }}</span></article>
         <article class="kpi accent-amber"><small>回测状态</small><strong>{{ backtest.total_return || '--' }}</strong><span>{{ backtest.status || '样本外验证待加载' }} · 交易 {{ backtest.trade_count || '--' }} · 平均暴露 {{ backtest.average_position_fraction || '--' }} · Sharpe {{ backtest.sharpe_ratio || '--' }}</span></article>
       </section>
@@ -404,14 +435,14 @@ onUnmounted(() => {
       <section class="workspace-grid">
         <section class="chart-panel">
           <div class="panel-heading"><div><h2>行情曲线</h2><p>周期：{{ interval }} · 复权：{{ adjustment }} · 范围：{{ range }} · 点数：{{ chart.points?.length || 0 }}</p></div><div class="chart-controls"><select v-model="interval" class="control"><option value="1d">日线</option><option value="30m">30分</option><option value="60m">60分</option><option value="1w">周线</option></select><select v-model="range" class="control"><option value="5d">5日</option><option value="1m">1月</option><option value="3m">3月</option><option value="6m">6月</option><option value="1y">1年</option></select><select v-model="adjustment" class="control"><option value="NONE">不复权</option><option value="FORWARD">前复权</option><option value="BACKWARD">后复权</option></select><label><input type="checkbox" :checked="overlays.includes('VOLUME')" @change="toggleOverlay('VOLUME')" />成交量</label><label><input type="checkbox" :checked="overlays.includes('MA')" @change="toggleOverlay('MA')" />MA</label><label><input type="checkbox" :checked="backtestActive" @change="toggleBacktestOverlay" />回测信号</label><label><input type="checkbox" :checked="overlays.includes('FORECAST')" @change="toggleOverlay('FORECAST')" />预测区间</label></div></div>
-          <section v-if="accountOpen" class="account-panel"><div class="panel-heading"><div><h2>手动账户 / 仓位评估</h2><p>只保存在本机；建议与当前 {{ strategyMode === 'short_term' ? '短线' : '长线' }}策略及最终证据门禁联动，不读取券商账户。</p></div><button class="secondary-button" @click="clearAccount">清空当前标的</button></div><div class="account-form"><label>计划总资金<input v-model="account.plannedCapital" type="number" min="0" /></label><label>可用现金<input v-model="account.availableCash" type="number" min="0" /></label><label>持仓数量<input v-model="account.holdingQuantity" type="number" min="0" /></label><label>成本价<input v-model="account.averageCost" type="number" min="0" step="0.001" /></label><label>风险偏好(记录)<select v-model="account.riskProfile"><option value="conservative">保守</option><option value="standard">标准</option><option value="aggressive">激进</option></select></label><button class="primary-button" @click="saveAccount">按当前策略评估</button></div><div class="account-result">{{ accountAssessment.summary || '填写账户数据后，点击按当前策略评估。' }}<template v-if="accountAssessment.reason"><br>{{ accountAssessment.reason }}</template><span v-if="accountAssessment.disclaimer"> {{ accountAssessment.disclaimer }}</span></div></section>
+          <section v-if="accountOpen" class="account-panel"><div class="panel-heading"><div><h2>手动账户 / 仓位评估</h2><p>只保存在本机；建议与当前 {{ strategyMode === 'short_term' ? '短线' : '长线' }}策略及最终证据门禁联动，不读取券商账户。</p></div><button class="secondary-button" @click="clearAccount">清空当前标的</button></div><div class="account-form"><label>计划总资金<input v-model="account.plannedCapital" type="number" min="0" /></label><label>可用现金<input v-model="account.availableCash" type="number" min="0" /></label><label>持仓数量<input v-model="account.holdingQuantity" type="number" min="0" /></label><label>成本价<input v-model="account.averageCost" type="number" min="0" step="0.001" /></label><label>风险偏好<select v-model="account.riskProfile"><option value="conservative">保守</option><option value="standard">标准</option><option value="aggressive">激进</option></select></label><button class="primary-button" @click="saveAccount">按当前策略评估</button></div><div class="account-result">{{ accountAssessment.summary || '填写账户数据后，点击按当前策略评估。' }}<template v-if="accountAssessment.reason"><br>{{ accountAssessment.reason }}</template><span v-if="accountAssessment.disclaimer"> {{ accountAssessment.disclaimer }}</span></div></section>
           <div class="chart-wrap"><ChartView :data="data" :overlays="overlays" :theme="theme" /><div v-if="!chart.points?.length" class="chart-empty">{{ error || '暂无图表数据' }}</div></div>
         </section>
 
         <aside class="insight-stack">
           <section class="info-card"><h2>当前策略</h2><div class="info-grid"> <template v-for="row in rows(strategy, [['模式','mode_label'],['策略','strategy_id'],['版本','strategy_version'],['窗口','horizon_label'],['核心','core_indicators'],['组合参照','portfolio_context'],['市场状态','market_regime'],['原始信号','raw_signal'],['样本','sample_count'],['模型','model_version']])" :key="row.label"><b>{{ row.label }}</b><span>{{ row.value }}</span></template></div></section>
           <section class="info-card"><h2>预期走势</h2><div class="info-grid"><template v-for="row in rows(forecast, [['预测期','horizon_label'],['方向','direction_label'],['概率','probability_summary'],['区间','expected_return_range'],['回撤','expected_drawdown'],['校准','validation_metrics'],['横截面','cross_sectional_context']])" :key="row.label"><b>{{ row.label }}</b><span :class="row.label === '方向' ? 'tag warn' : ''">{{ row.value }}</span></template></div></section>
-          <section class="info-card"><h2>操作与风险</h2><div class="info-grid"><b>策略建议</b><strong :class="signalClass(operation.final_signal)">{{ signalLabel(operation.final_signal) }}</strong><b>等级</b><span>{{ operation.grade || '--' }} {{ operation.grade_description || '' }}</span><b>仓位上限</b><span>{{ operation.target_position_limit || '0.0%' }}</span><b>组合仓位</b><span>{{ operation.portfolio_context || '--' }}</span><b>支持依据</b><span>{{ evidenceSummary(operation.positive_drivers, '暂无足够正向证据', 2) }}</span><b>主要风险</b><span>{{ evidenceSummary(operation.negative_drivers, '暂无额外风险说明', 3) }}</span><b>失效条件</b><span>{{ evidenceSummary(operation.exit_or_invalidation_conditions, '--', 2) }}</span><b>账户建议</b><strong>{{ accountAssessment.accountAdvice || '--' }}</strong><template v-if="accountAssessment.connected"><b>建议金额</b><span>{{ accountAssessment.suggestedAmount || '--' }}</span><b>建议份额</b><span>{{ accountAssessment.suggestedQuantity || '--' }}</span><b>账户依据</b><span>{{ accountAssessment.reason || '--' }}</span></template><b>不交易原因</b><span>{{ operation.abstain_reason || '无' }}</span></div></section>
+          <section class="info-card"><h2>操作与风险</h2><div class="info-grid"><b>市场策略</b><strong :class="signalClass(operation.final_signal)">{{ signalLabel(operation.final_signal) }}</strong><b>等级</b><span>{{ operation.grade || '--' }} {{ operation.grade_description || '' }}</span><b>策略硬上限</b><span>{{ operation.target_position_limit || '0.0%' }}</span><b>组合仓位</b><span>{{ operation.portfolio_context || '--' }}</span><b>支持依据</b><span>{{ evidenceSummary(operation.positive_drivers, '暂无足够正向证据', 2) }}</span><b>主要风险</b><span>{{ evidenceSummary(operation.negative_drivers, '暂无额外风险说明', 3) }}</span><b>失效条件</b><span>{{ evidenceSummary(operation.exit_or_invalidation_conditions, '--', 2) }}</span><b>账户建议</b><strong :class="accountAdviceClass(accountAssessment.accountAdvice)">{{ accountAssessment.accountAdvice || '--' }}</strong><template v-if="accountAssessment.connected"><b>风险偏好</b><span>{{ accountAssessment.riskProfile || '--' }}</span><b>当前仓位</b><span>{{ accountAssessment.currentWeight || '--' }}</span><b>个性化目标</b><span>{{ accountAssessment.personalizedTargetWeight || '--' }}</span><b>浮动盈亏</b><span>{{ accountAssessment.unrealizedPnl || '--' }}（{{ accountAssessment.unrealizedReturn || '--' }}）</span><b>建议金额</b><span>{{ accountAssessment.suggestedAmount || '--' }}</span><b>建议份额</b><span>{{ accountAssessment.suggestedQuantity || '--' }}</span><b>账户依据</b><span>{{ accountAssessment.reason || '--' }}</span></template><b>不交易原因</b><span>{{ operation.abstain_reason || '无' }}</span></div></section>
           <section class="info-card"><h2>决策证据</h2><div class="info-grid"><b>执行状态</b><span class="tag warn">{{ data?.decision?.readiness || '仅研究观察' }}</span><b>门禁信号</b><span>{{ signalLabel(data?.decision?.final_signal || operation.final_signal) }}</span><b>置信度</b><span>{{ data?.decision?.confidence || '--' }}</span><b>门禁汇总</b><span>{{ data?.decision?.gate_summary || '--' }}</span><b>阻断原因</b><span>{{ evidenceSummary(data?.decision?.blocking_reasons, '无', 3) }}</span><b>回测证据</b><span>{{ backtest.total_return || '--' }} · 回撤 {{ backtest.max_drawdown || '--' }} · 平均暴露 {{ backtest.average_position_fraction || '--' }}</span><b>执行真实性</b><span>{{ backtest.execution_realism || '--' }}</span><b>滚动前推</b><span>{{ backtest.walk_forward_consistency || '--' }}</span><b>成本压力</b><span>{{ backtest.cost_stress || '--' }}</span></div></section>
         </aside>
       </section>

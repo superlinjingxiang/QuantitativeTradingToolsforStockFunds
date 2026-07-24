@@ -23,6 +23,9 @@ def manual_account_from_payload(payload: object) -> ManualAccountInput | None:
 
     if not isinstance(payload, dict) or not payload:
         return None
+    account_fields = ("plannedCapital", "availableCash", "holdingQuantity", "averageCost")
+    if not any(payload.get(field) not in {None, ""} for field in account_fields):
+        return None
     return ManualAccountInput(
         planned_capital=_float(payload.get("plannedCapital")),
         available_cash=_optional_float(payload.get("availableCash")),
@@ -79,12 +82,18 @@ def evaluate_manual_account(
     )
     net_asset = max(planned_capital, market_value + max(0.0, estimated_cash))
     current_weight = market_value / net_asset if net_asset > 0 else 0.0
-    decision_target_weight = _parse_percent(target_position_limit)
-    research_target_weight = _parse_percent(
+    decision_position_limit = _parse_percent(target_position_limit)
+    research_position_limit = _parse_percent(
         target_position_limit
         if strategy_target_position_limit is None
         else strategy_target_position_limit
     )
+    allocation_scale = _account_allocation_scale(
+        risk_profile=account.risk_profile,
+        expected_drawdown=expected_drawdown,
+    )
+    decision_target_weight = decision_position_limit * allocation_scale
+    research_target_weight = research_position_limit * allocation_scale
     decision_signal = str(final_signal or "").upper()
     strategy_signal_text = str(strategy_signal or decision_signal).upper()
     grade_text = str(grade or "N").upper()
@@ -117,8 +126,9 @@ def evaluate_manual_account(
             advice = "可小仓试买" if suggested_amount > 0 else "观察"
             reason = (
                 f"当前空仓，当前策略通过最终门禁后信号为{_signal_label(decision_signal)}，"
-                f"按可执行仓位上限"
-                f"{_pct(decision_target_weight)}折算可买金额；等级{grade_text}仅作证据强弱展示。"
+                f"策略硬上限{_pct(decision_position_limit)}按{_risk_profile_label(account.risk_profile)}"
+                f"风险偏好折算为个性化目标{_pct(decision_target_weight)}；"
+                f"等级{grade_text}仅作证据强弱展示。"
             )
         elif not capacity_allows_add:
             advice = "暂不新开仓"
@@ -131,7 +141,7 @@ def evaluate_manual_account(
             advice = "暂不新开仓"
             reason = (
                 f"当前策略信号为{_signal_label(strategy_signal_text)}，最终门禁信号为"
-                f"{_signal_label(decision_signal)}，可执行仓位上限"
+                f"{_signal_label(decision_signal)}，个性化可执行目标"
                 f"{_pct(decision_target_weight)}，因此不建议新增仓位。"
             )
     else:
@@ -141,7 +151,7 @@ def evaluate_manual_account(
             suggested_amount = max(0.0, market_value - research_target_value)
             advice = "建议减仓"
             reason = (
-                f"当前策略明确为{_signal_label(strategy_signal_text)}，研究仓位上限"
+                f"当前策略明确为{_signal_label(strategy_signal_text)}，个性化研究目标"
                 f"{_pct(research_target_weight)}，"
                 f"账户模块只按该策略目标降低已有仓位；当前仓位约{_pct(current_weight)}。"
             )
@@ -151,7 +161,7 @@ def evaluate_manual_account(
                 advice = "建议减仓"
                 reason = (
                     f"最终门禁为{_signal_label(decision_signal)}，不允许新增仓位；当前仓位约"
-                    f"{_pct(current_weight)}，仍高于策略研究仓位上限"
+                    f"{_pct(current_weight)}，仍高于个性化研究目标"
                     f"{_pct(research_target_weight)}，因此只建议降低超出部分。"
                 )
             else:
@@ -164,7 +174,8 @@ def evaluate_manual_account(
             suggested_amount = market_value - decision_target_value
             advice = "建议减仓"
             reason = (
-                f"当前仓位约{_pct(current_weight)}，高于当前策略仓位上限"
+                f"当前仓位约{_pct(current_weight)}，高于策略硬上限"
+                f"{_pct(decision_position_limit)}下的个性化目标"
                 f"{_pct(decision_target_weight)}。"
             )
         elif (
@@ -178,7 +189,7 @@ def evaluate_manual_account(
             )
             advice = "可加仓" if suggested_amount > 0 else "持有"
             reason = (
-                f"当前仓位约{_pct(current_weight)}，低于当前策略仓位上限"
+                f"当前仓位约{_pct(current_weight)}，低于个性化目标"
                 f"{_pct(decision_target_weight)}；最终门禁信号为"
                 f"{_signal_label(decision_signal)}。"
             )
@@ -195,7 +206,7 @@ def evaluate_manual_account(
         else:
             advice = "持有观察"
             reason = (
-                f"当前仓位约{_pct(current_weight)}，与当前策略仓位上限"
+                f"当前仓位约{_pct(current_weight)}，与个性化目标"
                 f"{_pct(decision_target_weight)}基本匹配；"
                 f"最终门禁信号为{_signal_label(decision_signal)}。"
             )
@@ -214,8 +225,11 @@ def evaluate_manual_account(
         "unrealizedPnl": _signed_money(unrealized_pnl),
         "unrealizedReturn": _pct(unrealized_return),
         "currentWeight": _pct(current_weight),
-        "targetWeight": _pct(decision_target_weight),
-        "strategyTargetWeight": _pct(research_target_weight),
+        "targetWeight": _pct(decision_position_limit),
+        "strategyTargetWeight": _pct(research_position_limit),
+        "personalizedTargetWeight": _pct(decision_target_weight),
+        "personalizedStrategyTargetWeight": _pct(research_target_weight),
+        "allocationScale": _pct(allocation_scale),
         "strategySignal": strategy_signal_text or "--",
         "decisionSignal": decision_signal or "--",
         "decisionReadiness": str(decision_readiness or "--"),
@@ -229,7 +243,8 @@ def evaluate_manual_account(
         "riskProfile": _risk_profile_label(account.risk_profile),
         "summary": (
             f"{advice}：当前市值{_money(market_value)}，浮动盈亏{_signed_money(unrealized_pnl)}"
-            f"（{_pct(unrealized_return)}），仓位{_pct(current_weight)}。"
+            f"（{_pct(unrealized_return)}），仓位{_pct(current_weight)}，"
+            f"个性化目标{_pct(decision_target_weight)}。"
         ),
         "disclaimer": (
             "账户建议由当前策略信号和DecisionHub最终门禁共同折算，不构成真实交易指令；"
@@ -267,6 +282,34 @@ def _risk_profile_label(value: str) -> str:
         "standard": "标准",
         "aggressive": "激进",
     }.get(value, "标准")
+
+
+def _account_allocation_scale(*, risk_profile: str, expected_drawdown: object) -> float:
+    profile = _risk_profile(risk_profile)
+    profile_scale = {
+        "conservative": 0.60,
+        "standard": 0.80,
+        "aggressive": 1.00,
+    }[profile]
+    drawdown = abs(_signed_percent(expected_drawdown))
+    tolerance = {
+        "conservative": 0.06,
+        "standard": 0.10,
+        "aggressive": 0.15,
+    }[profile]
+    drawdown_scale = min(1.0, tolerance / drawdown) if drawdown > tolerance else 1.0
+    return profile_scale * drawdown_scale
+
+
+def _signed_percent(value: object) -> float:
+    if value is None:
+        return 0.0
+    text = str(value).strip()
+    try:
+        parsed = float(text[:-1] if text.endswith("%") else text)
+    except ValueError:
+        return 0.0
+    return parsed / 100 if abs(parsed) > 1 else parsed
 
 
 def _parse_percent(value: object) -> float:

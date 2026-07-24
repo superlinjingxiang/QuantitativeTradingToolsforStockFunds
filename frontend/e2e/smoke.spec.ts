@@ -57,6 +57,25 @@ test("行情图同时展示价格、单日涨跌幅和成交量", async ({ page 
         { trade_date: "2026-07-08", action: "SELL", price: 2.73, label: "S", detail: "最大利润卖出" },
       ] : [],
     };
+    const account = payload.accountContext;
+    result.accountAssessment = account ? {
+      connected: true,
+      accountAdvice: "建议减仓",
+      riskProfile: account.riskProfile === "conservative" ? "保守" : "标准",
+      currentWeight: "75.0%",
+      targetWeight: "5.0%",
+      personalizedTargetWeight: "3.0%",
+      unrealizedPnl: "-120.00 元",
+      unrealizedReturn: "-1.5%",
+      suggestedAmount: "建议减仓约2,000.00 元",
+      suggestedQuantity: "700 股/份",
+      reason: "当前短线策略为观察，账户仓位高于个性化目标，因此只建议降低超出部分。",
+      summary: "建议减仓：当前仓位75.0%，个性化目标3.0%。",
+    } : {
+      connected: false,
+      accountAdvice: "未录入",
+      summary: "尚未录入账户数据。",
+    };
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(result) });
   });
   await page.route("**/api/market-overview", async (route) => {
@@ -157,6 +176,25 @@ test("行情图同时展示价格、单日涨跌幅和成交量", async ({ page 
   await expect(chartCanvas).toHaveAttribute("data-backtest-markers", "0");
   await page.getByRole("button", { name: "账户输入" }).click();
   await expect(page.getByText("手动账户 / 仓位评估")).toBeVisible();
+  await page.getByLabel("计划总资金").fill("10000");
+  await page.getByLabel("可用现金").fill("2000");
+  await page.getByLabel("持仓数量").fill("3000");
+  await page.getByLabel("成本价").fill("2.60");
+  await page.getByLabel("风险偏好").selectOption("conservative");
+  await page.getByRole("button", { name: "按当前策略评估" }).click();
+  await expect(page.locator(".kpi.accent-red")).toContainText("账户建议");
+  await expect(page.locator(".kpi.accent-red")).toContainText("建议减仓");
+  await expect(page.locator(".kpi.accent-red")).toContainText("市场策略 观察");
+  const riskCard = page.getByRole("heading", { name: "操作与风险" }).locator("..");
+  await expect(riskCard.getByText("75.0%", { exact: true })).toBeVisible();
+  await expect(riskCard.getByText("3.0%", { exact: true })).toBeVisible();
+  const savedAccount = await page.evaluate(() => localStorage.getItem("chinaQuantVue:account:513300"));
+  expect(JSON.parse(savedAccount || "{}")).toMatchObject({
+    plannedCapital: 10000,
+    holdingQuantity: 3000,
+    averageCost: 2.6,
+    riskProfile: "conservative",
+  });
   await page.locator("select.control").nth(2).selectOption("light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect.poll(() => page.locator(".chart-wrap").evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(13, 20, 31)");

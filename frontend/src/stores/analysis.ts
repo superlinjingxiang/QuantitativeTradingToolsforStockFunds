@@ -83,6 +83,11 @@ function loadLastData() {
       localStorage.removeItem(STORAGE_KEY);
       return null;
     }
+    const account = parsed?.accountAssessment;
+    if (account?.connected && !("personalizedTargetWeight" in account)) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
     return parsed;
   } catch {
     localStorage.removeItem(STORAGE_KEY);

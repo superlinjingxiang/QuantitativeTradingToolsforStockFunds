@@ -39,8 +39,8 @@ class CountingService:
 
 
 def test_cache_schema_version_invalidates_legacy_forecast_payloads() -> None:
-    assert CACHE_SCHEMA_VERSION == "v7"
-    assert _cache_key("analyze", {"query": "513300"}).startswith("analyze:v7:")
+    assert CACHE_SCHEMA_VERSION == "v8"
+    assert _cache_key("analyze", {"query": "513300"}).startswith("analyze:v8:")
 
 
 def test_memory_cache_hits_without_repeating_business_call() -> None:

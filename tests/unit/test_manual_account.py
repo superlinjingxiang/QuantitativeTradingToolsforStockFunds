@@ -19,9 +19,11 @@ def test_empty_position_buy_candidate_suggests_amount_and_quantity() -> None:
     )
 
     assert result["accountAdvice"] == "可小仓试买"
-    assert result["suggestedAmount"] == "可操作约1,000.00 元"
-    assert result["suggestedQuantity"] == "400 股/份"
+    assert result["suggestedAmount"] == "可操作约800.00 元"
+    assert result["suggestedQuantity"] == "320 股/份"
     assert result["currentWeight"] == "0.0%"
+    assert result["targetWeight"] == "10.0%"
+    assert result["personalizedTargetWeight"] == "8.0%"
 
 
 def test_existing_overweight_position_suggests_reduce() -> None:
@@ -38,7 +40,7 @@ def test_existing_overweight_position_suggests_reduce() -> None:
     )
 
     assert result["accountAdvice"] == "建议减仓"
-    assert "高于当前策略仓位上限" in result["reason"]
+    assert "高于策略硬上限" in result["reason"]
     assert result["suggestedAmount"].startswith("建议减仓约")
 
 
@@ -115,7 +117,7 @@ def test_strategy_reduce_survives_watch_gate_for_existing_position() -> None:
     )
 
     assert result["accountAdvice"] == "建议减仓"
-    assert result["suggestedAmount"] == "建议减仓约3,000.00 元"
+    assert result["suggestedAmount"] == "建议减仓约3,400.00 元"
     assert "策略明确为减仓" in result["reason"]
 
 
@@ -151,6 +153,10 @@ def test_payload_parser_ignores_empty_cash_and_normalizes_risk() -> None:
     assert account.risk_profile == "standard"
 
 
+def test_payload_with_only_default_risk_profile_is_not_connected() -> None:
+    assert manual_account_from_payload({"riskProfile": "standard"}) is None
+
+
 def test_risk_profile_does_not_change_current_strategy_target() -> None:
     result = evaluate_manual_account(
         account=ManualAccountInput(
@@ -165,8 +171,30 @@ def test_risk_profile_does_not_change_current_strategy_target() -> None:
     )
 
     assert result["targetWeight"] == "5.0%"
+    assert result["personalizedTargetWeight"] == "5.0%"
     assert result["suggestedAmount"] == "可操作约500.00 元"
     assert "当前策略" in result["reason"]
+
+
+def test_conservative_account_scales_position_inside_strategy_limit_and_drawdown() -> None:
+    result = evaluate_manual_account(
+        account=ManualAccountInput(
+            planned_capital=10_000,
+            available_cash=10_000,
+            risk_profile="conservative",
+        ),
+        latest_price=2.0,
+        final_signal="BUY_CANDIDATE",
+        grade="B",
+        target_position_limit="20.0%",
+        expected_drawdown="-12.0%",
+    )
+
+    assert result["targetWeight"] == "20.0%"
+    assert result["personalizedTargetWeight"] == "6.0%"
+    assert result["allocationScale"] == "30.0%"
+    assert result["suggestedAmount"] == "可操作约600.00 元"
+    assert result["suggestedQuantity"] == "300 股/份"
 
 
 def test_failed_capacity_evidence_blocks_new_position() -> None:
